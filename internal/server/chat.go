@@ -110,10 +110,96 @@ func NewChatHandler(resolver AgentResolver, factory ProviderFactory, store *Chat
 	}
 }
 
-// Register wires the handler's methods into r. Currently registers
-// chat.send.
+// Register wires the handler's methods into r. Registers chat.send and
+// chat.history.
 func (h *ChatHandler) Register(r *Registry) {
 	r.Register("chat.send", h.handleSend)
+	r.Register("chat.history", h.handleHistory)
+}
+
+// chatHistoryParams matches openclaw's chat.history request shape (subset).
+type chatHistoryParams struct {
+	SessionKey string `json:"sessionKey"`
+	Limit      int    `json:"limit"`
+}
+
+// historyMessage is the per-message envelope chat.history emits. Mirrors the
+// fields openclaw's web UI consumes; openclaw decorates each row with
+// __openclaw.id (a stable React key) and __openclaw.seq.
+type historyMessage struct {
+	Openclaw  openclawMeta           `json:"__openclaw"`
+	Role      string                 `json:"role"`
+	Content   []chatEventContentPart `json:"content"`
+	Timestamp int64                  `json:"timestamp"`
+}
+
+type openclawMeta struct {
+	ID  string `json:"id"`
+	Seq int    `json:"seq"`
+}
+
+func (h *ChatHandler) handleHistory(ctx context.Context, hc HandlerCtx, params json.RawMessage) (any, *FrameError) {
+	if h.store == nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "chat.history: no store wired"}
+	}
+	var p chatHistoryParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, &FrameError{Code: ErrCodeBadRequest, Message: "chat.history: " + err.Error()}
+		}
+	}
+	if strings.TrimSpace(p.SessionKey) == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "chat.history: sessionKey is required"}
+	}
+
+	msgs := h.store.Snapshot(p.SessionKey)
+	// limit<=0 means "no limit" per openclaw convention.
+	if p.Limit > 0 && len(msgs) > p.Limit {
+		msgs = msgs[len(msgs)-p.Limit:]
+	}
+
+	out := make([]historyMessage, len(msgs))
+	for i, m := range msgs {
+		out[i] = historyMessage{
+			Openclaw:  openclawMeta{ID: messageID(p.SessionKey, i), Seq: i + 1},
+			Role:      m.Role,
+			Content:   []chatEventContentPart{{Type: "text", Text: m.Content}},
+			Timestamp: m.At.UnixMilli(),
+		}
+	}
+	return map[string]any{"messages": out}, nil
+}
+
+// messageID returns a deterministic, sessionKey-scoped id for the i'th
+// message. Stable across reads (so React keys don't churn) and unique
+// within a session.
+func messageID(sessionKey string, i int) string {
+	h := fnv64(sessionKey)
+	return fmtHex8(h ^ uint64(i+1))
+}
+
+// fnv64 is a tiny FNV-1a hash to avoid pulling in hash/fnv just for this.
+func fnv64(s string) uint64 {
+	const (
+		offset = 14695981039346656037
+		prime  = 1099511628211
+	)
+	h := uint64(offset)
+	for i := 0; i < len(s); i++ {
+		h ^= uint64(s[i])
+		h *= prime
+	}
+	return h
+}
+
+func fmtHex8(v uint64) string {
+	const hex = "0123456789abcdef"
+	var b [8]byte
+	for i := 7; i >= 0; i-- {
+		b[i] = hex[v&0xf]
+		v >>= 4
+	}
+	return string(b[:])
 }
 
 // chatSendParams matches openclaw's chat.send request shape (subset).
