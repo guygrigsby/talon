@@ -445,10 +445,79 @@ func TestSkillsStatus_NoParamsDefaultsToMainAgent(t *testing.T) {
 	}
 }
 
-func TestAgentIdentityGet_RejectsMissingAgentID(t *testing.T) {
-	h := NewReadHandler(readFixture(t, `{}`))
-	_, ferr := h.handleAgentIdentityGet(t.Context(), HandlerCtx{}, []byte(`{}`))
-	if ferr == nil || ferr.Code != ErrCodeBadRequest {
-		t.Errorf("expected BAD_REQUEST, got %+v", ferr)
+func TestAgentIdentityGet_NoParamsDefaultsToMain(t *testing.T) {
+	// The openclaw web UI sometimes calls with {} (no sessionKey, no
+	// agentId). Returning BAD_REQUEST silently breaks the chat label
+	// because the UI swallows the error. Default to "main" instead.
+	dir := t.TempDir()
+	wsDir := filepath.Join(dir, "ws")
+	if err := os.MkdirAll(wsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "IDENTITY.md"),
+		[]byte("- **Name:** Clawdia\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"agents":{"list":[{"id":"main","workspace":%q}]}}`, wsDir)
+	h := NewReadHandler(readFixture(t, body))
+	res, ferr := h.handleAgentIdentityGet(t.Context(), HandlerCtx{}, []byte(`{}`))
+	if ferr != nil {
+		t.Fatalf("expected to default to main, got error: %+v", ferr)
+	}
+	if res.(map[string]any)["name"] != "Clawdia" {
+		t.Errorf("expected default-main resolution: %+v", res)
+	}
+}
+
+func TestAgentIdentityGet_AcceptsSessionKey(t *testing.T) {
+	// The UI's controllers/assistant-identity.ts calls
+	// `client.request("agent.identity.get", {sessionKey})` — never
+	// agentId. Server must derive agentId from sessionKey.
+	dir := t.TempDir()
+	wsDir := filepath.Join(dir, "ws")
+	if err := os.MkdirAll(wsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "IDENTITY.md"),
+		[]byte("- **Name:** Clawdia\n- **Emoji:** 🦞\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"agents":{"list":[{"id":"main","workspace":%q}]}}`, wsDir)
+	h := NewReadHandler(readFixture(t, body))
+
+	// All three canonical sessionKey forms must resolve to "main".
+	for _, sk := range []string{"main", "agent:main", "agent:main:main"} {
+		params := fmt.Sprintf(`{"sessionKey":%q}`, sk)
+		res, ferr := h.handleAgentIdentityGet(t.Context(), HandlerCtx{}, []byte(params))
+		if ferr != nil {
+			t.Errorf("sessionKey=%q got error %+v", sk, ferr)
+			continue
+		}
+		m, ok := res.(map[string]any)
+		if !ok || m["name"] != "Clawdia" || m["agentId"] != "main" {
+			t.Errorf("sessionKey=%q returned %+v", sk, res)
+		}
+	}
+}
+
+func TestAgentIdentityGet_ExplicitAgentIDWinsOverSessionKey(t *testing.T) {
+	// When both are provided, explicit agentId beats the derived one.
+	dir := t.TempDir()
+	wsDir := filepath.Join(dir, "ws")
+	if err := os.MkdirAll(wsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "IDENTITY.md"),
+		[]byte("- **Name:** Coder\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"agents":{"list":[{"id":"main"},{"id":"coding","workspace":%q}]}}`, wsDir)
+	h := NewReadHandler(readFixture(t, body))
+	res, ferr := h.handleAgentIdentityGet(t.Context(), HandlerCtx{}, []byte(`{"agentId":"coding","sessionKey":"agent:main:main"}`))
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	if res.(map[string]any)["name"] != "Coder" {
+		t.Errorf("expected agentId=coding to win, got %+v", res)
 	}
 }

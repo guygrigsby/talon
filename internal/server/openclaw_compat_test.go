@@ -279,6 +279,42 @@ func TestCompat_AgentIdentityGetShape(t *testing.T) {
 	mustString(t, raw, "avatar")
 }
 
+// TestCompat_AgentIdentityGetAcceptsSessionKeyParam locks in the contract
+// that broke the chat-label-shows-Assistant bug: the openclaw web UI's
+// controllers/assistant-identity.ts calls
+//
+//	client.request("agent.identity.get", {sessionKey})
+//
+// and never sends agentId. A handler that requires agentId returns
+// BAD_REQUEST, the UI's catch swallows it silently, and the assistant
+// label sticks on "Assistant" forever.
+func TestCompat_AgentIdentityGetAcceptsSessionKeyParam(t *testing.T) {
+	dir := t.TempDir()
+	wsDir := filepath.Join(dir, "ws")
+	if err := os.MkdirAll(wsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "IDENTITY.md"),
+		[]byte("- **Name:** Clawdia\n- **Emoji:** 🦞\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"agents":{"list":[{"id":"main","workspace":"` + wsDir + `"}]}}`
+	h := NewReadHandler(compatReadFixture(t, body))
+
+	// UI's actual call shape — sessionKey only, no agentId.
+	res, ferr := h.handleAgentIdentityGet(context.Background(), HandlerCtx{}, []byte(`{"sessionKey":"agent:main:main"}`))
+	if ferr != nil {
+		t.Fatalf("UI's sessionKey-only request must succeed, got %+v", ferr)
+	}
+	if res == nil {
+		t.Fatalf("expected identity payload, got nil")
+	}
+	raw := jsonOf(t, res)
+	if mustString(t, raw, "name") != "Clawdia" {
+		t.Errorf("name didn't resolve via sessionKey: %s", raw)
+	}
+}
+
 // --- skills.status ---------------------------------------------------------
 
 func TestCompat_SkillsStatusEnvelopeShape(t *testing.T) {

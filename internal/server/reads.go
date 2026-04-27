@@ -173,9 +173,16 @@ func (h *ReadHandler) handleModelsList(ctx context.Context, hc HandlerCtx, _ jso
 // --- agent.identity.get ----------------------------------------------------
 
 type agentIdentityParams struct {
-	AgentID string `json:"agentId"`
+	AgentID    string `json:"agentId"`
+	SessionKey string `json:"sessionKey"`
 }
 
+// handleAgentIdentityGet resolves the requested agent in three tiers,
+// matching openclaw's plugin-bootstrap surface: explicit agentId →
+// derived from sessionKey → default "main". The openclaw web UI calls
+// this with {sessionKey} and never agentId, so requiring agentId would
+// silently break the chat label (the UI's catch swallows the error and
+// the assistant stays as "Assistant" forever).
 func (h *ReadHandler) handleAgentIdentityGet(ctx context.Context, hc HandlerCtx, params json.RawMessage) (any, *FrameError) {
 	var p agentIdentityParams
 	if len(params) > 0 {
@@ -183,15 +190,19 @@ func (h *ReadHandler) handleAgentIdentityGet(ctx context.Context, hc HandlerCtx,
 			return nil, &FrameError{Code: ErrCodeBadRequest, Message: "agent.identity.get: " + err.Error()}
 		}
 	}
-	if p.AgentID == "" {
-		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "agent.identity.get: agentId is required"}
+	agentID := p.AgentID
+	if agentID == "" && p.SessionKey != "" {
+		agentID = AgentIDFromSessionKey(p.SessionKey)
+	}
+	if agentID == "" {
+		agentID = "main"
 	}
 	merged, err := config.MergedBytes(h.paths)
 	if err != nil {
 		return nil, &FrameError{Code: ErrCodeInternal, Message: "agent.identity.get: " + err.Error()}
 	}
 
-	agent := gjson.GetBytes(merged, fmt.Sprintf(`agents.list.#(id==%q)`, p.AgentID))
+	agent := gjson.GetBytes(merged, fmt.Sprintf(`agents.list.#(id==%q)`, agentID))
 	if !agent.Exists() {
 		// UI tolerates null — let the chat fall back to the agent id.
 		return nil, nil
@@ -219,7 +230,7 @@ func (h *ReadHandler) handleAgentIdentityGet(ctx context.Context, hc HandlerCtx,
 	}
 
 	resp := map[string]any{
-		"agentId": p.AgentID,
+		"agentId": agentID,
 		"name":    id.name,
 		"avatar":  pickAvatar(id.avatar, id.emoji),
 		"emoji":   id.emoji,
