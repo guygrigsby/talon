@@ -1,0 +1,135 @@
+# talon ↔ openclaw command parity
+
+Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
+`openclaw 2026.4.24 (cbcfdf6)`. Subcommand counts come from `openclaw <cmd>
+--help`. Status legend: ✓ shipped · ◐ partial · ✗ missing · ⊘ won't implement.
+
+## Top-level commands
+
+| Command | Status | Blocking issues / notes |
+|---|---|---|
+| `acp` (`client`) | ✗ | talon-aws (gateway server), ACP runtime |
+| `agent` | ✗ | talon-aws, talon-ekd, talon-98f |
+| `agents` (7 subs) | ◐ `list` only | talon-48e, talon-aws |
+| `approvals` (4 subs) | ✗ | talon-97i, talon-aws |
+| `backup` (3 subs) | ✗ | talon-aws (state on disk to back up) |
+| `capability` (10 subs) | ✗ | talon-ekd, talon-aws |
+| `channels` (10 subs) | ✗ | talon-kqk, talon-aws |
+| `chat` | ◐ wrong semantics | talon-dcj — openclaw `chat` = `tui --local`; talon `chat` is one-shot stream. Plus talon-rpk, talon-yct, talon-z8h, talon-8h2 |
+| `clawbot` (1 sub: `qr`) | ⊘ | legacy aliases, not worth cloning |
+| `completion` | ✗ | talon-tmf — Cobra has built-in support |
+| `config` (6 subs) | ◐ | Layered overlay model (talon-2sv): read merges `~/.talon` over `~/.openclaw`, writes target `~/.talon` only. talon-1oj (set rich modes — Phase B), talon-cmu (schema --section), talon-7vk (whitespace), talon-p4q (schema validator), talon-9ic (tombstones for openclaw-layer deletes) |
+| `configure` (interactive) | ✗ | depends on entire config surface; large port |
+| `cron` (10 subs) | ✗ | talon-3tg, talon-aws |
+| `daemon` (6 subs) | ⊘ | legacy alias for `gateway` service mgmt |
+| `dashboard` | ✗ | depends on Control UI; out of scope until talon-aws |
+| `devices` (8 subs) | ✗ | talon-job, talon-26v, talon-xk1, talon-aws |
+| `directory` (3 subs) | ✗ | talon-kqk, talon-aws |
+| `dns` (1 sub: `setup`) | ✗ | wide-area discovery; depends on bonjour work (talon-r0p) |
+| `docs` | ✗ | trivial port (web search wrapper) |
+| `doctor` | ✗ | talon-uyp |
+| `exec-policy` (3 subs) | ✗ | talon-aws (host approvals integration) |
+| `gateway` (12 subs) | ◐ 6/12 | see below |
+| `health` | ✓ | RPC `health` (was bug `health.get`, fixed in talon-a3h) |
+| `help` | ✓ | Cobra default |
+| `hooks` (7 subs) | ✗ | talon-aws, hook runtime |
+| `infer` (10 subs) | ✗ | aliased to `capability` in openclaw — same blockers |
+| `logs` | ✗ | talon-set, talon-aws |
+| `mcp` (6 subs) | ✗ | talon-v8k |
+| `memory` | ✗ | depends on memory backend |
+| `message` (24 subs) | ✗ | talon-kqk, talon-aws — large surface |
+| `models` (9 subs) | ◐ list only, no subcommand parent | talon-d0v |
+| `node` (6 subs) | ✗ | talon-yw5, talon-aws |
+| `nodes` (15 subs) | ✗ | talon-yw5, talon-aws |
+| `onboard` (interactive) | ✗ | depends on entire setup surface |
+| `pairing` (3 subs) | ✗ | talon-xk1, talon-26v |
+| `plugins` (10 subs) | ✗ | talon-aub, talon-yw5 |
+| `proxy` (8 subs) | ✗ | proxy runtime |
+| `qr` | ✗ | depends on talon-xk1 (proper device pairing) |
+| `reset` | ✗ | talon-aws (state to reset) |
+| `sandbox` (3 subs) | ✗ | sandbox runtime |
+| `secrets` (4 subs) | ✗ | talon-ekv |
+| `security` (1 sub: `audit`) | ✗ | talon-ekv (config audit) |
+| `sessions` (1 sub: `cleanup`) | ✗ | talon-c0b, talon-8lr |
+| `setup` | ✗ | talon-aws |
+| `skills` (6 subs) | ✗ | talon-ced |
+| `status` | ◐ | RPC `channels.status` works; `--all`/`--usage` flag rendering deferred |
+| `system` (3 subs) | ✗ | talon-aws |
+| `tasks` (7 subs) | ✗ | talon-aws |
+| `terminal` | ✗ | alias for `tui --local` — talon-pcn |
+| `tui` | ✗ | talon-pcn |
+| `uninstall` | ✗ | talon-aws |
+| `update` (2 subs) | ✗ | talon-87g (homebrew), talon-u9x (go install) |
+| `version` | ◐ | talon uses subcommand; openclaw uses `-V` flag — talon-0vv |
+| `webhooks` (1 sub: `gmail`) | ✗ | depends on gogcli integration |
+
+## `gateway` subcommands (12 total)
+
+| Subcommand | Status | Notes |
+|---|---|---|
+| `call` | ✓ | RPC pass-through (talon-lhh) |
+| `diagnostics export` | ✗ | talon-kao — local sanitized .zip writer |
+| `discover` | ✗ | talon-r0p — needs Bonjour mDNS |
+| `health` | ✓ | RPC `health` (talon-lhh) |
+| `install` | ✗ | talon-4an → blocked on talon-aws |
+| `probe` | ◐ | single-target only; openclaw probes localhost+remote+SSH-tunnel |
+| `restart` | ✗ | talon-4an → talon-aws |
+| `run` | ✗ | talon-aws |
+| `stability` | ✓ | RPC `diagnostics.stability` (talon-lhh) |
+| `start` | ✗ | talon-4an → talon-aws |
+| `status` | ◐ | probe + `--deep` service scan; missing localhost+remote dual probe, SSH tunnel |
+| `stop` | ✗ | talon-4an → talon-aws |
+| `uninstall` | ✗ | talon-4an → talon-aws |
+| `usage-cost` | ✓ | RPC `usage.cost` (talon-lhh) |
+
+## `config` subcommands (6 total)
+
+| Subcommand | Status | Notes |
+|---|---|---|
+| `file` | ✓ | |
+| `get` | ✓ | |
+| `schema` | ✓ | Prints cached schema by default; `--refresh` fetches via `config.schema` RPC and writes the cache used by `config validate`. Missing `--section` (talon-cmu). |
+| `set` | ◐ | Value mode with `--strict-json` (alias `--json`), `--dry-run`, `--merge`, `--replace`, openclaw bracket path syntax (`a[0]`, `a["k"]`), protected-path guard against the **merged** view, `gateway.auth.mode` credential pruning (talon overlay only) with stale-openclaw warning, backup rotation (`.bak`–`.bak.4`) and JSONL audit log on `~/.talon/logs/config-audit.jsonl` (talon-1xa, talon-2sv). Missing: `--ref-provider`/`--batch-file`/provider builder modes — Phase B (talon-1oj); tombstones for openclaw-layer deletes (talon-9ic) |
+| `unset` | ✓ | |
+| `validate` | ✓ | Schema-aware via cached schema at `~/.talon/cache/config-schema.json` (`config schema --refresh` populates from gateway). `--strict` requires a usable cache; default falls back to syntax-only with a warning when the cache is missing or the schema fails to compile (talon-p4q). Note: openclaw's current schema has dangling `$defs` refs that fail compile — tracked upstream as talon-q4m. |
+
+## Intentional divergence: post-write reload hints (talon-5zx)
+
+openclaw's `config set` always prints "Restart the gateway to apply." talon
+classifies each path and emits a class-aware hint instead:
+
+- **next-rpc** (default): "applies on the gateway's next request — no restart needed"
+- **hup**: "send SIGHUP to the running gateway to apply <path> (or restart)"
+- **restart**: "restart the gateway to apply (<path> is consumed at startup)"
+
+Restart-class paths today: `gateway.port`, `gateway.bind`, `gateway.auth.{mode,token,password}`, `gateway.tailscale.*`, `gateway.controlUi.*`, `plugins.entries.*.enabled`, `plugins.deny`, `plugins.load.paths`, `skills.*`. HUP class is empty until talon's embedded gateway gains a SIGHUP handler (talon-f06). Override per-call with `--reload=next-rpc|hup|restart`. Policy: talon never auto-restarts, never auto-watches.
+
+## Cross-cutting flag gaps
+
+openclaw's gateway-targeting subcommands share a `gatewayCallOpts` flag set
+that talon doesn't honor today: `--url`, `--token`, `--password`,
+`--timeout`, `--ssh`/`--ssh-identity`/`--ssh-auto`, `--json`. talon currently:
+
+- Reads URL/token only from config (`--url`/`--token` honored on `gateway
+  status`/`probe` but not `health`/`stability`/`usage-cost`/`call`).
+- Has no password auth path (talon-ekv).
+- Has no SSH tunnel path.
+- Has `--json` as a global flag, but `emit()` always pretty-prints — see
+  `cmd/talon/main.go` `|| true`.
+
+## Output format gap
+
+openclaw renders themed human output (channels summaries, stability tables,
+health channel lines) via JS modules when `--json` isn't set. talon emits JSON
+unconditionally for now. True parity requires porting those renderers — see
+talon-8eb (pretty/columnar typed output) and talon-htt (history timeline).
+
+## What can't be ported as-is
+
+- **Interactive flows** (`configure`, `onboard`, `setup`, `update wizard`,
+  `secrets configure`) — would need a Go interactive prompt library and a
+  rewrite of openclaw's flows.
+- **Legacy aliases** (`clawbot`, `daemon`) — explicitly legacy upstream;
+  cloning adds churn.
+- **Built-in Cobra equivalents** (`completion`, `help`) — use the framework's
+  own implementations.
