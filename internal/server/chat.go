@@ -300,22 +300,37 @@ func (h *ChatHandler) emitError(sess *Session, runID, sessionKey string, seq int
 	return sess.PushEvent(ctx, "chat", payload)
 }
 
-// AgentIDFromSessionKey parses openclaw's canonical session-key form:
-//   - "agent:<agentId>:<conversationId>" → agentId
-//   - "agent:<agentId>"                  → agentId (legacy form)
-//   - anything else                      → ""
+// AgentIDFromSessionKey parses a session-key into the agent it addresses.
+// Three shapes are accepted:
+//
+//   - "agent:<agentId>:<conversationId>" → agentId   (canonical form)
+//   - "agent:<agentId>"                  → agentId   (legacy short form)
+//   - "<agentId>"                        → agentId   (bare; how the openclaw
+//                                                    web UI passes the URL
+//                                                    `?session=` param)
+//
+// Anything with a colon but no `agent:` prefix is rejected as ambiguous and
+// returns "". An empty input also returns "".
 //
 // Exported because cmd/talon and tests need to derive agentIds the same way.
 func AgentIDFromSessionKey(sessionKey string) string {
-	const prefix = "agent:"
-	if !strings.HasPrefix(sessionKey, prefix) {
+	if sessionKey == "" {
 		return ""
 	}
-	rest := sessionKey[len(prefix):]
-	if id, _, ok := strings.Cut(rest, ":"); ok {
-		return id
+	const prefix = "agent:"
+	if strings.HasPrefix(sessionKey, prefix) {
+		rest := sessionKey[len(prefix):]
+		if id, _, ok := strings.Cut(rest, ":"); ok {
+			return id
+		}
+		return rest
 	}
-	return rest
+	// Bare form — accept only if it has no colon (otherwise it's some other
+	// namespaced form we don't understand and shouldn't guess at).
+	if strings.ContainsRune(sessionKey, ':') {
+		return ""
+	}
+	return sessionKey
 }
 
 func newRunID() (string, error) {

@@ -17,6 +17,8 @@ func TestAgentIDFromSessionKey(t *testing.T) {
 		{"agent:main:main", "main"},
 		{"agent:coding:abc123", "coding"},
 		{"agent:research", "research"}, // legacy short form
+		{"main", "main"},               // bare form — what the UI sends from ?session=main
+		{"deepwork", "deepwork"},
 		{"", ""},
 		{"foo:bar:baz", ""},        // wrong prefix
 		{"agent:", ""},              // empty agent — caller treats this as invalid
