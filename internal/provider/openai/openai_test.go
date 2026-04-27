@@ -316,6 +316,66 @@ func TestStream_RequestBodyOmitsToolsWhenAbsent(t *testing.T) {
 	}
 }
 
+func TestStream_EmptyContentIsExplicitStringNotNull(t *testing.T) {
+	// OpenAI rejects messages with content:null ("expected a string, got
+	// null"). Tool result turns where the tool returned "" and assistant
+	// turns that only carry tool_calls both used to drop the field via
+	// omitempty — that surfaced as null on OpenAI's side. The contract:
+	// always emit content as a string, even if empty.
+	var capturedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		capturedBody, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(recordedSSE))
+	}))
+	defer srv.Close()
+
+	p := New(Options{APIKey: "sk-test", BaseURL: srv.URL})
+	ch, _ := p.Stream(context.Background(), provider.Request{
+		Model: "openai/gpt-4o-mini",
+		Messages: []provider.Message{
+			{Role: provider.RoleUser, Content: "do thing"},
+			// Assistant turn that emitted ONLY tool_calls (no text).
+			{
+				Role: provider.RoleAssistant,
+				ToolCalls: []provider.ToolCall{
+					{ID: "call_a", Name: "glob", ArgumentsJSON: `{"pattern":"*"}`},
+				},
+			},
+			// Tool result with empty output (e.g. silent command).
+			{Role: provider.RoleTool, ToolCallID: "call_a", Content: ""},
+		},
+	})
+	for range ch {
+	}
+
+	// Re-parse the body and verify content is the string "" — never
+	// missing, never null.
+	if !strings.Contains(string(capturedBody), `"content":""`) {
+		t.Errorf("expected `\"content\":\"\"` in body for empty-content turns, got: %s", capturedBody)
+	}
+	if strings.Contains(string(capturedBody), `"content":null`) {
+		t.Errorf("content should never serialize as null: %s", capturedBody)
+	}
+
+	// Sanity: parse back and confirm every message has a string content.
+	var body map[string]any
+	if err := json.Unmarshal(capturedBody, &body); err != nil {
+		t.Fatal(err)
+	}
+	for i, raw := range body["messages"].([]any) {
+		msg := raw.(map[string]any)
+		c, present := msg["content"]
+		if !present {
+			t.Errorf("messages[%d] missing content field: %+v", i, msg)
+			continue
+		}
+		if _, ok := c.(string); !ok {
+			t.Errorf("messages[%d].content is %T, want string: %+v", i, c, c)
+		}
+	}
+}
+
 func TestStream_RequestBodySerializesAssistantToolCallsAndToolResults(t *testing.T) {
 	var capturedBody []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

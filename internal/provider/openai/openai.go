@@ -257,9 +257,15 @@ func buildRequestBody(model string, req provider.Request) ([]byte, error) {
 			Arguments string `json:"arguments"`
 		} `json:"function"`
 	}
+	// Content is always emitted (no omitempty). OpenAI maps a missing
+	// content field to null and rejects messages where the schema
+	// expects a string ("Invalid value for 'content': expected a string,
+	// got null"). Empty string is accepted everywhere — including
+	// assistant turns that only carry tool_calls and tool result turns
+	// where the tool produced no output.
 	type oaiMessage struct {
 		Role       string        `json:"role"`
-		Content    string        `json:"content,omitempty"`
+		Content    string        `json:"content"`
 		ToolCalls  []oaiToolCall `json:"tool_calls,omitempty"`
 		ToolCallID string        `json:"tool_call_id,omitempty"`
 	}
