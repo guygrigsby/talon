@@ -13,7 +13,7 @@ WEB_DIST ?= ../openclaw/dist/control-ui
 
 GO_SRC := $(shell find cmd internal -name '*.go' 2>/dev/null)
 
-.PHONY: build all install run gateway-run gateway-run-with-ui test vet fmt tidy clean cross web web-install web-dev web-build
+.PHONY: build all install run gateway-run gateway-run-with-ui test vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop
 
 build: $(BIN)
 
@@ -66,3 +66,31 @@ cross:
 	GOOS=darwin  GOARCH=amd64 $(GO) build -ldflags '$(LDFLAGS)' -o bin/$(BINARY)-darwin-amd64      $(PKG)
 	GOOS=darwin  GOARCH=arm64 $(GO) build -ldflags '$(LDFLAGS)' -o bin/$(BINARY)-darwin-arm64      $(PKG)
 	GOOS=windows GOARCH=amd64 $(GO) build -ldflags '$(LDFLAGS)' -o bin/$(BINARY)-windows-amd64.exe $(PKG)
+
+# ---- docker -----------------------------------------------------------
+# Run talon-gateway inside a container so the bash/edit/write tools execute
+# in an isolated filesystem instead of touching the host. Host port maps
+# to the original openclaw port (18789) — stop any running openclaw
+# gateway first or override DOCKER_HOST_PORT.
+DOCKER_IMAGE     ?= talon-gateway:dev
+DOCKER_HOST_PORT ?= 18789
+DOCKER_NAME      ?= talon-gateway
+
+docker-build:
+	docker build -t $(DOCKER_IMAGE) .
+
+# Bind-mount ~/.openclaw and ~/.talon at the SAME absolute paths as on the
+# host so agents.list[].workspace strings (which embed host paths like
+# "$$HOME/.openclaw/workspace") resolve transparently inside the
+# container. HOME is propagated for the same reason.
+docker-run: docker-build
+	docker run --rm -it \
+	    --name $(DOCKER_NAME) \
+	    -p $(DOCKER_HOST_PORT):18789 \
+	    -e HOME=$(HOME) \
+	    -v $(HOME)/.openclaw:$(HOME)/.openclaw \
+	    -v $(HOME)/.talon:$(HOME)/.talon \
+	    $(DOCKER_IMAGE) $(ARGS)
+
+docker-stop:
+	-docker stop $(DOCKER_NAME)

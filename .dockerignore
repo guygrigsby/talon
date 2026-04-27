@@ -1,0 +1,25 @@
+# Keep the build context lean — the Dockerfile only needs Go sources +
+# go.mod/go.sum. Everything below either bloats the upload or is regenerated
+# during the build.
+
+bin/
+out/
+*.exe
+*.test
+*.out
+coverage.out
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+*.swp
+
+# Local-only state
+.beads/
+.git/
+.github/
+node_modules/
+
+# Existing UI sibling repo lookups (not used by the docker build).
+../openclaw/
