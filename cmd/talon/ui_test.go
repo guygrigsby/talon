@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestBuildUIURL_DefaultsAreCorrect(t *testing.T) {
+func TestBuildUIURL_NonDefaultPortKeepsGatewayFragment(t *testing.T) {
 	got := buildUIURL("http://localhost:5173", "localhost", 18790, "", "", "/chat")
 	parsed, err := url.Parse(got)
 	if err != nil {
@@ -23,10 +23,47 @@ func TestBuildUIURL_DefaultsAreCorrect(t *testing.T) {
 		t.Fatalf("fragment not query-shaped: %v", err)
 	}
 	if frag.Get("gatewayUrl") != "ws://localhost:18790" {
-		t.Errorf("gatewayUrl fragment = %q, want ws://localhost:18790", frag.Get("gatewayUrl"))
+		t.Errorf("gatewayUrl fragment = %q, want ws://localhost:18790 (non-default port)", frag.Get("gatewayUrl"))
 	}
 	if frag.Has("token") {
 		t.Errorf("token should be absent when not provided: %q", frag.Get("token"))
+	}
+}
+
+func TestBuildUIURL_DefaultPortOmitsFragment(t *testing.T) {
+	// 18789 on localhost is the UI's implicit default — fragment is noise.
+	got := buildUIURL("http://localhost:5173", "localhost", 18789, "", "main", "/chat")
+	if strings.Contains(got, "#") {
+		t.Errorf("URL should have no fragment when gatewayUrl matches UI default: %s", got)
+	}
+	if !strings.HasSuffix(got, "?session=main") {
+		t.Errorf("session query missing: %s", got)
+	}
+}
+
+func TestBuildUIURL_LoopbackAliasMatchesDefault(t *testing.T) {
+	// 127.0.0.1 and localhost should be treated as equivalent.
+	got := buildUIURL("http://127.0.0.1:5173", "localhost", 18789, "", "", "/chat")
+	if strings.Contains(got, "#") {
+		t.Errorf("loopback alias mismatch should not force a fragment: %s", got)
+	}
+}
+
+func TestBuildUIURL_DefaultPortStillKeepsTokenFragment(t *testing.T) {
+	// Token must always go in the fragment, even when the UI's default
+	// would otherwise resolve.
+	got := buildUIURL("http://localhost:5173", "localhost", 18789, "secret-tok", "main", "/chat")
+	parsed, _ := url.Parse(got)
+	if parsed.Fragment == "" {
+		t.Fatalf("expected token fragment, got %s", got)
+	}
+	frag, _ := url.ParseQuery(parsed.Fragment)
+	if frag.Get("token") != "secret-tok" {
+		t.Errorf("token = %q", frag.Get("token"))
+	}
+	// gatewayUrl should NOT be redundantly included.
+	if frag.Has("gatewayUrl") {
+		t.Errorf("gatewayUrl should be omitted when port matches UI default: %s", got)
 	}
 }
 

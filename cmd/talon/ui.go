@@ -101,11 +101,19 @@ func addUIFlags(c *cobra.Command, uiHost, gwHost *string, gwPort *int, token, se
 // Token + gatewayUrl land in the fragment to avoid showing up in HTTP
 // request logs and referrers. session goes in the query so refreshes keep
 // the user on the same conversation.
+//
+// The gatewayUrl fragment is omitted when it would just restate the UI's
+// own default — port 18789 on the UI's hostname. Concretely: running
+// talon-gateway on the canonical openclaw port (18789) on localhost while
+// the UI runs at http://localhost:5173 yields a clean URL with only
+// ?session=... and no fragment.
 func buildUIURL(uiHost, gwHost string, gwPort int, token, session, routePath string) string {
 	wsURL := "ws://" + gwHost + ":" + strconv.Itoa(gwPort)
 
 	frag := url.Values{}
-	frag.Set("gatewayUrl", wsURL)
+	if !gatewayMatchesUIDefault(uiHost, gwHost, gwPort) {
+		frag.Set("gatewayUrl", wsURL)
+	}
 	if token != "" {
 		frag.Set("token", token)
 	}
@@ -115,7 +123,37 @@ func buildUIURL(uiHost, gwHost string, gwPort int, token, session, routePath str
 		q = "?session=" + url.QueryEscape(session)
 	}
 
-	return uiHost + routePath + q + "#" + frag.Encode()
+	base := uiHost + routePath + q
+	if len(frag) == 0 {
+		return base
+	}
+	return base + "#" + frag.Encode()
+}
+
+// gatewayMatchesUIDefault reports whether ws://<gwHost>:<gwPort> equals
+// the UI's implicit default (ws://<ui-hostname>:18789). Loopback aliases
+// (localhost / 127.0.0.1) are treated as equivalent.
+func gatewayMatchesUIDefault(uiHost, gwHost string, gwPort int) bool {
+	if gwPort != 18789 {
+		return false
+	}
+	u, err := url.Parse(uiHost)
+	if err != nil {
+		return false
+	}
+	uiHostname := u.Hostname()
+	if uiHostname == "" {
+		return false
+	}
+	return sameHostname(uiHostname, gwHost)
+}
+
+func sameHostname(a, b string) bool {
+	if a == b {
+		return true
+	}
+	loopback := func(s string) bool { return s == "localhost" || s == "127.0.0.1" || s == "::1" }
+	return loopback(a) && loopback(b)
 }
 
 // openInBrowser launches the system default browser for u. Best-effort;
