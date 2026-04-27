@@ -10,7 +10,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 |---|---|---|
 | `acp` (`client`) | ✗ | talon-aws (gateway server), ACP runtime |
 | `agent` | ✗ | talon-aws, talon-ekd, talon-98f |
-| `agents` (7 subs) | ◐ `list` only | talon-48e, talon-aws |
+| `agents` (7 subs) | ◐ `list` only | `list` renders a tab-aligned table (default agent first, then alpha; columns: ID, MODEL, WORKSPACE, FALLBACKS, NAME); use `--json` for raw RPC payload (talon-8eb). Other subs: talon-48e, talon-aws |
 | `approvals` (4 subs) | ✗ | talon-97i, talon-aws |
 | `backup` (3 subs) | ✗ | talon-aws (state on disk to back up) |
 | `capability` (10 subs) | ✗ | talon-ekd, talon-aws |
@@ -38,7 +38,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 | `mcp` (6 subs) | ✗ | talon-v8k |
 | `memory` | ✗ | depends on memory backend |
 | `message` (24 subs) | ✗ | talon-kqk, talon-aws — large surface |
-| `models` (9 subs) | ◐ list only, no subcommand parent | talon-d0v |
+| `models` (9 subs) | ◐ list only, no subcommand parent | `models` renders a tab-aligned table (sorted by ID; columns: ID, MODALITIES, CTX, REASONING, ALIAS, NAME); ctx compacted to K/M; use `--json` for raw RPC payload (talon-8eb). Other subs: talon-d0v |
 | `node` (6 subs) | ✗ | talon-yw5, talon-aws |
 | `nodes` (15 subs) | ✗ | talon-yw5, talon-aws |
 | `onboard` (interactive) | ✗ | depends on entire setup surface |

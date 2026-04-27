@@ -108,16 +108,17 @@ func runRPC(method string, params any) (json.RawMessage, error) {
 	return cli.Request(ctx, method, params)
 }
 
+// emit prints payload as 2-space-indented JSON. Used as the default for
+// commands without a typed renderer, and as the `--json` fallback for ones
+// that have one.
 func emit(payload json.RawMessage) {
-	if flagJSON || true { // default to JSON for now; pretty-print non-JSON later
-		var v any
-		if err := json.Unmarshal(payload, &v); err != nil {
-			fmt.Println(string(payload))
-			return
-		}
-		b, _ := json.MarshalIndent(v, "", "  ")
-		fmt.Println(string(b))
+	var v any
+	if err := json.Unmarshal(payload, &v); err != nil {
+		fmt.Println(string(payload))
+		return
 	}
+	b, _ := json.MarshalIndent(v, "", "  ")
+	fmt.Println(string(b))
 }
 
 func healthCmd() *cobra.Command {
@@ -455,8 +456,11 @@ func modelsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			emit(payload)
-			return nil
+			if flagJSON {
+				emit(payload)
+				return nil
+			}
+			return renderModels(os.Stdout, payload)
 		},
 	}
 }
@@ -471,8 +475,11 @@ func agentsCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			emit(payload)
-			return nil
+			if flagJSON {
+				emit(payload)
+				return nil
+			}
+			return renderAgents(os.Stdout, payload)
 		},
 	})
 	return c
