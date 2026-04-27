@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -44,10 +45,27 @@ type Server struct {
 	mux       *http.ServeMux
 	registry  *Registry
 	startedAt time.Time
+
+	// sessions tracks active authenticated sessions keyed by
+	// "<clientId>|<instanceId>" (only registered when both are
+	// non-empty). When a new connect handshake completes with a key
+	// already in the map, the older session is closed with a structured
+	// reason. This guards against the openclaw web UI's habit of
+	// occasionally opening two simultaneous WS connections from a single
+	// page load (Lit re-mount, HMR, or a connectGateway race during
+	// bootstrap).
+	sessionsMu sync.Mutex
+	sessions   map[string]*Session
 }
 
 func New(cfg Config) *Server {
-	s := &Server{cfg: cfg, mux: http.NewServeMux(), registry: NewRegistry(), startedAt: time.Now()}
+	s := &Server{
+		cfg:       cfg,
+		mux:       http.NewServeMux(),
+		registry:  NewRegistry(),
+		startedAt: time.Now(),
+		sessions:  make(map[string]*Session),
+	}
 	if cfg.AgentResolver != nil && cfg.ProviderFactory != nil {
 		ch := NewChatHandler(cfg.AgentResolver, cfg.ProviderFactory, NewChatStore())
 		if cfg.WorkspaceResolver != nil && cfg.ToolRunnerFor != nil {
@@ -137,6 +155,42 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) uptimeMs() int64 {
 	return time.Since(s.startedAt).Milliseconds()
+}
+
+// registerSession swaps sess into the sessions map under key. If a prior
+// session was registered there, it's closed with a structured reason — the
+// caller (Session.handshake) does this immediately after hello-ok so the
+// stale half of a duplicate-connect race exits cleanly.
+//
+// Returns the displaced session (nil if none) so the caller can wait for
+// it to drain if needed.
+func (s *Server) registerSession(key string, sess *Session) *Session {
+	if key == "" {
+		return nil
+	}
+	s.sessionsMu.Lock()
+	old := s.sessions[key]
+	s.sessions[key] = sess
+	s.sessionsMu.Unlock()
+	if old != nil && old != sess {
+		s.logf("ws replaced conn=%s by conn=%s key=%q", old.connID, sess.connID, key)
+		old.shutdown("replaced-by-newer-instance")
+	}
+	return old
+}
+
+// unregisterSession removes sess from the map iff it's still the active
+// entry under key. Compare-and-delete avoids the case where the
+// just-displaced session deregisters its successor on the way out.
+func (s *Server) unregisterSession(key string, sess *Session) {
+	if key == "" {
+		return
+	}
+	s.sessionsMu.Lock()
+	defer s.sessionsMu.Unlock()
+	if s.sessions[key] == sess {
+		delete(s.sessions, key)
+	}
 }
 
 func (s *Server) logf(format string, args ...any) {

@@ -18,11 +18,13 @@ type Session struct {
 	conn   *websocket.Conn
 	connID string
 
-	mu       sync.Mutex
-	authed   bool
-	role     string
-	scopes   []string
-	clientID string
+	mu         sync.Mutex
+	authed     bool
+	role       string
+	scopes     []string
+	clientID   string
+	instanceID string
+	dedupKey   string // "<clientId>|<instanceId>" once handshake completes; empty otherwise
 
 	// writeMu serializes WS writes. coder/websocket allows concurrent
 	// Read+Write, but only one Write at a time — this matters once chat
@@ -51,6 +53,48 @@ func (s *Session) PushEvent(ctx context.Context, event string, payload any) erro
 	return s.write(ctx, &Frame{Type: FrameEvent, Event: event, Payload: marshalRaw(payload)})
 }
 
+// shutdown closes the session's WS with a normal-closure status and the
+// supplied reason. Used by Server.registerSession to evict an older
+// session that's been replaced by a newer connect with the same client
+// instanceId. Idempotent and safe on a nil session.
+func (s *Session) shutdown(reason string) {
+	if s == nil || s.conn == nil {
+		return
+	}
+	_ = s.conn.Close(websocket.StatusNormalClosure, reason)
+}
+
+// register stores this session in the server's by-key map after a
+// successful handshake. Empty clientID or instanceID skips registration —
+// without both we can't tell two connections from the same tab apart from
+// two tabs of the same UI.
+func (s *Session) register() {
+	s.mu.Lock()
+	cid, iid := s.clientID, s.instanceID
+	s.mu.Unlock()
+	if cid == "" || iid == "" {
+		return
+	}
+	key := cid + "|" + iid
+	s.mu.Lock()
+	s.dedupKey = key
+	s.mu.Unlock()
+	s.server.registerSession(key, s)
+}
+
+// deregister removes this session from the server's by-key map iff it's
+// still the entry under our key. Called from Run's defer chain so it
+// runs whether the session exits cleanly or via shutdown.
+func (s *Session) deregister() {
+	s.mu.Lock()
+	key := s.dedupKey
+	s.mu.Unlock()
+	if key == "" {
+		return
+	}
+	s.server.unregisterSession(key, s)
+}
+
 // errNoSession is returned by PushEvent when there is nothing to write to.
 var errNoSession = errors.New("session is unavailable")
 
@@ -61,6 +105,7 @@ func newSession(s *Server, conn *websocket.Conn) *Session {
 
 func (s *Session) Run(ctx context.Context) {
 	defer s.conn.Close(websocket.StatusNormalClosure, "")
+	defer s.deregister()
 
 	if err := s.sendChallenge(ctx); err != nil {
 		return
@@ -72,6 +117,7 @@ func (s *Session) Run(ctx context.Context) {
 		s.server.logf("handshake failed conn=%s: %v", s.connID, err)
 		return
 	}
+	s.register()
 
 	for {
 		var f Frame
@@ -127,6 +173,7 @@ func (s *Session) handshake(ctx context.Context) error {
 	s.role = auth.Role
 	s.scopes = auth.Scopes
 	s.clientID = p.Client.ID
+	s.instanceID = p.Client.InstanceID
 	s.mu.Unlock()
 
 	hello := HelloOK{
