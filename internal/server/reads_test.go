@@ -235,10 +235,10 @@ func TestConfigSchema_InvalidCacheReturnsError(t *testing.T) {
 	}
 }
 
-func TestReadHandler_RegisterAddsAllFour(t *testing.T) {
+func TestReadHandler_RegisterAddsAll(t *testing.T) {
 	r := NewRegistry()
 	NewReadHandler(readFixture(t, `{}`)).Register(r)
-	want := map[string]bool{"agents.list": false, "models.list": false, "config.schema": false, "agent.identity.get": false}
+	want := map[string]bool{"agents.list": false, "models.list": false, "config.schema": false, "agent.identity.get": false, "skills.status": false}
 	for _, m := range r.Methods() {
 		if _, ok := want[m]; ok {
 			want[m] = true
@@ -386,6 +386,62 @@ func TestAgentIdentityGet_MissingIdentityFileReturnsNull(t *testing.T) {
 	}
 	if res != nil {
 		t.Errorf("expected nil when IDENTITY.md is absent, got %+v", res)
+	}
+}
+
+// --- skills.status ---------------------------------------------------------
+
+func TestSkillsStatus_ReturnsEmptyEnvelopeWithResolvedWorkspace(t *testing.T) {
+	body := `{
+		"agents": {
+			"defaults": {"workspace": "/ws/default"},
+			"list": [{"id": "main", "workspace": "/ws/main"}]
+		}
+	}`
+	h := NewReadHandler(readFixture(t, body))
+	res, ferr := h.handleSkillsStatus(t.Context(), HandlerCtx{}, []byte(`{"agentId":"main"}`))
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	m := res.(map[string]any)
+	if m["workspaceDir"] != "/ws/main" {
+		t.Errorf("workspaceDir = %v, want /ws/main", m["workspaceDir"])
+	}
+	if m["managedSkillsDir"] != "/ws/main/.skills" {
+		t.Errorf("managedSkillsDir = %v", m["managedSkillsDir"])
+	}
+	skills, ok := m["skills"].([]any)
+	if !ok || len(skills) != 0 {
+		t.Errorf("skills = %v, want empty []any", m["skills"])
+	}
+}
+
+func TestSkillsStatus_FallsBackToDefaultsWorkspace(t *testing.T) {
+	body := `{
+		"agents": {
+			"defaults": {"workspace": "/ws/default"},
+			"list": [{"id": "main"}]
+		}
+	}`
+	h := NewReadHandler(readFixture(t, body))
+	res, ferr := h.handleSkillsStatus(t.Context(), HandlerCtx{}, []byte(`{}`))
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	if res.(map[string]any)["workspaceDir"] != "/ws/default" {
+		t.Errorf("workspaceDir should fall back to defaults: %+v", res)
+	}
+}
+
+func TestSkillsStatus_NoParamsDefaultsToMainAgent(t *testing.T) {
+	body := `{"agents":{"list":[{"id":"main","workspace":"/ws/m"}]}}`
+	h := NewReadHandler(readFixture(t, body))
+	res, ferr := h.handleSkillsStatus(t.Context(), HandlerCtx{}, nil)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	if res.(map[string]any)["workspaceDir"] != "/ws/m" {
+		t.Errorf("default agent should be main: %+v", res)
 	}
 }
 

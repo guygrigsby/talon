@@ -28,13 +28,14 @@ func NewReadHandler(paths openclaw.Paths) *ReadHandler {
 	return &ReadHandler{paths: paths}
 }
 
-// Register wires agents.list, models.list, config.schema, and
-// agent.identity.get into r.
+// Register wires agents.list, models.list, config.schema,
+// agent.identity.get, and skills.status into r.
 func (h *ReadHandler) Register(r *Registry) {
 	r.Register("agents.list", h.handleAgentsList)
 	r.Register("models.list", h.handleModelsList)
 	r.Register("config.schema", h.handleConfigSchema)
 	r.Register("agent.identity.get", h.handleAgentIdentityGet)
+	r.Register("skills.status", h.handleSkillsStatus)
 }
 
 // --- agents.list -----------------------------------------------------------
@@ -329,6 +330,60 @@ func splitLines(s string) []string {
 		out[i] = strings.TrimRight(l, "\r")
 	}
 	return out
+}
+
+// --- skills.status ---------------------------------------------------------
+
+type skillsStatusParams struct {
+	AgentID string `json:"agentId"`
+}
+
+// handleSkillsStatus returns the SkillStatusReport shape the openclaw web
+// UI consumes, with an empty skills list. Distinct from the chat tool
+// surface — talon's chat tools (read/write/edit/bash/glob/grep) are
+// builtin function-calling primitives, not user-installable skills. A
+// real skills runtime (scan managedSkillsDir, parse SKILL.md frontmatter)
+// is a separate, larger project.
+func (h *ReadHandler) handleSkillsStatus(ctx context.Context, hc HandlerCtx, params json.RawMessage) (any, *FrameError) {
+	var p skillsStatusParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, &FrameError{Code: ErrCodeBadRequest, Message: "skills.status: " + err.Error()}
+		}
+	}
+	merged, err := config.MergedBytes(h.paths)
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "skills.status: " + err.Error()}
+	}
+	agentID := p.AgentID
+	if agentID == "" {
+		agentID = "main"
+	}
+	workspace := resolveWorkspace(merged, agentID)
+	managedSkillsDir := ""
+	if workspace != "" {
+		managedSkillsDir = workspace + "/.skills"
+	}
+	return map[string]any{
+		"workspaceDir":     workspace,
+		"managedSkillsDir": managedSkillsDir,
+		"skills":           []any{},
+	}, nil
+}
+
+// resolveWorkspace mirrors configAgentResolver.Workspace's precedence:
+// per-agent workspace, fallback to agents.defaults.workspace.
+func resolveWorkspace(merged []byte, agentID string) string {
+	agent := gjson.GetBytes(merged, fmt.Sprintf(`agents.list.#(id==%q)`, agentID))
+	if agent.Exists() {
+		if v := agent.Get("workspace"); v.Exists() && v.Str != "" {
+			return v.Str
+		}
+	}
+	if v := gjson.GetBytes(merged, "agents.defaults.workspace"); v.Exists() && v.Str != "" {
+		return v.Str
+	}
+	return ""
 }
 
 // --- config.schema ---------------------------------------------------------
