@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -39,10 +40,19 @@ func (s *Session) AgentID() string {
 }
 
 // PushEvent writes a server-initiated event frame to this session. Safe for
-// concurrent use across goroutines (write-serialized internally).
+// concurrent use across goroutines (write-serialized internally). A nil
+// receiver returns errNoSession instead of panicking; tests that exercise
+// chat.send synchronously without a real WS conn rely on this so the
+// streaming goroutine can bail cleanly.
 func (s *Session) PushEvent(ctx context.Context, event string, payload any) error {
+	if s == nil || s.conn == nil {
+		return errNoSession
+	}
 	return s.write(ctx, &Frame{Type: FrameEvent, Event: event, Payload: marshalRaw(payload)})
 }
+
+// errNoSession is returned by PushEvent when there is nothing to write to.
+var errNoSession = errors.New("session is unavailable")
 
 func newSession(s *Server, conn *websocket.Conn) *Session {
 	id, _ := newConnID()

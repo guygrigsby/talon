@@ -134,8 +134,9 @@ func gatewayRunCmd() *cobra.Command {
 				Auth:            server.AuthConfig{Mode: authMode, Token: token},
 				AgentResolver:   &configAgentResolver{paths: paths},
 				ProviderFactory: &agentProviderFactory{paths: paths},
+				Paths:           paths,
 			})
-			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai)", addr, authMode)
+			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai, reads=enabled)", addr, authMode)
 			return srv.Run(ctx)
 		},
 	}

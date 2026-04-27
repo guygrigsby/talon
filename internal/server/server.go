@@ -10,9 +10,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/guygrigsby/talon/internal/openclaw"
 )
 
-const serverVersion = "talon-gateway 0.1.0-dev"
+const serverVersion = "0.1.0-dev"
 
 type Config struct {
 	Addr   string
@@ -26,6 +27,10 @@ type Config struct {
 	// ProviderFactory pairs with AgentResolver to materialize provider
 	// implementations for the agent's primary model.
 	ProviderFactory ProviderFactory
+	// Paths, when set, enables the read-only RPCs sourced from the
+	// merged config (agents.list, models.list, config.schema). Leaving
+	// it as the zero value disables those handlers.
+	Paths openclaw.Paths
 }
 
 type Server struct {
@@ -39,6 +44,9 @@ func New(cfg Config) *Server {
 	s := &Server{cfg: cfg, mux: http.NewServeMux(), registry: NewRegistry(), startedAt: time.Now()}
 	if cfg.AgentResolver != nil && cfg.ProviderFactory != nil {
 		NewChatHandler(cfg.AgentResolver, cfg.ProviderFactory, NewChatStore()).Register(s.registry)
+	}
+	if cfg.Paths.Talon.Dir != "" {
+		NewReadHandler(cfg.Paths).Register(s.registry)
 	}
 	s.routes()
 	return s
