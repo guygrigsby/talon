@@ -17,11 +17,31 @@ type Session struct {
 	conn   *websocket.Conn
 	connID string
 
-	mu      sync.Mutex
-	authed  bool
-	role    string
-	scopes  []string
+	mu       sync.Mutex
+	authed   bool
+	role     string
+	scopes   []string
 	clientID string
+
+	// writeMu serializes WS writes. coder/websocket allows concurrent
+	// Read+Write, but only one Write at a time — this matters once chat
+	// streaming pushes events asynchronously alongside request replies.
+	writeMu sync.Mutex
+}
+
+// AgentID returns the per-session agent identifier supplied at handshake
+// (currently the connect.client.id). Reserved for future per-session state;
+// returns "" when handshake has not completed.
+func (s *Session) AgentID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.clientID
+}
+
+// PushEvent writes a server-initiated event frame to this session. Safe for
+// concurrent use across goroutines (write-serialized internally).
+func (s *Session) PushEvent(ctx context.Context, event string, payload any) error {
+	return s.write(ctx, &Frame{Type: FrameEvent, Event: event, Payload: marshalRaw(payload)})
 }
 
 func newSession(s *Server, conn *websocket.Conn) *Session {
@@ -161,6 +181,8 @@ func (s *Session) write(ctx context.Context, f *Frame) error {
 	if err != nil {
 		return err
 	}
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
 	return s.conn.Write(ctx, websocket.MessageText, b)
 }
 

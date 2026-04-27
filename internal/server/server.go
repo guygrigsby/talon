@@ -19,6 +19,13 @@ type Config struct {
 	WebDir string
 	Auth   AuthConfig
 	Logger *log.Logger
+
+	// AgentResolver, if set, enables chat.send by translating sessionKey →
+	// agent → ModelID. Leaving nil disables chat.send (returns INTERNAL).
+	AgentResolver AgentResolver
+	// ProviderFactory pairs with AgentResolver to materialize provider
+	// implementations for the agent's primary model.
+	ProviderFactory ProviderFactory
 }
 
 type Server struct {
@@ -30,6 +37,9 @@ type Server struct {
 
 func New(cfg Config) *Server {
 	s := &Server{cfg: cfg, mux: http.NewServeMux(), registry: NewRegistry(), startedAt: time.Now()}
+	if cfg.AgentResolver != nil && cfg.ProviderFactory != nil {
+		NewChatHandler(cfg.AgentResolver, cfg.ProviderFactory, NewChatStore()).Register(s.registry)
+	}
 	s.routes()
 	return s
 }

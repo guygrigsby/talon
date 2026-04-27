@@ -127,12 +127,15 @@ func gatewayRunCmd() *cobra.Command {
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 			defer cancel()
 
+			paths := resolvePaths()
 			srv := server.New(server.Config{
-				Addr:   addr,
-				WebDir: webDir,
-				Auth:   server.AuthConfig{Mode: authMode, Token: token},
+				Addr:            addr,
+				WebDir:          webDir,
+				Auth:            server.AuthConfig{Mode: authMode, Token: token},
+				AgentResolver:   &configAgentResolver{paths: paths},
+				ProviderFactory: &agentProviderFactory{paths: paths},
 			})
-			log.Printf("talon gateway listening on %s (auth=%s)", addr, authMode)
+			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai)", addr, authMode)
 			return srv.Run(ctx)
 		},
 	}
