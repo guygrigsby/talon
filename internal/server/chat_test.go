@@ -658,6 +658,44 @@ func TestChatHandler_TextOnlyChatStillWorksWithoutTools(t *testing.T) {
 	}
 }
 
+// --- agent tool stream events (talon-23s) ---------------------------------
+
+func TestBuildToolStartPayload_ParsedArgs(t *testing.T) {
+	got := buildToolStartPayload("run1", "agent:main:main", "call_x", "bash", `{"command":"ls"}`, 17_000_000)
+	if got.Stream != "tool" || got.SessionKey != "agent:main:main" || got.RunID != "run1" || got.Ts != 17_000_000 {
+		t.Errorf("envelope wrong: %+v", got)
+	}
+	if got.Data["phase"] != "start" || got.Data["toolCallId"] != "call_x" || got.Data["name"] != "bash" {
+		t.Errorf("data fields wrong: %+v", got.Data)
+	}
+	args, ok := got.Data["args"].(map[string]any)
+	if !ok || args["command"] != "ls" {
+		t.Errorf("args should be parsed JSON object: %+v", got.Data["args"])
+	}
+	// Marshal-roundtrip check — UI consumes JSON.
+	raw, err := json.Marshal(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), `"stream":"tool"`) || !strings.Contains(string(raw), `"phase":"start"`) {
+		t.Errorf("marshaled payload missing expected fields: %s", raw)
+	}
+}
+
+func TestBuildToolStartPayload_FallsBackToRawArgsOnParseFailure(t *testing.T) {
+	got := buildToolStartPayload("r", "s", "c", "n", `{not-json`, 0)
+	if got.Data["args"] != `{not-json` {
+		t.Errorf("malformed JSON should fall back to raw string, got %+v", got.Data["args"])
+	}
+}
+
+func TestBuildToolResultPayload_PassesOutputThrough(t *testing.T) {
+	got := buildToolResultPayload("r", "s", "c", "bash", "stdout-text\n", 0)
+	if got.Data["phase"] != "result" || got.Data["result"] != "stdout-text\n" {
+		t.Errorf("data wrong: %+v", got.Data)
+	}
+}
+
 func TestErrAgentNotFoundIsExported(t *testing.T) {
 	// Ensure the sentinel is wrappable, so callers can errors.Is on it.
 	wrapped := errors.New("wrap: " + ErrAgentNotFound.Error())

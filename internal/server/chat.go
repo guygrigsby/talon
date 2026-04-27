@@ -447,11 +447,15 @@ func (h *ChatHandler) runStream(sess *Session, runID, sessionKey, agentID string
 
 		// Execute each tool call sequentially. tool failures are captured
 		// as the result string so the model can react in the next turn.
+		// Emit "agent" events with stream="tool" so the openclaw web UI's
+		// app-tool-stream renders the call (start) and result (result).
 		for _, tc := range toolCalls {
+			h.emitAgentToolStart(sess, runID, sessionKey, tc.ID, tc.Name, tc.ArgumentsJSON)
 			output, err := runner.Run(ctx, tc.Name, json.RawMessage(tc.ArgumentsJSON))
 			if err != nil {
 				output = "ERROR: " + err.Error()
 			}
+			h.emitAgentToolResult(sess, runID, sessionKey, tc.ID, tc.Name, output)
 			h.store.AppendToolResult(sessionKey, tc.ID, output)
 		}
 		// Loop back to re-stream with updated history.
@@ -519,6 +523,78 @@ func (h *ChatHandler) emitChat(sess *Session, runID, sessionKey string, seq int,
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return sess.PushEvent(ctx, "chat", payload)
+}
+
+// agentEventPayload is the openclaw "agent" event envelope. The web UI's
+// handleAgentEvent dispatches on payload.stream — for our tool execution
+// surface the only one we emit is stream="tool".
+type agentEventPayload struct {
+	Stream     string         `json:"stream"`
+	SessionKey string         `json:"sessionKey"`
+	RunID      string         `json:"runId"`
+	Ts         int64          `json:"ts"`
+	Data       map[string]any `json:"data"`
+}
+
+// emitAgentToolStart fires before runner.Run so the UI's tool stream
+// renders the in-flight tool card.
+func (h *ChatHandler) emitAgentToolStart(sess *Session, runID, sessionKey, toolCallID, name, argumentsJSON string) {
+	payload := buildToolStartPayload(runID, sessionKey, toolCallID, name, argumentsJSON, time.Now().UnixMilli())
+	pushAgentEvent(sess, payload)
+}
+
+// emitAgentToolResult fires after runner.Run completes (whether or not
+// the tool errored — failures are already captured into output as
+// "ERROR: ...").
+func (h *ChatHandler) emitAgentToolResult(sess *Session, runID, sessionKey, toolCallID, name, output string) {
+	payload := buildToolResultPayload(runID, sessionKey, toolCallID, name, output, time.Now().UnixMilli())
+	pushAgentEvent(sess, payload)
+}
+
+// buildToolStartPayload constructs the agent.tool start event. argumentsJSON
+// is decoded into an object when possible (matches openclaw's data.args
+// shape); a parse failure falls back to the raw string so the UI still has
+// something to show.
+func buildToolStartPayload(runID, sessionKey, toolCallID, name, argumentsJSON string, ts int64) agentEventPayload {
+	var args any
+	if argumentsJSON != "" {
+		if err := json.Unmarshal([]byte(argumentsJSON), &args); err != nil {
+			args = argumentsJSON
+		}
+	}
+	return agentEventPayload{
+		Stream:     "tool",
+		SessionKey: sessionKey,
+		RunID:      runID,
+		Ts:         ts,
+		Data: map[string]any{
+			"toolCallId": toolCallID,
+			"name":       name,
+			"phase":      "start",
+			"args":       args,
+		},
+	}
+}
+
+func buildToolResultPayload(runID, sessionKey, toolCallID, name, output string, ts int64) agentEventPayload {
+	return agentEventPayload{
+		Stream:     "tool",
+		SessionKey: sessionKey,
+		RunID:      runID,
+		Ts:         ts,
+		Data: map[string]any{
+			"toolCallId": toolCallID,
+			"name":       name,
+			"phase":      "result",
+			"result":     output,
+		},
+	}
+}
+
+func pushAgentEvent(sess *Session, payload agentEventPayload) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = sess.PushEvent(ctx, "agent", payload)
 }
 
 func (h *ChatHandler) emitError(sess *Session, runID, sessionKey string, seq int, kind, msg string) error {
