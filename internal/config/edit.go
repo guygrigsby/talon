@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,25 @@ import (
 	"github.com/tidwall/pretty"
 	"github.com/tidwall/sjson"
 )
+
+// canonicalPrettyOptions defines talon's on-disk overlay format. Output matches
+// openclaw's writer (Node `JSON.stringify(v, null, 2) + "\n"`) byte-for-byte:
+// 2-space indent, spaces after colons, no key sort, one element per line, and
+// a trailing newline. This is verified in TestSetWriteFormatMatchesOpenclaw.
+//
+// Keep in sync with both writers' tests if the format ever changes.
+var canonicalPrettyOptions = &pretty.Options{Indent: "  ", SortKeys: false, Width: 0}
+
+// canonicalPretty returns the post-pretty form of raw with talon's canonical
+// options. The result always ends with a trailing newline (tidwall/pretty
+// always emits one as of v1.2.x; the append is defensive).
+func canonicalPretty(raw []byte) []byte {
+	out := pretty.PrettyOptions(raw, canonicalPrettyOptions)
+	if len(out) == 0 || out[len(out)-1] != '\n' {
+		out = append(out, '\n')
+	}
+	return out
+}
 
 // SetMode controls how Set handles existing values at the target path.
 type SetMode int
@@ -101,7 +121,14 @@ func Set(p openclaw.Paths, segments []string, value any, opts SetOpts) (SetResul
 	if opts.DryRun {
 		return res, nil
 	}
-	updated = pretty.PrettyOptions(updated, &pretty.Options{Indent: "  ", SortKeys: false, Width: 0})
+	updated = canonicalPretty(updated)
+	// Idempotent short-circuit: if the post-pretty bytes already match what's
+	// on disk, skip the write. Avoids rotating .bak files and appending a no-op
+	// audit record when the user re-issues an unchanged set (talon-7vk).
+	onDisk, _ := os.ReadFile(p.Talon.Config)
+	if onDisk != nil && bytes.Equal(onDisk, updated) {
+		return res, nil
+	}
 	if err := writeOverlay(p.Talon, overlay, updated, []string{SegPath(segments)}); err != nil {
 		return res, err
 	}
@@ -136,7 +163,11 @@ func Unset(p openclaw.Paths, segments []string) error {
 	if err != nil {
 		return fmt.Errorf("unset %s: %w", SegPath(segments), err)
 	}
-	updated = pretty.PrettyOptions(updated, &pretty.Options{Indent: "  ", SortKeys: false, Width: 0})
+	updated = canonicalPretty(updated)
+	onDisk, _ := os.ReadFile(p.Talon.Config)
+	if onDisk != nil && bytes.Equal(onDisk, updated) {
+		return nil
+	}
 	return writeOverlay(p.Talon, overlay, updated, []string{SegPath(segments)})
 }
 

@@ -281,9 +281,12 @@ override the registry's classification for paths it doesn't know about.`,
 					return fmt.Errorf("--reload must be one of: next-rpc, hup, restart")
 				}
 			}
-			if dryRun {
+			switch {
+			case dryRun:
 				fmt.Printf("dry-run: would set %s (%s)\n", res.Path, class.Hint(res.Path))
-			} else {
+			case !res.Wrote:
+				fmt.Printf("set %s — no change (value already matches; overlay file untouched)\n", res.Path)
+			default:
 				fmt.Printf("set %s — %s\n", res.Path, class.Hint(res.Path))
 			}
 			for _, pp := range res.PrunedPaths {

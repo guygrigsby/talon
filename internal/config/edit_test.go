@@ -327,6 +327,118 @@ func TestWriteOverlay_RotatesBackupsAndAppendsAudit(t *testing.T) {
 	}
 }
 
+// --- whitespace minimization (talon-7vk) ------------------------------------
+
+func TestSet_IdempotentSetIsNoOp(t *testing.T) {
+	p := fixture(t, "", `{"gateway":{"port":1}}`)
+	// First set: actually changes the value, writes overlay + .bak.
+	res, err := Set(p, mustParse(t, "gateway.port"), 19000, SetOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !res.Wrote {
+		t.Fatalf("first set should write")
+	}
+	// Capture state after first write.
+	after1, err := os.ReadFile(p.Talon.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bak1Stat, _ := os.Stat(p.Talon.ConfigBackupPath(0))
+	bak2Stat, _ := os.Stat(p.Talon.ConfigBackupPath(1))
+	auditAfter1, _ := os.ReadFile(p.Talon.ConfigAuditLogPath())
+
+	// Second set with the same value: should short-circuit (no rotation, no
+	// audit append, file bytes unchanged).
+	res2, err := Set(p, mustParse(t, "gateway.port"), 19000, SetOpts{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res2.Wrote {
+		t.Errorf("idempotent set should not report Wrote=true")
+	}
+	after2, err := os.ReadFile(p.Talon.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after1) != string(after2) {
+		t.Errorf("overlay bytes changed across idempotent set:\nbefore: %s\nafter:  %s", after1, after2)
+	}
+	bak1Stat2, _ := os.Stat(p.Talon.ConfigBackupPath(0))
+	if bak1Stat == nil || bak1Stat2 == nil || bak1Stat.ModTime() != bak1Stat2.ModTime() {
+		t.Errorf(".bak rotated on idempotent set (mtime changed)")
+	}
+	bak2Stat2, _ := os.Stat(p.Talon.ConfigBackupPath(1))
+	// .bak.1 mtime should be unchanged. (May not exist after only one write —
+	// allow that case.)
+	if bak2Stat != nil && bak2Stat2 != nil && bak2Stat.ModTime() != bak2Stat2.ModTime() {
+		t.Errorf(".bak.1 rotated on idempotent set")
+	}
+	auditAfter2, _ := os.ReadFile(p.Talon.ConfigAuditLogPath())
+	if string(auditAfter1) != string(auditAfter2) {
+		t.Errorf("audit log appended on idempotent set:\nbefore: %s\nafter:  %s", auditAfter1, auditAfter2)
+	}
+}
+
+// TestSet_WriteFormatMatchesOpenclaw locks talon's overlay output to openclaw's
+// canonical JSON.stringify(v, null, 2) + "\n" shape. Drift here breaks
+// byte-for-byte cross-compat and gets called out by talon-7vk.
+func TestSet_WriteFormatMatchesOpenclaw(t *testing.T) {
+	p := fixture(t, "", "")
+	if _, err := Set(p, mustParse(t, "logging.level"), "debug", SetOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Set(p, mustParse(t, "agents.defaults.workspace"), "/foo", SetOpts{}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(p.Talon.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// What openclaw would emit for the same logical content via Node:
+	// JSON.stringify(value, null, 2) + "\n".
+	want := "{\n" +
+		"  \"logging\": {\n" +
+		"    \"level\": \"debug\"\n" +
+		"  },\n" +
+		"  \"agents\": {\n" +
+		"    \"defaults\": {\n" +
+		"      \"workspace\": \"/foo\"\n" +
+		"    }\n" +
+		"  }\n" +
+		"}\n"
+	if string(got) != want {
+		t.Errorf("overlay format diverged from openclaw canonical form:\n--- got\n%s\n--- want\n%s", got, want)
+	}
+}
+
+func TestUnset_IdempotentWhenAlreadyDeleted(t *testing.T) {
+	p := fixture(t, "", `{"a":1,"b":2}`)
+	if err := Unset(p, mustParse(t, "a")); err != nil {
+		t.Fatal(err)
+	}
+	after1, err := os.ReadFile(p.Talon.Config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auditAfter1, _ := os.ReadFile(p.Talon.ConfigAuditLogPath())
+	// Second unset of "a" must error (already gone), not silently rotate
+	// backups. The idempotent short-circuit only applies to value-equal
+	// writes, not to commands targeting nonexistent paths.
+	err = Unset(p, mustParse(t, "a"))
+	if err == nil {
+		t.Errorf("expected error unsetting an already-removed path")
+	}
+	after2, _ := os.ReadFile(p.Talon.Config)
+	if string(after1) != string(after2) {
+		t.Errorf("overlay changed after no-op unset")
+	}
+	auditAfter2, _ := os.ReadFile(p.Talon.ConfigAuditLogPath())
+	if string(auditAfter1) != string(auditAfter2) {
+		t.Errorf("audit log appended on no-op unset")
+	}
+}
+
 // --- unset ------------------------------------------------------------------
 
 func TestUnset_RemovesFromTalonOnly(t *testing.T) {
