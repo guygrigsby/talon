@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strings"
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/openclaw"
@@ -27,11 +28,13 @@ func NewReadHandler(paths openclaw.Paths) *ReadHandler {
 	return &ReadHandler{paths: paths}
 }
 
-// Register wires agents.list, models.list, and config.schema into r.
+// Register wires agents.list, models.list, config.schema, and
+// agent.identity.get into r.
 func (h *ReadHandler) Register(r *Registry) {
 	r.Register("agents.list", h.handleAgentsList)
 	r.Register("models.list", h.handleModelsList)
 	r.Register("config.schema", h.handleConfigSchema)
+	r.Register("agent.identity.get", h.handleAgentIdentityGet)
 }
 
 // --- agents.list -----------------------------------------------------------
@@ -164,6 +167,168 @@ func (h *ReadHandler) handleModelsList(ctx context.Context, hc HandlerCtx, _ jso
 	})
 
 	return map[string]any{"models": models}, nil
+}
+
+// --- agent.identity.get ----------------------------------------------------
+
+type agentIdentityParams struct {
+	AgentID string `json:"agentId"`
+}
+
+func (h *ReadHandler) handleAgentIdentityGet(ctx context.Context, hc HandlerCtx, params json.RawMessage) (any, *FrameError) {
+	var p agentIdentityParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, &FrameError{Code: ErrCodeBadRequest, Message: "agent.identity.get: " + err.Error()}
+		}
+	}
+	if p.AgentID == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "agent.identity.get: agentId is required"}
+	}
+	merged, err := config.MergedBytes(h.paths)
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "agent.identity.get: " + err.Error()}
+	}
+
+	agent := gjson.GetBytes(merged, fmt.Sprintf(`agents.list.#(id==%q)`, p.AgentID))
+	if !agent.Exists() {
+		// UI tolerates null — let the chat fall back to the agent id.
+		return nil, nil
+	}
+	workspace := agent.Get("workspace").Str
+	if workspace == "" {
+		workspace = gjson.GetBytes(merged, "agents.defaults.workspace").Str
+	}
+	if workspace == "" {
+		return nil, nil
+	}
+
+	identityPath := workspace + "/IDENTITY.md"
+	raw, err := os.ReadFile(identityPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "agent.identity.get: read IDENTITY.md: " + err.Error()}
+	}
+
+	id := parseIdentityMarkdown(raw)
+	if id.name == "" && id.emoji == "" && id.avatar == "" {
+		return nil, nil
+	}
+
+	resp := map[string]any{
+		"agentId": p.AgentID,
+		"name":    id.name,
+		"avatar":  pickAvatar(id.avatar, id.emoji),
+		"emoji":   id.emoji,
+	}
+	return resp, nil
+}
+
+// pickAvatar mirrors openclaw's behavior: if the avatar field is empty,
+// the emoji doubles as the rendered avatar.
+func pickAvatar(avatar, emoji string) string {
+	if avatar != "" {
+		return avatar
+	}
+	return emoji
+}
+
+type identityFields struct {
+	name   string
+	emoji  string
+	avatar string
+}
+
+// parseIdentityMarkdown extracts the three IDENTITY.md fields the UI cares
+// about. The expected format (per openclaw's bootstrap) is a markdown
+// bullet list:
+//
+//	- **Name:** Clawdia
+//	- **Emoji:** 🦞
+//	- **Avatar:** avatars/openclaw.png
+//
+// Lines may use either `- **Key:** value` or `- **Key:**\n  value`. Trailing
+// italics or markdown decorations on the value line are stripped. Empty
+// values yield empty strings.
+func parseIdentityMarkdown(raw []byte) identityFields {
+	var out identityFields
+	lines := splitLines(string(raw))
+	for i := 0; i < len(lines); i++ {
+		key, val, ok := matchBulletKV(lines[i])
+		if !ok {
+			continue
+		}
+		// If val is empty, peek at the next line in case it carries a
+		// continuation. Skip pure-italic continuation hints like
+		// "_(workspace-relative path...)_".
+		if val == "" && i+1 < len(lines) {
+			next := stripContinuation(lines[i+1])
+			if next != "" {
+				val = next
+			}
+		}
+		switch normalizeKey(key) {
+		case "name":
+			out.name = val
+		case "emoji":
+			out.emoji = val
+		case "avatar":
+			out.avatar = val
+		}
+	}
+	return out
+}
+
+// matchBulletKV recognizes "- **Key:** value" and returns (key, value, ok).
+// Tolerant of varying whitespace and case in "Key" but strict on the
+// leading "- **" marker.
+func matchBulletKV(line string) (key, value string, ok bool) {
+	const marker = "- **"
+	t := strings.TrimSpace(line)
+	if !strings.HasPrefix(t, marker) {
+		return "", "", false
+	}
+	rest := t[len(marker):]
+	// Find the closing ":**" of the key.
+	end := strings.Index(rest, ":**")
+	if end < 0 {
+		return "", "", false
+	}
+	key = rest[:end]
+	value = strings.TrimSpace(rest[end+len(":**"):])
+	return key, value, true
+}
+
+// stripContinuation drops italics-wrapped hint text and quote prefixes so
+// "_(workspace-relative path, http(s) URL, or data URI)_" doesn't end up
+// being treated as the avatar value.
+func stripContinuation(line string) string {
+	t := strings.TrimSpace(line)
+	t = strings.TrimPrefix(t, ">")
+	t = strings.TrimSpace(t)
+	if strings.HasPrefix(t, "_") && strings.HasSuffix(t, "_") {
+		return ""
+	}
+	if strings.HasPrefix(t, "*") && strings.HasSuffix(t, "*") {
+		return ""
+	}
+	return t
+}
+
+func normalizeKey(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+func splitLines(s string) []string {
+	// Avoid pulling bufio.Scanner just for tests; split on \n and trim
+	// trailing \r for Windows-CRLF tolerance.
+	out := strings.Split(s, "\n")
+	for i, l := range out {
+		out[i] = strings.TrimRight(l, "\r")
+	}
+	return out
 }
 
 // --- config.schema ---------------------------------------------------------

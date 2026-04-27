@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -234,10 +235,10 @@ func TestConfigSchema_InvalidCacheReturnsError(t *testing.T) {
 	}
 }
 
-func TestReadHandler_RegisterAddsAllThree(t *testing.T) {
+func TestReadHandler_RegisterAddsAllFour(t *testing.T) {
 	r := NewRegistry()
 	NewReadHandler(readFixture(t, `{}`)).Register(r)
-	want := map[string]bool{"agents.list": false, "models.list": false, "config.schema": false}
+	want := map[string]bool{"agents.list": false, "models.list": false, "config.schema": false, "agent.identity.get": false}
 	for _, m := range r.Methods() {
 		if _, ok := want[m]; ok {
 			want[m] = true
@@ -247,5 +248,151 @@ func TestReadHandler_RegisterAddsAllThree(t *testing.T) {
 		if !ok {
 			t.Errorf("Register did not register %q", m)
 		}
+	}
+}
+
+// --- agent.identity.get ----------------------------------------------------
+
+func TestParseIdentityMarkdown_RealFormat(t *testing.T) {
+	// Verbatim from openclaw's IDENTITY.md template + bootstrap.
+	body := []byte(`# IDENTITY.md - Who Am I?
+
+_Fill this in during your first conversation. Make it yours._
+
+- **Name:** Clawdia
+- **Creature:** personal assistant / automation lobster
+- **Vibe:** gets shit done, cute, butter-light tan, practical
+- **Emoji:** 🦞
+- **Avatar:**
+  _(workspace-relative path, http(s) URL, or data URI)_
+
+---
+
+This isn't just metadata.`)
+	got := parseIdentityMarkdown(body)
+	if got.name != "Clawdia" {
+		t.Errorf("name = %q, want Clawdia", got.name)
+	}
+	if got.emoji != "🦞" {
+		t.Errorf("emoji = %q, want 🦞", got.emoji)
+	}
+	// Avatar is empty in the template; the italic continuation hint must
+	// NOT be treated as the value.
+	if got.avatar != "" {
+		t.Errorf("avatar = %q, want empty (italic hint should be ignored)", got.avatar)
+	}
+}
+
+func TestParseIdentityMarkdown_FilledAvatar(t *testing.T) {
+	body := []byte("- **Name:** Bot\n- **Emoji:** 🤖\n- **Avatar:** avatars/me.png\n")
+	got := parseIdentityMarkdown(body)
+	if got.name != "Bot" || got.emoji != "🤖" || got.avatar != "avatars/me.png" {
+		t.Errorf("got %+v", got)
+	}
+}
+
+func TestParseIdentityMarkdown_EmptyDocument(t *testing.T) {
+	got := parseIdentityMarkdown([]byte(""))
+	if got.name != "" || got.emoji != "" || got.avatar != "" {
+		t.Errorf("expected zero value: %+v", got)
+	}
+}
+
+func TestParseIdentityMarkdown_TolerantOfWhitespaceAndCase(t *testing.T) {
+	body := []byte("   - **name:**   Lower  \n- **EMOJI:**🦞\n")
+	got := parseIdentityMarkdown(body)
+	if got.name != "Lower" {
+		t.Errorf("name = %q, want Lower (lowercase key)", got.name)
+	}
+	if got.emoji != "🦞" {
+		t.Errorf("emoji = %q, want 🦞 (uppercase key)", got.emoji)
+	}
+}
+
+func TestAgentIdentityGet_HappyPath(t *testing.T) {
+	dir := t.TempDir()
+	wsDir := filepath.Join(dir, "ws")
+	if err := os.MkdirAll(wsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "IDENTITY.md"),
+		[]byte("- **Name:** Clawdia\n- **Emoji:** 🦞\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"agents":{"list":[{"id":"main","workspace":%q}]}}`, wsDir)
+	h := NewReadHandler(readFixture(t, body))
+	res, ferr := h.handleAgentIdentityGet(t.Context(), HandlerCtx{}, []byte(`{"agentId":"main"}`))
+	if ferr != nil {
+		t.Fatalf("handleAgentIdentityGet: %+v", ferr)
+	}
+	m := res.(map[string]any)
+	if m["agentId"] != "main" || m["name"] != "Clawdia" || m["emoji"] != "🦞" {
+		t.Errorf("identity = %+v", m)
+	}
+	// avatar falls back to emoji when the field is empty.
+	if m["avatar"] != "🦞" {
+		t.Errorf("avatar should fall back to emoji, got %q", m["avatar"])
+	}
+}
+
+func TestAgentIdentityGet_FallsBackToDefaultsWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	wsDir := filepath.Join(dir, "default-ws")
+	if err := os.MkdirAll(wsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wsDir, "IDENTITY.md"),
+		[]byte("- **Name:** Defaulted\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{
+		"agents": {
+			"defaults": {"workspace": %q},
+			"list": [{"id": "main"}]
+		}
+	}`, wsDir)
+	h := NewReadHandler(readFixture(t, body))
+	res, ferr := h.handleAgentIdentityGet(t.Context(), HandlerCtx{}, []byte(`{"agentId":"main"}`))
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	if res.(map[string]any)["name"] != "Defaulted" {
+		t.Errorf("name = %v, want Defaulted (resolved via agents.defaults.workspace)", res)
+	}
+}
+
+func TestAgentIdentityGet_UnknownAgentReturnsNull(t *testing.T) {
+	h := NewReadHandler(readFixture(t, `{"agents":{"list":[{"id":"main"}]}}`))
+	res, ferr := h.handleAgentIdentityGet(t.Context(), HandlerCtx{}, []byte(`{"agentId":"nope"}`))
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	if res != nil {
+		t.Errorf("expected nil for unknown agent, got %+v", res)
+	}
+}
+
+func TestAgentIdentityGet_MissingIdentityFileReturnsNull(t *testing.T) {
+	dir := t.TempDir()
+	wsDir := filepath.Join(dir, "ws")
+	if err := os.MkdirAll(wsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"agents":{"list":[{"id":"main","workspace":%q}]}}`, wsDir)
+	h := NewReadHandler(readFixture(t, body))
+	res, ferr := h.handleAgentIdentityGet(t.Context(), HandlerCtx{}, []byte(`{"agentId":"main"}`))
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	if res != nil {
+		t.Errorf("expected nil when IDENTITY.md is absent, got %+v", res)
+	}
+}
+
+func TestAgentIdentityGet_RejectsMissingAgentID(t *testing.T) {
+	h := NewReadHandler(readFixture(t, `{}`))
+	_, ferr := h.handleAgentIdentityGet(t.Context(), HandlerCtx{}, []byte(`{}`))
+	if ferr == nil || ferr.Code != ErrCodeBadRequest {
+		t.Errorf("expected BAD_REQUEST, got %+v", ferr)
 	}
 }
