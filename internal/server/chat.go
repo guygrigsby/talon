@@ -240,29 +240,33 @@ func (h *ChatHandler) handleSend(ctx context.Context, hc HandlerCtx, params json
 		return nil, &FrameError{Code: ErrCodeInternal, Message: "chat.send: provider: " + err.Error()}
 	}
 
-	// Idempotency: same {sessionKey, idempotencyKey} returns the existing
-	// runId without spawning a second stream. We don't replay events to
-	// late subscribers in this MVP — the openclaw UI re-sends after a
-	// reconnect with a fresh idempotencyKey so this is acceptable.
-	runKey := p.SessionKey + "|" + p.IdempotencyKey
-	if p.IdempotencyKey != "" {
-		h.runsMu.Lock()
-		if existing, ok := h.runs[runKey]; ok {
-			h.runsMu.Unlock()
-			return map[string]any{"runId": existing}, nil
+	// runId protocol contract: the openclaw web UI generates a UUID
+	// client-side, sets chatRunId = uuid, and passes it as
+	// idempotencyKey on chat.send (it does NOT send a separate runId
+	// param). chat events MUST echo back that same value as runId so the
+	// UI's handleChatEvent matches them against state.chatRunId. Mismatch
+	// triggers the "different run" branch, which appends the final
+	// message but never clears chatRunId — and that leaves the typing
+	// indicator on forever.
+	//
+	// So: idempotencyKey IS the runId. When empty we mint a fresh one for
+	// CLI callers that don't supply their own.
+	runID := p.IdempotencyKey
+	if runID == "" {
+		fresh, err := newRunID()
+		if err != nil {
+			return nil, &FrameError{Code: ErrCodeInternal, Message: "chat.send: " + err.Error()}
 		}
+		runID = fresh
+	}
+	runKey := p.SessionKey + "|" + runID
+	h.runsMu.Lock()
+	if _, ok := h.runs[runKey]; ok {
 		h.runsMu.Unlock()
+		return map[string]any{"runId": runID}, nil
 	}
-
-	runID, err := newRunID()
-	if err != nil {
-		return nil, &FrameError{Code: ErrCodeInternal, Message: "chat.send: " + err.Error()}
-	}
-	if p.IdempotencyKey != "" {
-		h.runsMu.Lock()
-		h.runs[runKey] = runID
-		h.runsMu.Unlock()
-	}
+	h.runs[runKey] = runID
+	h.runsMu.Unlock()
 
 	h.store.Append(p.SessionKey, "user", p.Message)
 	history := h.store.Snapshot(p.SessionKey)
@@ -302,7 +306,10 @@ func (h *ChatHandler) runStream(sess *Session, runID, sessionKey string, prov pr
 		case provider.DeltaText:
 			accumulated.WriteString(d.Text)
 			seq++
-			if err := h.emitChat(sess, runID, sessionKey, seq, "streaming", accumulated.String()); err != nil {
+			// State name is "delta" — that's what openclaw emits and what
+			// the web UI's handleChatEvent matches on. Anything else is
+			// silently dropped by the UI.
+			if err := h.emitChat(sess, runID, sessionKey, seq, "delta", accumulated.String()); err != nil {
 				emitFailures++
 				if emitFailures >= 3 {
 					// Client is probably gone — stop streaming, but drain

@@ -185,6 +185,27 @@ func TestChatHandler_IdempotencyReturnsSameRunID(t *testing.T) {
 	}
 }
 
+func TestChatHandler_RunIDEqualsIdempotencyKey(t *testing.T) {
+	// The openclaw web UI generates a UUID, sends it as idempotencyKey,
+	// and matches subsequent chat events on payload.runId === that UUID.
+	// chat.send must echo the idempotencyKey back as runId or the UI
+	// won't recognize the run as terminal and the typing indicator will
+	// stick.
+	h := NewChatHandler(
+		&stubResolver{models: map[string]provider.ModelID{"main": "openai/gpt-4o-mini"}},
+		&stubFactory{provider: provider.NewStub("openai", []provider.Delta{{Kind: provider.DeltaText, Text: "hi"}})},
+		NewChatStore(),
+	)
+	body := []byte(`{"sessionKey":"agent:main:main","message":"hi","idempotencyKey":"a1b2-c3d4-e5f6"}`)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	if got := res.(map[string]any)["runId"].(string); got != "a1b2-c3d4-e5f6" {
+		t.Errorf("runId = %q, want idempotencyKey %q", got, "a1b2-c3d4-e5f6")
+	}
+}
+
 func TestChatHandler_NoIdempotencyKeyMeansNewRun(t *testing.T) {
 	h := NewChatHandler(
 		&stubResolver{models: map[string]provider.ModelID{"main": "openai/gpt-4o-mini"}},
