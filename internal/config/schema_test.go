@@ -186,6 +186,61 @@ func TestValidateMerged_DanglingRefReturnsCompileFailedError(t *testing.T) {
 	}
 }
 
+// --- ExtractSchemaSection -------------------------------------------------
+
+func TestExtractSchemaSection_Toplevel(t *testing.T) {
+	got, err := ExtractSchemaSection([]byte(minimalSchemaEnvelope), "gateway")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should be the gateway subschema (object with type:object and properties).
+	if !strings.Contains(string(got), `"type": "object"`) || !strings.Contains(string(got), `"port"`) {
+		t.Errorf("section output looks wrong: %s", got)
+	}
+}
+
+func TestExtractSchemaSection_Nested(t *testing.T) {
+	got, err := ExtractSchemaSection([]byte(minimalSchemaEnvelope), "gateway.auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Should be the auth subschema with mode/token props.
+	if !strings.Contains(string(got), `"mode"`) || !strings.Contains(string(got), `"token"`) {
+		t.Errorf("nested section output looks wrong: %s", got)
+	}
+	// Should NOT contain the sibling 'port' key.
+	if strings.Contains(string(got), `"port"`) {
+		t.Errorf("nested section leaked the parent's siblings: %s", got)
+	}
+}
+
+func TestExtractSchemaSection_EmptyReturnsEnvelopeUnchanged(t *testing.T) {
+	got, err := ExtractSchemaSection([]byte(minimalSchemaEnvelope), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != minimalSchemaEnvelope {
+		t.Errorf("empty section should return raw unchanged")
+	}
+}
+
+func TestExtractSchemaSection_MissingSection(t *testing.T) {
+	_, err := ExtractSchemaSection([]byte(minimalSchemaEnvelope), "noSuchSection")
+	if err == nil {
+		t.Errorf("expected error for missing section")
+	}
+}
+
+func TestExtractSchemaSection_EmptySegmentRejected(t *testing.T) {
+	_, err := ExtractSchemaSection([]byte(minimalSchemaEnvelope), "gateway..auth")
+	if err == nil {
+		t.Errorf("expected error for empty segment")
+	}
+	if _, err := ExtractSchemaSection([]byte(minimalSchemaEnvelope), ".gateway"); err == nil {
+		t.Errorf("expected error for leading dot")
+	}
+}
+
 func TestFormatGeneratedAt(t *testing.T) {
 	if got := FormatGeneratedAt(""); got != "(unknown)" {
 		t.Errorf("empty = %q, want (unknown)", got)

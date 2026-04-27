@@ -18,7 +18,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 | `chat` | ◐ wrong semantics | talon-dcj — openclaw `chat` = `tui --local`; talon `chat` is one-shot stream. Plus talon-rpk, talon-yct, talon-z8h, talon-8h2 |
 | `clawbot` (1 sub: `qr`) | ⊘ | legacy aliases, not worth cloning |
 | `completion` | ✗ | talon-tmf — Cobra has built-in support |
-| `config` (6 subs) | ◐ | Layered overlay model (talon-2sv): read merges `~/.talon` over `~/.openclaw`, writes target `~/.talon` only. talon-1oj (set rich modes — Phase B), talon-cmu (schema --section), talon-7vk (whitespace), talon-p4q (schema validator), talon-9ic (tombstones for openclaw-layer deletes) |
+| `config` (6 subs) | ◐ | Layered overlay model (talon-2sv): read merges `~/.talon` over `~/.openclaw`, writes target `~/.talon` only. talon-1oj (set rich modes — Phase B), talon-7vk (whitespace), talon-9ic (tombstones for openclaw-layer deletes) |
 | `configure` (interactive) | ✗ | depends on entire config surface; large port |
 | `cron` (10 subs) | ✗ | talon-3tg, talon-aws |
 | `daemon` (6 subs) | ⊘ | legacy alias for `gateway` service mgmt |
@@ -88,7 +88,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 |---|---|---|
 | `file` | ✓ | |
 | `get` | ✓ | |
-| `schema` | ✓ | Prints cached schema by default; `--refresh` fetches via `config.schema` RPC and writes the cache used by `config validate`. Missing `--section` (talon-cmu). |
+| `schema` | ✓ | Prints cached schema by default; `--refresh` fetches via `config.schema` RPC and writes the cache used by `config validate`; `--section <name>` filters to one subschema (dotted to drill in, e.g. `gateway.auth`). |
 | `set` | ◐ | Value mode with `--strict-json` (alias `--json`), `--dry-run`, `--merge`, `--replace`, openclaw bracket path syntax (`a[0]`, `a["k"]`), protected-path guard against the **merged** view, `gateway.auth.mode` credential pruning (talon overlay only) with stale-openclaw warning, backup rotation (`.bak`–`.bak.4`) and JSONL audit log on `~/.talon/logs/config-audit.jsonl` (talon-1xa, talon-2sv). Missing: `--ref-provider`/`--batch-file`/provider builder modes — Phase B (talon-1oj); tombstones for openclaw-layer deletes (talon-9ic) |
 | `unset` | ✓ | |
 | `validate` | ✓ | Schema-aware via cached schema at `~/.talon/cache/config-schema.json` (`config schema --refresh` populates from gateway). `--strict` requires a usable cache; default falls back to syntax-only with a warning when the cache is missing or the schema fails to compile (talon-p4q). Note: openclaw's current schema has dangling `$defs` refs that fail compile — tracked upstream as talon-q4m. |

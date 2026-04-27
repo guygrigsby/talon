@@ -385,7 +385,10 @@ is available. Use --syntax-only to skip schema validation entirely.`,
 	validateCmd.Flags().BoolVar(&validateSyntaxOnly, "syntax-only", false, "skip schema validation; check JSON syntax only")
 	c.AddCommand(validateCmd)
 
-	var schemaRefresh bool
+	var (
+		schemaRefresh bool
+		schemaSection string
+	)
 	schemaCmd := &cobra.Command{
 		Use:   "schema",
 		Short: "Print the cached JSON schema (use --refresh to fetch from a gateway)",
@@ -393,9 +396,25 @@ is available. Use --syntax-only to skip schema validation entirely.`,
 
 With --refresh, fetches the schema from a running gateway via the
 config.schema RPC, writes it to the cache, then prints it. The cache is what
-"talon config validate" uses, so refresh whenever the gateway upgrades.`,
+"talon config validate" uses, so refresh whenever the gateway upgrades.
+
+With --section <name>, prints just one subschema under the schema's
+top-level properties tree. Names may be dotted to drill in (e.g.
+--section gateway.auth walks schema.properties.gateway.properties.auth).`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			p := resolvePaths()
+			emitOut := func(raw []byte) error {
+				if schemaSection == "" {
+					emit(raw)
+					return nil
+				}
+				sub, err := config.ExtractSchemaSection(raw, schemaSection)
+				if err != nil {
+					return err
+				}
+				emit(sub)
+				return nil
+			}
 			if schemaRefresh {
 				payload, err := runRPC("config.schema", nil)
 				if err != nil {
@@ -405,8 +424,7 @@ config.schema RPC, writes it to the cache, then prints it. The cache is what
 					return err
 				}
 				fmt.Fprintf(os.Stderr, "cached schema → %s\n", p.Talon.SchemaCachePath())
-				emit(payload)
-				return nil
+				return emitOut(payload)
 			}
 			raw, err := os.ReadFile(p.Talon.SchemaCachePath())
 			if err != nil {
@@ -415,11 +433,11 @@ config.schema RPC, writes it to the cache, then prints it. The cache is what
 				}
 				return err
 			}
-			emit(raw)
-			return nil
+			return emitOut(raw)
 		},
 	}
 	schemaCmd.Flags().BoolVar(&schemaRefresh, "refresh", false, "fetch the schema from a running gateway and update the cache")
+	schemaCmd.Flags().StringVar(&schemaSection, "section", "", "print only the named top-level subschema (dotted to drill in, e.g. gateway.auth)")
 	c.AddCommand(schemaCmd)
 
 	return c

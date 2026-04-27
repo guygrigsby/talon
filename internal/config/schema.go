@@ -11,6 +11,7 @@ import (
 
 	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/santhosh-tekuri/jsonschema/v6"
+	"github.com/tidwall/gjson"
 	"golang.org/x/text/language"
 	"golang.org/x/text/message"
 )
@@ -191,6 +192,34 @@ func instancePath(ve *jsonschema.ValidationError) string {
 		return "<root>"
 	}
 	return strings.Join(ve.InstanceLocation, ".")
+}
+
+// ExtractSchemaSection returns the subschema at the given dotted path under
+// the envelope's schema.properties tree. So section "gateway" returns
+// schema.properties.gateway, and "gateway.auth" returns
+// schema.properties.gateway.properties.auth.
+//
+// raw must be a SchemaEnvelope-shaped JSON ({generatedAt, schema}) — the
+// shape returned by the config.schema RPC and stored in the cache.
+func ExtractSchemaSection(raw []byte, section string) ([]byte, error) {
+	if section == "" {
+		return raw, nil
+	}
+	parts := strings.Split(section, ".")
+	for i, p := range parts {
+		if strings.TrimSpace(p) == "" {
+			return nil, fmt.Errorf("invalid section %q: empty segment at position %d", section, i)
+		}
+	}
+	sjpath := "schema.properties." + escapeSjsonSegment(parts[0])
+	for _, p := range parts[1:] {
+		sjpath += ".properties." + escapeSjsonSegment(p)
+	}
+	r := gjson.GetBytes(raw, sjpath)
+	if !r.Exists() {
+		return nil, fmt.Errorf("section %q not found in schema", section)
+	}
+	return []byte(r.Raw), nil
 }
 
 // FormatGeneratedAt renders a schema's generatedAt for human display, or
