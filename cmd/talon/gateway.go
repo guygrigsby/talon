@@ -128,15 +128,18 @@ func gatewayRunCmd() *cobra.Command {
 			defer cancel()
 
 			paths := resolvePaths()
+			resolver := &configAgentResolver{paths: paths}
 			srv := server.New(server.Config{
-				Addr:            addr,
-				WebDir:          webDir,
-				Auth:            server.AuthConfig{Mode: authMode, Token: token},
-				AgentResolver:   &configAgentResolver{paths: paths},
-				ProviderFactory: &agentProviderFactory{paths: paths},
-				Paths:           paths,
+				Addr:              addr,
+				WebDir:            webDir,
+				Auth:              server.AuthConfig{Mode: authMode, Token: token},
+				AgentResolver:     resolver,
+				ProviderFactory:   &agentProviderFactory{paths: paths},
+				WorkspaceResolver: resolver,
+				ToolRunnerFor:     makeToolRunner,
+				Paths:             paths,
 			})
-			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai, reads=enabled)", addr, authMode)
+			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai, reads=enabled, tools=read/write/edit/bash/glob/grep)", addr, authMode)
 			// Forgettable-URL mitigation: print the deep-link the openclaw
 			// web UI needs after a fresh page load (cache cleared, new
 			// browser, etc). Token is included only when --auth=token; the

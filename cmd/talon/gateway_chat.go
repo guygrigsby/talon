@@ -9,6 +9,7 @@ import (
 	"github.com/guygrigsby/talon/internal/provider"
 	"github.com/guygrigsby/talon/internal/provider/openai"
 	"github.com/guygrigsby/talon/internal/server"
+	"github.com/guygrigsby/talon/internal/tools"
 	"github.com/tidwall/gjson"
 )
 
@@ -26,6 +27,33 @@ import (
 // returns ErrAgentNotFound.
 type configAgentResolver struct {
 	paths openclaw.Paths
+}
+
+// Workspace implements server.WorkspaceResolver: per-agent workspace,
+// fallback to agents.defaults.workspace.
+func (r *configAgentResolver) Workspace(agentID string) (string, error) {
+	merged, err := config.MergedBytes(r.paths)
+	if err != nil {
+		return "", fmt.Errorf("read merged config: %w", err)
+	}
+	agent := gjson.GetBytes(merged, fmt.Sprintf(`agents.list.#(id==%q)`, agentID))
+	if !agent.Exists() {
+		return "", fmt.Errorf("%w: %q", server.ErrAgentNotFound, agentID)
+	}
+	if v := agent.Get("workspace"); v.Exists() && v.Str != "" {
+		return v.Str, nil
+	}
+	if v := gjson.GetBytes(merged, "agents.defaults.workspace"); v.Exists() && v.Str != "" {
+		return v.Str, nil
+	}
+	return "", fmt.Errorf("agent %q has no workspace and no agents.defaults.workspace", agentID)
+}
+
+// makeToolRunner is the server.Config.ToolRunnerFor factory: build a
+// fresh tools.Registry per chat.send invocation, scoped to workspace.
+// tools.Registry implements ToolRunner.
+func makeToolRunner(workspace string) server.ToolRunner {
+	return tools.New(workspace)
 }
 
 func (r *configAgentResolver) PrimaryModel(agentID string) (provider.ModelID, error) {

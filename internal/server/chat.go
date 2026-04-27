@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,14 @@ import (
 // ErrAgentNotFound when the agent does not exist.
 type AgentResolver interface {
 	PrimaryModel(agentID string) (provider.ModelID, error)
+}
+
+// WorkspaceResolver yields the filesystem path the agent operates against.
+// Returned by ChatHandler when constructing the per-call tool registry.
+// Implementations should mirror AgentResolver's three-tier precedence
+// (per-agent workspace, then agents.defaults.workspace).
+type WorkspaceResolver interface {
+	Workspace(agentID string) (string, error)
 }
 
 // ProviderFactory yields the provider that serves a given provider name on
@@ -38,19 +47,26 @@ var ErrAgentNotFound = errors.New("agent not found")
 var ErrProviderUnavailable = errors.New("provider unavailable")
 
 // ChatStore is the in-memory message history shared across all sessions
-// addressed by a sessionKey. The chat.send handler appends both the user
-// turn and the final assistant turn here. Messages do not persist across
-// gateway restarts in this MVP (talon-2dl will persist if needed).
+// addressed by a sessionKey. The chat.send handler appends user turns,
+// assistant turns (with optional tool_calls), and tool result turns here.
+// Messages do not persist across gateway restarts in this MVP (talon-2dl
+// will persist if needed).
 type ChatStore struct {
 	mu      sync.Mutex
 	history map[string][]ChatMessage
 }
 
-// ChatMessage is a single turn stored in the history.
+// ChatMessage is a single turn stored in the history. Shape depends on Role:
+//
+//   - "user"      → Content
+//   - "assistant" → Content (may be empty if turn was tool-only) + ToolCalls
+//   - "tool"      → Content (tool output) + ToolCallID (originating call)
 type ChatMessage struct {
-	Role    string
-	Content string
-	At      time.Time
+	Role       string
+	Content    string
+	ToolCalls  []provider.ToolCall
+	ToolCallID string
+	At         time.Time
 }
 
 // NewChatStore returns an empty in-memory store.
@@ -58,11 +74,38 @@ func NewChatStore() *ChatStore {
 	return &ChatStore{history: make(map[string][]ChatMessage)}
 }
 
-// Append adds a message to sessionKey's history.
+// Append adds a plain text message to sessionKey's history.
 func (s *ChatStore) Append(sessionKey, role, content string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.history[sessionKey] = append(s.history[sessionKey], ChatMessage{Role: role, Content: content, At: time.Now()})
+}
+
+// AppendAssistantWithCalls records an assistant turn that may carry tool_calls
+// alongside (optional) text content. Used by the multi-turn loop after a
+// stream concludes with one or more DeltaToolCall events.
+func (s *ChatStore) AppendAssistantWithCalls(sessionKey, content string, calls []provider.ToolCall) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.history[sessionKey] = append(s.history[sessionKey], ChatMessage{
+		Role:      "assistant",
+		Content:   content,
+		ToolCalls: calls,
+		At:        time.Now(),
+	})
+}
+
+// AppendToolResult records a tool execution result tied to a prior
+// assistant tool_use. Stored as role=tool with the originating ToolCallID.
+func (s *ChatStore) AppendToolResult(sessionKey, toolCallID, output string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.history[sessionKey] = append(s.history[sessionKey], ChatMessage{
+		Role:       "tool",
+		Content:    output,
+		ToolCallID: toolCallID,
+		At:         time.Now(),
+	})
 }
 
 // Snapshot returns a copy of the stored messages for sessionKey, oldest
@@ -79,35 +122,61 @@ func (s *ChatStore) Snapshot(sessionKey string) []ChatMessage {
 	return out
 }
 
+// ToolRunner executes a tool by name and returns the rendered result.
+// Implementations are expected to be safe for concurrent use across
+// distinct chat runs.
+type ToolRunner interface {
+	Run(ctx context.Context, name string, input json.RawMessage) (string, error)
+	Specs() []provider.ToolSpec
+}
+
 // ChatHandler is the chat.send registry handler. Construct one with
 // NewChatHandler, then register it on the server's Registry.
 type ChatHandler struct {
-	resolver AgentResolver
-	factory  ProviderFactory
-	store    *ChatStore
+	resolver  AgentResolver
+	factory   ProviderFactory
+	workspace WorkspaceResolver
+	tools     func(workspace string) ToolRunner
+	store     *ChatStore
 
 	// runs tracks active runs by "sessionKey|idempotencyKey" so a duplicate
 	// chat.send returns the same runId without spawning a second stream.
 	runsMu sync.Mutex
 	runs   map[string]string
 
-	// streamTimeout caps a single chat.send stream. Default 5 minutes;
-	// override in tests via the StreamTimeout field.
+	// StreamTimeout caps a single chat.send invocation across all
+	// multi-turn iterations. Default 5 minutes; override in tests.
 	StreamTimeout time.Duration
+	// MaxToolIterations bounds the multi-turn loop so a runaway model
+	// can't spin tool calls forever. Default 16; override in tests.
+	MaxToolIterations int
 }
 
 // NewChatHandler constructs a ChatHandler that uses resolver to look up
 // agent models, factory to materialize providers, and store to record
 // history. All three are required; nil values will cause the handler to
-// reject sends with INTERNAL errors.
+// reject sends with INTERNAL errors. WorkspaceResolver and tools are
+// optional — when both are non-nil chat.send advertises tools to the
+// model and runs them in a multi-turn loop. When either is nil, chat.send
+// degrades to text-only single-turn (the previous behavior).
 func NewChatHandler(resolver AgentResolver, factory ProviderFactory, store *ChatStore) *ChatHandler {
 	return &ChatHandler{
-		resolver:      resolver,
-		factory:       factory,
-		store:         store,
-		runs:          make(map[string]string),
-		StreamTimeout: 5 * time.Minute,
+		resolver:          resolver,
+		factory:           factory,
+		store:             store,
+		runs:              make(map[string]string),
+		StreamTimeout:     5 * time.Minute,
+		MaxToolIterations: 16,
 	}
+}
+
+// WithTools enables tool calling by wiring a workspace resolver and a
+// per-workspace ToolRunner factory. Pass nil to either to keep the handler
+// in text-only mode.
+func (h *ChatHandler) WithTools(ws WorkspaceResolver, mk func(workspace string) ToolRunner) *ChatHandler {
+	h.workspace = ws
+	h.tools = mk
+	return h
 }
 
 // Register wires the handler's methods into r. Registers chat.send and
@@ -269,18 +338,17 @@ func (h *ChatHandler) handleSend(ctx context.Context, hc HandlerCtx, params json
 	h.runsMu.Unlock()
 
 	h.store.Append(p.SessionKey, "user", p.Message)
-	history := h.store.Snapshot(p.SessionKey)
-	reqMsgs := make([]provider.Message, 0, len(history))
-	for _, m := range history {
-		reqMsgs = append(reqMsgs, provider.Message{Role: provider.Role(m.Role), Content: m.Content})
-	}
 
-	go h.runStream(hc.Session, runID, p.SessionKey, prov, model, reqMsgs, runKey)
+	go h.runStream(hc.Session, runID, p.SessionKey, agentID, prov, model, runKey)
 
 	return map[string]any{"runId": runID}, nil
 }
 
-func (h *ChatHandler) runStream(sess *Session, runID, sessionKey string, prov provider.Provider, model provider.ModelID, msgs []provider.Message, runKey string) {
+// runStream drives the multi-turn chat loop. Each iteration: build messages
+// from store → stream the provider → handle text + tool calls → if tools
+// were invoked, run them and append results, then re-stream → otherwise
+// emit final and return. Capped at MaxToolIterations to prevent runaway.
+func (h *ChatHandler) runStream(sess *Session, runID, sessionKey, agentID string, prov provider.Provider, model provider.ModelID, runKey string) {
 	defer func() {
 		if runKey != "" {
 			h.runsMu.Lock()
@@ -292,50 +360,124 @@ func (h *ChatHandler) runStream(sess *Session, runID, sessionKey string, prov pr
 	ctx, cancel := context.WithTimeout(context.Background(), h.StreamTimeout)
 	defer cancel()
 
-	deltaCh, err := prov.Stream(ctx, provider.Request{Model: model, Messages: msgs})
-	if err != nil {
-		_ = h.emitError(sess, runID, sessionKey, 1, "provider", err.Error())
-		return
-	}
-
-	var accumulated strings.Builder
-	seq := 0
-	emitFailures := 0
-	for d := range deltaCh {
-		switch d.Kind {
-		case provider.DeltaText:
-			accumulated.WriteString(d.Text)
-			seq++
-			// State name is "delta" — that's what openclaw emits and what
-			// the web UI's handleChatEvent matches on. Anything else is
-			// silently dropped by the UI.
-			if err := h.emitChat(sess, runID, sessionKey, seq, "delta", accumulated.String()); err != nil {
-				emitFailures++
-				if emitFailures >= 3 {
-					// Client is probably gone — stop streaming, but drain
-					// the provider channel so its goroutine exits.
-					cancel()
-					for range deltaCh {
-					}
-					return
-				}
-			}
-		case provider.DeltaError:
-			seq++
-			_ = h.emitError(sess, runID, sessionKey, seq, "provider", d.Err.Error())
-			// Provider closes channel after DeltaError — loop will exit.
-		case provider.DeltaUsage:
-			// MVP: usage is not surfaced over the wire yet. Logged only.
-			// Keep the case to avoid future-warning.
+	// Build a tool runner once per chat.send. nil when tools aren't wired
+	// or the agent has no resolvable workspace; in that case we run in
+	// text-only single-turn mode.
+	var runner ToolRunner
+	if h.workspace != nil && h.tools != nil {
+		ws, err := h.workspace.Workspace(agentID)
+		if err == nil && ws != "" {
+			runner = h.tools(ws)
 		}
 	}
 
-	final := accumulated.String()
-	if final != "" {
-		h.store.Append(sessionKey, "assistant", final)
+	var seq int
+	var accumulated strings.Builder // visible assistant text across iterations
+
+	for iter := 0; iter < h.MaxToolIterations; iter++ {
+		history := h.store.Snapshot(sessionKey)
+		reqMsgs := messagesFromHistory(history)
+		req := provider.Request{Model: model, Messages: reqMsgs}
+		if runner != nil {
+			req.Tools = runner.Specs()
+		}
+
+		deltaCh, err := prov.Stream(ctx, req)
+		if err != nil {
+			seq++
+			_ = h.emitError(sess, runID, sessionKey, seq, "provider", err.Error())
+			return
+		}
+
+		var iterText strings.Builder
+		var toolCalls []provider.ToolCall
+		emitFailures := 0
+
+		for d := range deltaCh {
+			switch d.Kind {
+			case provider.DeltaText:
+				iterText.WriteString(d.Text)
+				accumulated.WriteString(d.Text)
+				seq++
+				if err := h.emitChat(sess, runID, sessionKey, seq, "delta", accumulated.String()); err != nil {
+					emitFailures++
+					if emitFailures >= 3 {
+						cancel()
+						for range deltaCh {
+						}
+						return
+					}
+				}
+			case provider.DeltaToolCall:
+				if d.ToolCall != nil {
+					toolCalls = append(toolCalls, *d.ToolCall)
+				}
+			case provider.DeltaError:
+				seq++
+				_ = h.emitError(sess, runID, sessionKey, seq, "provider", d.Err.Error())
+				return
+			case provider.DeltaUsage:
+				// usage not surfaced over the wire yet.
+			}
+		}
+
+		if len(toolCalls) == 0 {
+			// Terminal turn — assistant produced text and no tool calls.
+			text := iterText.String()
+			if text != "" {
+				h.store.Append(sessionKey, "assistant", text)
+			}
+			seq++
+			_ = h.emitChat(sess, runID, sessionKey, seq, "final", accumulated.String())
+			return
+		}
+
+		// Persist the assistant turn that emitted the tool calls so the
+		// next iteration's history reflects them.
+		h.store.AppendAssistantWithCalls(sessionKey, iterText.String(), toolCalls)
+
+		if runner == nil {
+			// Model wanted tools but we have nowhere to run them. Surface
+			// a clear error rather than looping forever.
+			seq++
+			_ = h.emitError(sess, runID, sessionKey, seq, "tool-runner-unavailable",
+				"model invoked tools but no tool runner is configured for this agent")
+			return
+		}
+
+		// Execute each tool call sequentially. tool failures are captured
+		// as the result string so the model can react in the next turn.
+		for _, tc := range toolCalls {
+			output, err := runner.Run(ctx, tc.Name, json.RawMessage(tc.ArgumentsJSON))
+			if err != nil {
+				output = "ERROR: " + err.Error()
+			}
+			h.store.AppendToolResult(sessionKey, tc.ID, output)
+		}
+		// Loop back to re-stream with updated history.
 	}
+
+	// Iteration cap reached — model kept invoking tools without
+	// converging. Surface as a structured error.
 	seq++
-	_ = h.emitChat(sess, runID, sessionKey, seq, "final", final)
+	_ = h.emitError(sess, runID, sessionKey, seq, "tool-loop-limit",
+		fmt.Sprintf("exceeded %d tool iterations without producing a final reply", h.MaxToolIterations))
+}
+
+// messagesFromHistory translates ChatStore rows into provider.Messages,
+// preserving tool_calls (for assistant turns invoking tools) and
+// ToolCallID (for tool result turns).
+func messagesFromHistory(history []ChatMessage) []provider.Message {
+	out := make([]provider.Message, len(history))
+	for i, m := range history {
+		out[i] = provider.Message{
+			Role:       provider.Role(m.Role),
+			Content:    m.Content,
+			ToolCalls:  m.ToolCalls,
+			ToolCallID: m.ToolCallID,
+		}
+	}
+	return out
 }
 
 // chatEventPayload is the openclaw-shaped chat event payload.

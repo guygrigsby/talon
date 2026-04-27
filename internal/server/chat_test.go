@@ -1,8 +1,12 @@
 package server
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,6 +64,99 @@ func (f *stubFactory) For(providerName, agentID string) (provider.Provider, erro
 		return nil, f.err
 	}
 	return f.provider, nil
+}
+
+// stubWorkspace implements WorkspaceResolver for tests.
+type stubWorkspace struct {
+	dir string
+	err error
+}
+
+func (s *stubWorkspace) Workspace(agentID string) (string, error) {
+	if s.err != nil {
+		return "", s.err
+	}
+	return s.dir, nil
+}
+
+// stubToolRunner implements ToolRunner; records calls + replays canned
+// outputs keyed by tool name.
+type stubToolRunner struct {
+	specs   []provider.ToolSpec
+	outputs map[string]string
+	mu      sync.Mutex
+	calls   []recordedCall
+}
+
+type recordedCall struct {
+	Name  string
+	Input string
+}
+
+func (r *stubToolRunner) Specs() []provider.ToolSpec { return r.specs }
+
+func (r *stubToolRunner) Run(ctx context.Context, name string, input json.RawMessage) (string, error) {
+	r.mu.Lock()
+	r.calls = append(r.calls, recordedCall{Name: name, Input: string(input)})
+	r.mu.Unlock()
+	if out, ok := r.outputs[name]; ok {
+		return out, nil
+	}
+	return "", fmt.Errorf("stubToolRunner: no canned output for %q", name)
+}
+
+func (r *stubToolRunner) Calls() []recordedCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]recordedCall, len(r.calls))
+	copy(out, r.calls)
+	return out
+}
+
+// scriptedProvider is a multi-call stub that emits a different Delta
+// sequence per invocation. Use to model the provider's perspective in a
+// multi-turn loop: first call emits a tool_call, second call emits text,
+// etc.
+type scriptedProvider struct {
+	scripts [][]provider.Delta
+	mu      sync.Mutex
+	idx     int
+	calls   []provider.Request
+}
+
+func (p *scriptedProvider) Name() string { return "scripted" }
+
+func (p *scriptedProvider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Delta, error) {
+	p.mu.Lock()
+	p.calls = append(p.calls, req)
+	if p.idx >= len(p.scripts) {
+		p.mu.Unlock()
+		return nil, fmt.Errorf("scriptedProvider: ran out of scripts after %d calls", p.idx)
+	}
+	script := p.scripts[p.idx]
+	p.idx++
+	p.mu.Unlock()
+
+	ch := make(chan provider.Delta)
+	go func() {
+		defer close(ch)
+		for _, d := range script {
+			select {
+			case <-ctx.Done():
+				return
+			case ch <- d:
+			}
+		}
+	}()
+	return ch, nil
+}
+
+func (p *scriptedProvider) requests() []provider.Request {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]provider.Request, len(p.calls))
+	copy(out, p.calls)
+	return out
 }
 
 func TestChatStore_AppendAndSnapshot(t *testing.T) {
@@ -343,6 +440,221 @@ func TestChatHandler_RegisterAddsBothMethods(t *testing.T) {
 		if !found {
 			t.Errorf("Register did not add %q (got %v)", m, methods)
 		}
+	}
+}
+
+// --- multi-turn loop (talon-mt3) ------------------------------------------
+
+// chatRunWaiter waits for the streaming goroutine to finish by polling
+// h.runs (which the goroutine deletes from on exit). Tests need this
+// because handleSend returns synchronously while runStream continues.
+func waitForRunDone(t *testing.T, h *ChatHandler, runID string, sessionKey string) {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	want := sessionKey + "|" + runID
+	for time.Now().Before(deadline) {
+		h.runsMu.Lock()
+		_, active := h.runs[want]
+		h.runsMu.Unlock()
+		if !active {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("runStream goroutine did not exit within deadline for runId=%q", runID)
+}
+
+func TestChatHandler_MultiTurn_ToolCallExecutionAndReStream(t *testing.T) {
+	store := NewChatStore()
+	scripted := &scriptedProvider{
+		scripts: [][]provider.Delta{
+			// First stream: assistant calls bash("ls /tmp").
+			{
+				{Kind: provider.DeltaToolCall, ToolCall: &provider.ToolCall{
+					ID: "call_1", Name: "bash", ArgumentsJSON: `{"command":"ls /tmp"}`,
+				}},
+			},
+			// Second stream: assistant produces final text.
+			{
+				{Kind: provider.DeltaText, Text: "I ran ls and found "},
+				{Kind: provider.DeltaText, Text: "two files."},
+			},
+		},
+	}
+	runner := &stubToolRunner{
+		specs:   []provider.ToolSpec{{Name: "bash"}},
+		outputs: map[string]string{"bash": "file1\nfile2\n"},
+	}
+	h := NewChatHandler(
+		&stubResolver{models: map[string]provider.ModelID{"main": "scripted/m"}},
+		&stubFactory{provider: scripted},
+		store,
+	).WithTools(&stubWorkspace{dir: "/tmp/ws"}, func(ws string) ToolRunner { return runner })
+
+	body := []byte(`{"sessionKey":"agent:main:main","message":"do it","idempotencyKey":"r1"}`)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	runID := res.(map[string]any)["runId"].(string)
+	waitForRunDone(t, h, runID, "agent:main:main")
+
+	// Provider got two calls.
+	if got := scripted.requests(); len(got) != 2 {
+		t.Fatalf("provider got %d calls, want 2", len(got))
+	}
+	// Tool runner saw exactly one bash call with the model's args.
+	calls := runner.Calls()
+	if len(calls) != 1 || calls[0].Name != "bash" || calls[0].Input != `{"command":"ls /tmp"}` {
+		t.Errorf("tool runner calls = %+v", calls)
+	}
+	// Tool spec was advertised on each provider call.
+	for i, req := range scripted.requests() {
+		if len(req.Tools) != 1 || req.Tools[0].Name != "bash" {
+			t.Errorf("call %d req.Tools = %+v, want [bash]", i, req.Tools)
+		}
+	}
+	// History shape: user, assistant(tool_calls), tool result, assistant(final).
+	hist := store.Snapshot("agent:main:main")
+	if len(hist) != 4 {
+		t.Fatalf("history len = %d, want 4: %+v", len(hist), hist)
+	}
+	if hist[0].Role != "user" || hist[0].Content != "do it" {
+		t.Errorf("hist[0] = %+v", hist[0])
+	}
+	if hist[1].Role != "assistant" || len(hist[1].ToolCalls) != 1 || hist[1].ToolCalls[0].Name != "bash" {
+		t.Errorf("hist[1] (assistant w/ tool_calls) = %+v", hist[1])
+	}
+	if hist[2].Role != "tool" || hist[2].ToolCallID != "call_1" || hist[2].Content != "file1\nfile2\n" {
+		t.Errorf("hist[2] (tool result) = %+v", hist[2])
+	}
+	if hist[3].Role != "assistant" || hist[3].Content != "I ran ls and found two files." {
+		t.Errorf("hist[3] (final) = %+v", hist[3])
+	}
+	// Second provider call's history must include the tool result so the
+	// model can reason about it.
+	secondReqMsgs := scripted.requests()[1].Messages
+	if len(secondReqMsgs) != 3 {
+		t.Fatalf("second call msgs len = %d, want 3 (user, assistant+tool_call, tool)", len(secondReqMsgs))
+	}
+	if secondReqMsgs[1].Role != provider.RoleAssistant || len(secondReqMsgs[1].ToolCalls) != 1 {
+		t.Errorf("second call msgs[1] missing tool_calls: %+v", secondReqMsgs[1])
+	}
+	if secondReqMsgs[2].Role != provider.RoleTool || secondReqMsgs[2].ToolCallID != "call_1" {
+		t.Errorf("second call msgs[2] tool result wrong: %+v", secondReqMsgs[2])
+	}
+}
+
+func TestChatHandler_MultiTurn_IterationCapEmitsErrorState(t *testing.T) {
+	// Build a script that always emits a tool call, never converges.
+	loopScript := []provider.Delta{
+		{Kind: provider.DeltaToolCall, ToolCall: &provider.ToolCall{
+			ID: "spin", Name: "noop", ArgumentsJSON: `{}`,
+		}},
+	}
+	// 5 identical scripts so the handler can run 5 iterations before
+	// hitting the cap (which we set to 4).
+	scripts := make([][]provider.Delta, 5)
+	for i := range scripts {
+		scripts[i] = loopScript
+	}
+	scripted := &scriptedProvider{scripts: scripts}
+	runner := &stubToolRunner{
+		specs:   []provider.ToolSpec{{Name: "noop"}},
+		outputs: map[string]string{"noop": "ok"},
+	}
+	h := NewChatHandler(
+		&stubResolver{models: map[string]provider.ModelID{"main": "scripted/m"}},
+		&stubFactory{provider: scripted},
+		NewChatStore(),
+	).WithTools(&stubWorkspace{dir: "/tmp/ws"}, func(ws string) ToolRunner { return runner })
+	h.MaxToolIterations = 4
+
+	body := []byte(`{"sessionKey":"agent:main:main","message":"loop","idempotencyKey":"r2"}`)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	runID := res.(map[string]any)["runId"].(string)
+	waitForRunDone(t, h, runID, "agent:main:main")
+
+	// Provider should have been called exactly MaxToolIterations times.
+	if got := scripted.requests(); len(got) != 4 {
+		t.Errorf("provider got %d calls, want 4 (cap)", len(got))
+	}
+	// Tool runner ran for each iteration.
+	if got := runner.Calls(); len(got) != 4 {
+		t.Errorf("tool runner ran %d times, want 4", len(got))
+	}
+}
+
+func TestChatHandler_MultiTurn_ToolRunnerUnavailableEmitsError(t *testing.T) {
+	scripted := &scriptedProvider{
+		scripts: [][]provider.Delta{
+			{
+				{Kind: provider.DeltaToolCall, ToolCall: &provider.ToolCall{
+					ID: "call_x", Name: "bash", ArgumentsJSON: `{}`,
+				}},
+			},
+		},
+	}
+	// No WithTools call — runner is nil.
+	h := NewChatHandler(
+		&stubResolver{models: map[string]provider.ModelID{"main": "scripted/m"}},
+		&stubFactory{provider: scripted},
+		NewChatStore(),
+	)
+
+	body := []byte(`{"sessionKey":"agent:main:main","message":"hi","idempotencyKey":"r3"}`)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	runID := res.(map[string]any)["runId"].(string)
+	waitForRunDone(t, h, runID, "agent:main:main")
+
+	// Provider was called once; no second iteration since the model's
+	// tool call couldn't be honored.
+	if got := scripted.requests(); len(got) != 1 {
+		t.Errorf("provider got %d calls, want 1 (tool-runner-unavailable terminates)", len(got))
+	}
+}
+
+func TestChatHandler_TextOnlyChatStillWorksWithoutTools(t *testing.T) {
+	// Regression: chat.send without WithTools should behave exactly as
+	// before — single stream, text only, no tools advertised.
+	scripted := &scriptedProvider{
+		scripts: [][]provider.Delta{
+			{
+				{Kind: provider.DeltaText, Text: "hello"},
+			},
+		},
+	}
+	store := NewChatStore()
+	h := NewChatHandler(
+		&stubResolver{models: map[string]provider.ModelID{"main": "scripted/m"}},
+		&stubFactory{provider: scripted},
+		store,
+	)
+
+	body := []byte(`{"sessionKey":"agent:main:main","message":"hi","idempotencyKey":"r4"}`)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	runID := res.(map[string]any)["runId"].(string)
+	waitForRunDone(t, h, runID, "agent:main:main")
+
+	if got := scripted.requests(); len(got) != 1 {
+		t.Errorf("provider got %d calls, want 1", len(got))
+	}
+	// No tools advertised.
+	if got := scripted.requests()[0].Tools; len(got) != 0 {
+		t.Errorf("text-only mode should not advertise tools, got %+v", got)
+	}
+	hist := store.Snapshot("agent:main:main")
+	if len(hist) != 2 || hist[1].Role != "assistant" || hist[1].Content != "hello" {
+		t.Errorf("history wrong: %+v", hist)
 	}
 }
 

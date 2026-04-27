@@ -31,6 +31,12 @@ type Config struct {
 	// merged config (agents.list, models.list, config.schema). Leaving
 	// it as the zero value disables those handlers.
 	Paths openclaw.Paths
+	// WorkspaceResolver, paired with ToolRunnerFor, enables tool calling
+	// in chat.send. Leaving either nil keeps chat in text-only mode.
+	WorkspaceResolver WorkspaceResolver
+	// ToolRunnerFor returns a per-agent ToolRunner given a workspace
+	// directory. Called once per chat.send.
+	ToolRunnerFor func(workspace string) ToolRunner
 }
 
 type Server struct {
@@ -43,7 +49,11 @@ type Server struct {
 func New(cfg Config) *Server {
 	s := &Server{cfg: cfg, mux: http.NewServeMux(), registry: NewRegistry(), startedAt: time.Now()}
 	if cfg.AgentResolver != nil && cfg.ProviderFactory != nil {
-		NewChatHandler(cfg.AgentResolver, cfg.ProviderFactory, NewChatStore()).Register(s.registry)
+		ch := NewChatHandler(cfg.AgentResolver, cfg.ProviderFactory, NewChatStore())
+		if cfg.WorkspaceResolver != nil && cfg.ToolRunnerFor != nil {
+			ch = ch.WithTools(cfg.WorkspaceResolver, cfg.ToolRunnerFor)
+		}
+		ch.Register(s.registry)
 	}
 	if cfg.Paths.Talon.Dir != "" {
 		NewReadHandler(cfg.Paths).Register(s.registry)
