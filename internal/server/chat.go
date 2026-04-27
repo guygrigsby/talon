@@ -60,12 +60,16 @@ type ChatStore struct {
 //
 //   - "user"      → Content
 //   - "assistant" → Content (may be empty if turn was tool-only) + ToolCalls
-//   - "tool"      → Content (tool output) + ToolCallID (originating call)
+//   - "tool"      → Content (tool output) + ToolCallID + ToolName
+//                   (ToolName is denormalized from the originating ToolCall
+//                   so chat.history rows can label the result without
+//                   re-walking the assistant turn that issued the call.)
 type ChatMessage struct {
 	Role       string
 	Content    string
 	ToolCalls  []provider.ToolCall
 	ToolCallID string
+	ToolName   string
 	At         time.Time
 }
 
@@ -96,14 +100,17 @@ func (s *ChatStore) AppendAssistantWithCalls(sessionKey, content string, calls [
 }
 
 // AppendToolResult records a tool execution result tied to a prior
-// assistant tool_use. Stored as role=tool with the originating ToolCallID.
-func (s *ChatStore) AppendToolResult(sessionKey, toolCallID, output string) {
+// assistant tool_use. Stored as role=tool with the originating ToolCallID
+// and ToolName (denormalized from the assistant turn so chat.history
+// readers don't have to walk back to find the name).
+func (s *ChatStore) AppendToolResult(sessionKey, toolCallID, toolName, output string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.history[sessionKey] = append(s.history[sessionKey], ChatMessage{
 		Role:       "tool",
 		Content:    output,
 		ToolCallID: toolCallID,
+		ToolName:   toolName,
 		At:         time.Now(),
 	})
 }
@@ -192,19 +199,27 @@ type chatHistoryParams struct {
 	Limit      int    `json:"limit"`
 }
 
-// historyMessage is the per-message envelope chat.history emits. Mirrors the
-// fields openclaw's web UI consumes; openclaw decorates each row with
-// __openclaw.id (a stable React key) and __openclaw.seq.
-type historyMessage struct {
-	Openclaw  openclawMeta           `json:"__openclaw"`
-	Role      string                 `json:"role"`
-	Content   []chatEventContentPart `json:"content"`
-	Timestamp int64                  `json:"timestamp"`
-}
-
+// openclawMeta is the per-row envelope decoration the openclaw web UI uses
+// for stable React keys.
 type openclawMeta struct {
 	ID  string `json:"id"`
 	Seq int    `json:"seq"`
+}
+
+// historyContentPart is a content block in chat.history rows. Two flavors:
+//
+//   - {type: "text", text: "..."}                         visible reply text
+//   - {type: "tool_use", id, name, input: <decoded JSON>} assistant invoking a tool
+//
+// Tool result rows use a flat content shape ({type:"text", text:<output>})
+// because openclaw's UI labels them via row-level toolName/toolCallId
+// fields rather than nested blocks.
+type historyContentPart struct {
+	Type  string `json:"type"`
+	Text  string `json:"text,omitempty"`
+	ID    string `json:"id,omitempty"`
+	Name  string `json:"name,omitempty"`
+	Input any    `json:"input,omitempty"`
 }
 
 func (h *ChatHandler) handleHistory(ctx context.Context, hc HandlerCtx, params json.RawMessage) (any, *FrameError) {
@@ -227,16 +242,65 @@ func (h *ChatHandler) handleHistory(ctx context.Context, hc HandlerCtx, params j
 		msgs = msgs[len(msgs)-p.Limit:]
 	}
 
-	out := make([]historyMessage, len(msgs))
+	out := make([]map[string]any, len(msgs))
 	for i, m := range msgs {
-		out[i] = historyMessage{
-			Openclaw:  openclawMeta{ID: messageID(p.SessionKey, i), Seq: i + 1},
-			Role:      m.Role,
-			Content:   []chatEventContentPart{{Type: "text", Text: m.Content}},
-			Timestamp: m.At.UnixMilli(),
-		}
+		out[i] = renderHistoryRow(p.SessionKey, i, m)
 	}
 	return map[string]any{"messages": out}, nil
+}
+
+// renderHistoryRow translates one ChatMessage into the openclaw-shaped
+// row the web UI consumes. Three role variants matter:
+//
+//   - "user":      flat {role:"user", content:[{type:"text",text}]}
+//   - "assistant": content array carries any visible text plus tool_use
+//                  blocks (one per ToolCall). Empty text is omitted so a
+//                  pure tool-call turn doesn't render a blank bubble.
+//   - "tool":      role re-labeled to "toolResult" — that's what
+//                  openclaw's chat-message renderer matches on. Includes
+//                  toolCallId + toolName at the row level so the UI can
+//                  label the card with the actual tool name (e.g. "glob")
+//                  instead of falling back to a generic "tool" sublabel.
+func renderHistoryRow(sessionKey string, i int, m ChatMessage) map[string]any {
+	row := map[string]any{
+		"__openclaw": openclawMeta{ID: messageID(sessionKey, i), Seq: i + 1},
+		"timestamp":  m.At.UnixMilli(),
+	}
+	switch m.Role {
+	case "tool":
+		row["role"] = "toolResult"
+		row["toolCallId"] = m.ToolCallID
+		if m.ToolName != "" {
+			row["toolName"] = m.ToolName
+		}
+		row["isError"] = false
+		row["content"] = []historyContentPart{{Type: "text", Text: m.Content}}
+	case "assistant":
+		row["role"] = "assistant"
+		blocks := make([]historyContentPart, 0, 1+len(m.ToolCalls))
+		if m.Content != "" {
+			blocks = append(blocks, historyContentPart{Type: "text", Text: m.Content})
+		}
+		for _, tc := range m.ToolCalls {
+			var input any
+			if tc.ArgumentsJSON != "" {
+				if err := json.Unmarshal([]byte(tc.ArgumentsJSON), &input); err != nil {
+					input = tc.ArgumentsJSON
+				}
+			}
+			blocks = append(blocks, historyContentPart{
+				Type:  "tool_use",
+				ID:    tc.ID,
+				Name:  tc.Name,
+				Input: input,
+			})
+		}
+		row["content"] = blocks
+	default: // user, system, anything else
+		row["role"] = m.Role
+		row["content"] = []historyContentPart{{Type: "text", Text: m.Content}}
+	}
+	return row
 }
 
 // messageID returns a deterministic, sessionKey-scoped id for the i'th
@@ -456,7 +520,7 @@ func (h *ChatHandler) runStream(sess *Session, runID, sessionKey, agentID string
 				output = "ERROR: " + err.Error()
 			}
 			h.emitAgentToolResult(sess, runID, sessionKey, tc.ID, tc.Name, output)
-			h.store.AppendToolResult(sessionKey, tc.ID, output)
+			h.store.AppendToolResult(sessionKey, tc.ID, tc.Name, output)
 		}
 		// Loop back to re-stream with updated history.
 	}

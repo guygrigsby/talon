@@ -336,37 +336,47 @@ func TestChatHandler_HistoryReturnsStoredMessages(t *testing.T) {
 		t.Fatalf("handleHistory: %+v", ferr)
 	}
 	envelope := res.(map[string]any)
-	msgs := envelope["messages"].([]historyMessage)
+	msgs := envelope["messages"].([]map[string]any)
 	if len(msgs) != 3 {
 		t.Fatalf("messages len = %d, want 3", len(msgs))
 	}
-	if msgs[0].Role != "user" || msgs[0].Content[0].Text != "hello" {
+	textOf := func(m map[string]any) string {
+		blocks := m["content"].([]historyContentPart)
+		if len(blocks) == 0 {
+			return ""
+		}
+		return blocks[0].Text
+	}
+	if msgs[0]["role"] != "user" || textOf(msgs[0]) != "hello" {
 		t.Errorf("first message = %+v", msgs[0])
 	}
-	if msgs[1].Role != "assistant" || msgs[1].Content[0].Text != "hi there" {
+	if msgs[1]["role"] != "assistant" || textOf(msgs[1]) != "hi there" {
 		t.Errorf("second message = %+v", msgs[1])
 	}
-	if msgs[2].Role != "user" || msgs[2].Content[0].Text != "second" {
+	if msgs[2]["role"] != "user" || textOf(msgs[2]) != "second" {
 		t.Errorf("third message = %+v", msgs[2])
 	}
 	// __openclaw metadata must be unique within the session and stable
 	// across reads (we'll re-call below to confirm).
 	seen := map[string]bool{}
 	for _, m := range msgs {
-		if m.Openclaw.ID == "" || seen[m.Openclaw.ID] {
-			t.Errorf("ids should be non-empty and unique: %+v", m.Openclaw)
+		oc := m["__openclaw"].(openclawMeta)
+		if oc.ID == "" || seen[oc.ID] {
+			t.Errorf("ids should be non-empty and unique: %+v", oc)
 		}
-		seen[m.Openclaw.ID] = true
-		if m.Openclaw.Seq < 1 {
-			t.Errorf("seq must be >= 1: %+v", m.Openclaw)
+		seen[oc.ID] = true
+		if oc.Seq < 1 {
+			t.Errorf("seq must be >= 1: %+v", oc)
 		}
 	}
 	// Stability: same input → same ids.
 	res2, _ := h.handleHistory(t.Context(), HandlerCtx{Session: nil}, []byte(`{"sessionKey":"agent:main:main","limit":50}`))
-	msgs2 := res2.(map[string]any)["messages"].([]historyMessage)
+	msgs2 := res2.(map[string]any)["messages"].([]map[string]any)
 	for i := range msgs {
-		if msgs[i].Openclaw.ID != msgs2[i].Openclaw.ID {
-			t.Errorf("id %d not stable: %s vs %s", i, msgs[i].Openclaw.ID, msgs2[i].Openclaw.ID)
+		o1 := msgs[i]["__openclaw"].(openclawMeta)
+		o2 := msgs2[i]["__openclaw"].(openclawMeta)
+		if o1.ID != o2.ID {
+			t.Errorf("id %d not stable: %s vs %s", i, o1.ID, o2.ID)
 		}
 	}
 }
@@ -385,15 +395,9 @@ func TestChatHandler_HistoryLimit(t *testing.T) {
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
-	msgs := res.(map[string]any)["messages"].([]historyMessage)
+	msgs := res.(map[string]any)["messages"].([]map[string]any)
 	if len(msgs) != 3 {
 		t.Errorf("limit=3 returned %d messages", len(msgs))
-	}
-	// Should be the *last* 3, not the first.
-	if msgs[0].Openclaw.Seq != 1 || msgs[2].Openclaw.Seq != 3 {
-		// seq is renumbered from 1 within the truncated slice — we just
-		// want to confirm the limit applied to the tail. The strongest
-		// assertion is "got 3", which we already verified.
 	}
 }
 
@@ -407,9 +411,109 @@ func TestChatHandler_HistoryUnknownSessionReturnsEmpty(t *testing.T) {
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
-	msgs := res.(map[string]any)["messages"].([]historyMessage)
+	msgs := res.(map[string]any)["messages"].([]map[string]any)
 	if len(msgs) != 0 {
 		t.Errorf("unknown session should return empty, got %d", len(msgs))
+	}
+}
+
+// --- chat.history tool-aware row shapes (talon-o6y) -----------------------
+
+func TestHistory_AssistantWithToolCallsEmitsToolUseBlocks(t *testing.T) {
+	store := NewChatStore()
+	store.Append("k", "user", "do thing")
+	store.AppendAssistantWithCalls("k", "let me try", []provider.ToolCall{
+		{ID: "call_a", Name: "glob", ArgumentsJSON: `{"pattern":"*.go"}`},
+	})
+	store.AppendToolResult("k", "call_a", "glob", "main.go\n")
+
+	h := NewChatHandler(&stubResolver{}, &stubFactory{}, store)
+	res, ferr := h.handleHistory(t.Context(), HandlerCtx{}, []byte(`{"sessionKey":"k","limit":50}`))
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	msgs := res.(map[string]any)["messages"].([]map[string]any)
+	if len(msgs) != 3 {
+		t.Fatalf("got %d msgs, want 3", len(msgs))
+	}
+
+	// Assistant turn: text block + tool_use block.
+	asst := msgs[1]
+	if asst["role"] != "assistant" {
+		t.Errorf("msgs[1].role = %v", asst["role"])
+	}
+	blocks := asst["content"].([]historyContentPart)
+	if len(blocks) != 2 {
+		t.Fatalf("assistant content len = %d, want 2 (text + tool_use): %+v", len(blocks), blocks)
+	}
+	if blocks[0].Type != "text" || blocks[0].Text != "let me try" {
+		t.Errorf("blocks[0] = %+v, want text 'let me try'", blocks[0])
+	}
+	if blocks[1].Type != "tool_use" || blocks[1].ID != "call_a" || blocks[1].Name != "glob" {
+		t.Errorf("blocks[1] = %+v, want tool_use{call_a,glob}", blocks[1])
+	}
+	input, ok := blocks[1].Input.(map[string]any)
+	if !ok || input["pattern"] != "*.go" {
+		t.Errorf("blocks[1].input = %+v, want parsed object {pattern:*.go}", blocks[1].Input)
+	}
+}
+
+func TestHistory_ToolResultIsRoleToolResultWithLabels(t *testing.T) {
+	store := NewChatStore()
+	store.Append("k", "user", "u")
+	store.AppendAssistantWithCalls("k", "", []provider.ToolCall{
+		{ID: "call_b", Name: "bash", ArgumentsJSON: `{"command":"ls"}`},
+	})
+	store.AppendToolResult("k", "call_b", "bash", "file1\nfile2\n")
+
+	h := NewChatHandler(&stubResolver{}, &stubFactory{}, store)
+	res, _ := h.handleHistory(t.Context(), HandlerCtx{}, []byte(`{"sessionKey":"k","limit":50}`))
+	msgs := res.(map[string]any)["messages"].([]map[string]any)
+
+	tr := msgs[2]
+	if tr["role"] != "toolResult" {
+		t.Errorf("tool row role = %v, want toolResult (UI matches on this)", tr["role"])
+	}
+	if tr["toolCallId"] != "call_b" {
+		t.Errorf("toolCallId = %v", tr["toolCallId"])
+	}
+	if tr["toolName"] != "bash" {
+		t.Errorf("toolName = %v, want bash (this is what makes the card label correctly)", tr["toolName"])
+	}
+	if tr["isError"] != false {
+		t.Errorf("isError should default to false: %v", tr["isError"])
+	}
+	blocks := tr["content"].([]historyContentPart)
+	if len(blocks) != 1 || blocks[0].Type != "text" || blocks[0].Text != "file1\nfile2\n" {
+		t.Errorf("content = %+v", blocks)
+	}
+}
+
+func TestHistory_AssistantPureToolCallOmitsBlankTextBlock(t *testing.T) {
+	store := NewChatStore()
+	store.AppendAssistantWithCalls("k", "", []provider.ToolCall{
+		{ID: "c", Name: "read", ArgumentsJSON: `{"path":"a"}`},
+	})
+	h := NewChatHandler(&stubResolver{}, &stubFactory{}, store)
+	res, _ := h.handleHistory(t.Context(), HandlerCtx{}, []byte(`{"sessionKey":"k","limit":50}`))
+	msgs := res.(map[string]any)["messages"].([]map[string]any)
+	blocks := msgs[0]["content"].([]historyContentPart)
+	if len(blocks) != 1 || blocks[0].Type != "tool_use" {
+		t.Errorf("expected single tool_use block when assistant text is empty, got %+v", blocks)
+	}
+}
+
+func TestHistory_AssistantToolUseInputFallsBackToRawString(t *testing.T) {
+	store := NewChatStore()
+	store.AppendAssistantWithCalls("k", "", []provider.ToolCall{
+		{ID: "c", Name: "x", ArgumentsJSON: `not-json`},
+	})
+	h := NewChatHandler(&stubResolver{}, &stubFactory{}, store)
+	res, _ := h.handleHistory(t.Context(), HandlerCtx{}, []byte(`{"sessionKey":"k","limit":50}`))
+	msgs := res.(map[string]any)["messages"].([]map[string]any)
+	blocks := msgs[0]["content"].([]historyContentPart)
+	if blocks[0].Input != "not-json" {
+		t.Errorf("malformed JSON input should fall back to raw: %+v", blocks[0].Input)
 	}
 }
 
