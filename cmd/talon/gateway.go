@@ -137,6 +137,17 @@ func gatewayRunCmd() *cobra.Command {
 				Paths:           paths,
 			})
 			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai, reads=enabled)", addr, authMode)
+			// Forgettable-URL mitigation: print the deep-link the openclaw
+			// web UI needs after a fresh page load (cache cleared, new
+			// browser, etc). Token is included only when --auth=token; the
+			// fragment form keeps it out of HTTP request logs.
+			gwHost := "localhost"
+			if host == "0.0.0.0" {
+				gwHost = "localhost" // 0.0.0.0 isn't dialable; show loopback
+			}
+			ui := buildUIURL(defaultUIHost, gwHost, port, token, "main", "/chat")
+			log.Printf("UI:  %s", ui)
+			log.Printf("     (override host with: talon ui url --ui-host=...)")
 			return srv.Run(ctx)
 		},
 	}

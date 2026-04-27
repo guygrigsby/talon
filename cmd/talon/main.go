@@ -56,6 +56,7 @@ func main() {
 	root.AddCommand(chatCmd())
 	root.AddCommand(chatHistoryCmd())
 	root.AddCommand(statusCmd())
+	root.AddCommand(uiCmd())
 
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "talon:", err)
