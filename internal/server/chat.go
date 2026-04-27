@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/guygrigsby/talon/internal/agentcontext"
 	"github.com/guygrigsby/talon/internal/provider"
 )
 
@@ -424,16 +425,20 @@ func (h *ChatHandler) runStream(sess *Session, runID, sessionKey, agentID string
 	ctx, cancel := context.WithTimeout(context.Background(), h.StreamTimeout)
 	defer cancel()
 
-	// Build a tool runner once per chat.send. nil when tools aren't wired
-	// or the agent has no resolvable workspace; in that case we run in
-	// text-only single-turn mode.
-	var runner ToolRunner
-	if h.workspace != nil && h.tools != nil {
-		ws, err := h.workspace.Workspace(agentID)
-		if err == nil && ws != "" {
-			runner = h.tools(ws)
+	// Resolve the agent's workspace once per chat.send. Used for two
+	// purposes: tool execution (when a runner is configured) and system-
+	// prompt composition from the workspace's context markdown files.
+	var workspace string
+	if h.workspace != nil {
+		if ws, err := h.workspace.Workspace(agentID); err == nil {
+			workspace = ws
 		}
 	}
+	var runner ToolRunner
+	if workspace != "" && h.tools != nil {
+		runner = h.tools(workspace)
+	}
+	systemPrompt := agentcontext.Build(workspace)
 
 	var seq int
 	var accumulated strings.Builder // visible assistant text across iterations
@@ -441,7 +446,7 @@ func (h *ChatHandler) runStream(sess *Session, runID, sessionKey, agentID string
 	for iter := 0; iter < h.MaxToolIterations; iter++ {
 		history := h.store.Snapshot(sessionKey)
 		reqMsgs := messagesFromHistory(history)
-		req := provider.Request{Model: model, Messages: reqMsgs}
+		req := provider.Request{Model: model, Messages: reqMsgs, System: systemPrompt}
 		if runner != nil {
 			req.Tools = runner.Specs()
 		}

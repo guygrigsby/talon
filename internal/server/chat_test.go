@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -721,6 +723,50 @@ func TestChatHandler_MultiTurn_ToolRunnerUnavailableEmitsError(t *testing.T) {
 	// tool call couldn't be honored.
 	if got := scripted.requests(); len(got) != 1 {
 		t.Errorf("provider got %d calls, want 1 (tool-runner-unavailable terminates)", len(got))
+	}
+}
+
+func TestChatHandler_AgentContextFilesPopulateSystemPrompt(t *testing.T) {
+	// The workspace returned by the resolver carries IDENTITY.md / USER.md
+	// — those should compose into Request.System on every provider call.
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "IDENTITY.md"), []byte("- **Name:** Clawdia\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "USER.md"), []byte("- **Name:** Guy\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	scripted := &scriptedProvider{
+		scripts: [][]provider.Delta{
+			{{Kind: provider.DeltaText, Text: "ok"}},
+		},
+	}
+	h := NewChatHandler(
+		&stubResolver{models: map[string]provider.ModelID{"main": "scripted/m"}},
+		&stubFactory{provider: scripted},
+		NewChatStore(),
+	).WithTools(&stubWorkspace{dir: dir}, func(ws string) ToolRunner {
+		return &stubToolRunner{specs: nil, outputs: map[string]string{}}
+	})
+
+	body := []byte(`{"sessionKey":"agent:main:main","message":"hi","idempotencyKey":"r-ctx"}`)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	runID := res.(map[string]any)["runId"].(string)
+	waitForRunDone(t, h, runID, "agent:main:main")
+
+	calls := scripted.requests()
+	if len(calls) != 1 {
+		t.Fatalf("got %d provider calls, want 1", len(calls))
+	}
+	if !strings.Contains(calls[0].System, "## IDENTITY.md") {
+		t.Errorf("Request.System missing IDENTITY.md section:\n%s", calls[0].System)
+	}
+	if !strings.Contains(calls[0].System, "Clawdia") || !strings.Contains(calls[0].System, "Guy") {
+		t.Errorf("Request.System missing identity/user content:\n%s", calls[0].System)
 	}
 }
 
