@@ -15,6 +15,15 @@ import (
 // configAgentResolver implements server.AgentResolver by reading talon's
 // merged config on each call. Cheap enough that we don't cache: the merged
 // view is parsed in-memory from already-cached overlay bytes.
+//
+// Model resolution mirrors openclaw's precedence:
+//
+//  1. per-agent agents.list[id==X].model.primary (object form)
+//  2. per-agent agents.list[id==X].model         (string shorthand)
+//  3. agents.defaults.model.primary              (global default)
+//
+// First non-empty hit wins. If the agent isn't in agents.list at all,
+// returns ErrAgentNotFound.
 type configAgentResolver struct {
 	paths openclaw.Paths
 }
@@ -24,12 +33,22 @@ func (r *configAgentResolver) PrimaryModel(agentID string) (provider.ModelID, er
 	if err != nil {
 		return "", fmt.Errorf("read merged config: %w", err)
 	}
-	q := fmt.Sprintf(`agents.list.#(id==%q).model.primary`, agentID)
-	v := gjson.GetBytes(merged, q)
-	if !v.Exists() || v.Str == "" {
+	agent := gjson.GetBytes(merged, fmt.Sprintf(`agents.list.#(id==%q)`, agentID))
+	if !agent.Exists() {
 		return "", fmt.Errorf("%w: %q", server.ErrAgentNotFound, agentID)
 	}
-	return provider.ModelID(v.Str), nil
+	// Per-agent model: object form first, then string shorthand.
+	if v := agent.Get("model.primary"); v.Exists() && v.Str != "" {
+		return provider.ModelID(v.Str), nil
+	}
+	if v := agent.Get("model"); v.Exists() && v.Type == gjson.String && v.Str != "" {
+		return provider.ModelID(v.Str), nil
+	}
+	// Global default.
+	if v := gjson.GetBytes(merged, "agents.defaults.model.primary"); v.Exists() && v.Str != "" {
+		return provider.ModelID(v.Str), nil
+	}
+	return "", fmt.Errorf("agent %q has no resolvable model (no per-agent model and no agents.defaults.model.primary)", agentID)
 }
 
 // agentProviderFactory implements server.ProviderFactory. For each request
