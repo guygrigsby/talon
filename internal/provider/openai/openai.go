@@ -102,13 +102,16 @@ func (p *Provider) Stream(ctx context.Context, req provider.Request) (<-chan pro
 
 // pumpSSE reads OpenAI SSE chunks off body, translates each to a Delta, and
 // fans them out to ch until [DONE] or EOF. Always closes ch and body.
+//
+// Tool calls arrive as multi-chunk fragments keyed by an index inside
+// delta.tool_calls[]. We buffer them in toolCallsByIndex and emit one
+// provider.ToolCall (DeltaToolCall) per index when the stream finalizes —
+// either when finish_reason becomes "tool_calls" or at end-of-stream.
 func (p *Provider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<- provider.Delta) {
 	defer close(ch)
 	defer body.Close()
 
 	scanner := bufio.NewScanner(body)
-	// SSE chunks can be larger than the default 64K when prompts are long;
-	// cap at 1 MiB per line.
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
 	send := func(d provider.Delta) bool {
@@ -120,42 +123,96 @@ func (p *Provider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<- pr
 		}
 	}
 
+	type accCall struct {
+		id   string
+		name string
+		args strings.Builder
+	}
+	tools := map[int]*accCall{}
+	flushTools := func() bool {
+		if len(tools) == 0 {
+			return true
+		}
+		// Emit in index order so multi-tool turns are reproducible.
+		idxs := make([]int, 0, len(tools))
+		for i := range tools {
+			idxs = append(idxs, i)
+		}
+		sortInts(idxs)
+		for _, i := range idxs {
+			c := tools[i]
+			if c.id == "" && c.name == "" && c.args.Len() == 0 {
+				continue
+			}
+			if !send(provider.Delta{
+				Kind: provider.DeltaToolCall,
+				ToolCall: &provider.ToolCall{
+					ID:            c.id,
+					Name:          c.name,
+					ArgumentsJSON: c.args.String(),
+				},
+			}) {
+				return false
+			}
+		}
+		tools = map[int]*accCall{}
+		return true
+	}
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		if line == "" {
 			continue
 		}
-		// SSE comments start with ":" — ignore.
 		if strings.HasPrefix(line, ":") {
 			continue
 		}
-		// Event-type lines ("event: ...") are not used by chat completions.
-		// Only "data: ..." carries payloads.
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
 		if payload == "[DONE]" {
+			flushTools()
 			return
 		}
 		var chunk streamChunk
 		if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
-			// Treat as a soft fault — send error and stop. OpenAI emits
-			// the occasional keepalive comment, but a malformed JSON
-			// 'data:' is genuinely broken.
 			_ = send(provider.Delta{Kind: provider.DeltaError, Err: fmt.Errorf("openai: parse SSE chunk: %w", err)})
 			return
 		}
-		// Most chunks: one choice with a delta.content fragment.
 		for _, c := range chunk.Choices {
+			// Text fragment.
 			if c.Delta.Content != "" {
 				if !send(provider.Delta{Kind: provider.DeltaText, Text: c.Delta.Content}) {
 					return
 				}
 			}
+			// Tool call fragments — accumulate per-index.
+			for _, tcf := range c.Delta.ToolCalls {
+				acc, ok := tools[tcf.Index]
+				if !ok {
+					acc = &accCall{}
+					tools[tcf.Index] = acc
+				}
+				if tcf.ID != "" {
+					acc.id = tcf.ID
+				}
+				if tcf.Function.Name != "" {
+					acc.name = tcf.Function.Name
+				}
+				if tcf.Function.Arguments != "" {
+					acc.args.WriteString(tcf.Function.Arguments)
+				}
+			}
+			// finish_reason="tool_calls" closes the model's turn — flush
+			// accumulated calls now so downstream can run them in
+			// parallel with usage processing.
+			if c.FinishReason == "tool_calls" {
+				if !flushTools() {
+					return
+				}
+			}
 		}
-		// The last chunk in the stream carries final usage when
-		// stream_options.include_usage is true.
 		if chunk.Usage != nil {
 			if !send(provider.Delta{
 				Kind: provider.DeltaUsage,
@@ -168,22 +225,55 @@ func (p *Provider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<- pr
 			}
 		}
 	}
+	// Stream ended without a [DONE] sentinel — flush any pending tools.
+	flushTools()
 	if err := scanner.Err(); err != nil && ctx.Err() == nil {
 		_ = send(provider.Delta{Kind: provider.DeltaError, Err: fmt.Errorf("openai: read SSE: %w", err)})
+	}
+}
+
+func sortInts(s []int) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
 	}
 }
 
 // buildRequestBody marshals an OpenAI chat-completions request from a
 // provider.Request. System prompts come in as a separate field on Request;
 // here we prepend a synthetic system message because that's the OpenAI API
-// shape.
+// shape. Tool turns translate as follows:
+//
+//   - Role=Assistant with ToolCalls → emits {role:"assistant",
+//     tool_calls:[{id,function:{name,arguments}}]}.
+//   - Role=Tool → emits {role:"tool", tool_call_id, content}.
 func buildRequestBody(model string, req provider.Request) ([]byte, error) {
+	type oaiToolCall struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	}
 	type oaiMessage struct {
-		Role    string `json:"role"`
-		Content string `json:"content"`
+		Role       string        `json:"role"`
+		Content    string        `json:"content,omitempty"`
+		ToolCalls  []oaiToolCall `json:"tool_calls,omitempty"`
+		ToolCallID string        `json:"tool_call_id,omitempty"`
 	}
 	type streamOptions struct {
 		IncludeUsage bool `json:"include_usage"`
+	}
+	type oaiToolFunction struct {
+		Name        string          `json:"name"`
+		Description string          `json:"description,omitempty"`
+		Parameters  json.RawMessage `json:"parameters,omitempty"`
+	}
+	type oaiTool struct {
+		Type     string          `json:"type"`
+		Function oaiToolFunction `json:"function"`
 	}
 	type oaiRequest struct {
 		Model         string         `json:"model"`
@@ -192,6 +282,7 @@ func buildRequestBody(model string, req provider.Request) ([]byte, error) {
 		StreamOptions *streamOptions `json:"stream_options,omitempty"`
 		Temperature   *float64       `json:"temperature,omitempty"`
 		MaxTokens     int            `json:"max_tokens,omitempty"`
+		Tools         []oaiTool      `json:"tools,omitempty"`
 	}
 	msgs := make([]oaiMessage, 0, len(req.Messages)+1)
 	if req.System != "" {
@@ -202,7 +293,17 @@ func buildRequestBody(model string, req provider.Request) ([]byte, error) {
 		if role == "" {
 			role = "user"
 		}
-		msgs = append(msgs, oaiMessage{Role: role, Content: m.Content})
+		om := oaiMessage{Role: role, Content: m.Content, ToolCallID: m.ToolCallID}
+		if len(m.ToolCalls) > 0 {
+			om.ToolCalls = make([]oaiToolCall, len(m.ToolCalls))
+			for i, tc := range m.ToolCalls {
+				om.ToolCalls[i].ID = tc.ID
+				om.ToolCalls[i].Type = "function"
+				om.ToolCalls[i].Function.Name = tc.Name
+				om.ToolCalls[i].Function.Arguments = tc.ArgumentsJSON
+			}
+		}
+		msgs = append(msgs, om)
 	}
 	body := oaiRequest{
 		Model:         model,
@@ -211,6 +312,19 @@ func buildRequestBody(model string, req provider.Request) ([]byte, error) {
 		StreamOptions: &streamOptions{IncludeUsage: true},
 		Temperature:   req.Options.Temperature,
 		MaxTokens:     req.Options.MaxOutputTokens,
+	}
+	if len(req.Tools) > 0 {
+		body.Tools = make([]oaiTool, len(req.Tools))
+		for i, t := range req.Tools {
+			body.Tools[i] = oaiTool{
+				Type: "function",
+				Function: oaiToolFunction{
+					Name:        t.Name,
+					Description: t.Description,
+					Parameters:  t.ParametersSchema,
+				},
+			}
+		}
 	}
 	return json.Marshal(body)
 }
@@ -221,8 +335,9 @@ type streamChunk struct {
 	Choices []struct {
 		Index int `json:"index"`
 		Delta struct {
-			Role    string `json:"role,omitempty"`
-			Content string `json:"content,omitempty"`
+			Role      string             `json:"role,omitempty"`
+			Content   string             `json:"content,omitempty"`
+			ToolCalls []streamToolCallFr `json:"tool_calls,omitempty"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason,omitempty"`
 	} `json:"choices"`
@@ -231,6 +346,21 @@ type streamChunk struct {
 		CompletionTokens int `json:"completion_tokens"`
 		TotalTokens      int `json:"total_tokens"`
 	} `json:"usage,omitempty"`
+}
+
+// streamToolCallFr is the per-chunk tool-call fragment emitted by OpenAI.
+// On the first chunk for a given index, ID + Function.Name are present;
+// subsequent chunks carry only Function.Arguments fragments. We accumulate
+// per-index (since OpenAI may stream multiple parallel tool calls) and emit
+// one assembled provider.ToolCall when the stream ends.
+type streamToolCallFr struct {
+	Index    int    `json:"index"`
+	ID       string `json:"id,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Function struct {
+		Name      string `json:"name,omitempty"`
+		Arguments string `json:"arguments,omitempty"`
+	} `json:"function,omitempty"`
 }
 
 // Compile-time interface assertion.

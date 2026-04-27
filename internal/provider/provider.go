@@ -9,6 +9,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 )
 
 // Role identifies the speaker of a message in a conversation.
@@ -18,6 +19,10 @@ const (
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
 	RoleSystem    Role = "system"
+	// RoleTool is a tool-result message in a multi-turn loop. It carries
+	// ToolCallID identifying the originating tool_use and Content with
+	// the JSON-serialized result.
+	RoleTool Role = "tool"
 )
 
 // ModelID is the canonical "<provider>/<model>" form used throughout
@@ -47,11 +52,20 @@ func (m ModelID) Model() string {
 	return string(m)
 }
 
-// Message is one turn in a conversation. Content is text-only for now;
-// multi-modal content (images, audio) lands later via a content-list shape.
+// Message is one turn in a conversation. Content is text — plain for
+// user/system/assistant turns. Tool-related turns:
+//
+//   - Role=Assistant + ToolCalls non-empty: the model chose to invoke
+//     tools this turn. Content may also be non-empty if the model emitted
+//     visible text alongside the calls.
+//   - Role=Tool: a tool result. Content carries the tool's output
+//     (typically JSON or text); ToolCallID identifies which tool_use this
+//     is the result of.
 type Message struct {
-	Role    Role
-	Content string
+	Role       Role
+	Content    string
+	ToolCalls  []ToolCall // assistant turns invoking tools
+	ToolCallID string     // role=tool only
 }
 
 // Options carries non-required, per-request tuning. Provider impls should
@@ -76,6 +90,35 @@ type Request struct {
 	System   string    // optional system prompt; empty means none
 	Messages []Message // chat history, oldest first
 	Options  Options
+	// Tools advertises the function/tool surface the model may invoke
+	// during this completion. Empty disables tool-calling for this turn.
+	Tools []ToolSpec
+}
+
+// ToolSpec describes one callable tool exposed to the model. ParametersSchema
+// is the JSON schema for the tool's input arguments — providers map this
+// onto their own request shape (OpenAI: tools[].function.parameters;
+// Anthropic: tools[].input_schema; etc).
+type ToolSpec struct {
+	Name             string
+	Description      string
+	ParametersSchema json.RawMessage
+}
+
+// ToolCall is the assembled tool-call payload from a streaming response. The
+// provider buffers per-call argument fragments internally and emits one
+// ToolCall (via DeltaToolCall) when the call is finalized — typically when
+// the model emits finish_reason="tool_calls" or the stream ends.
+type ToolCall struct {
+	// ID is the call site identifier the provider returned. Echo this
+	// back as tool_use_id when sending the result in a follow-up turn.
+	ID string
+	// Name matches the ToolSpec.Name the model chose to invoke.
+	Name string
+	// ArgumentsJSON is the model's chosen input as a JSON-encoded string.
+	// Providers stream it in fragments; the consumer can decode this once
+	// it's complete.
+	ArgumentsJSON string
 }
 
 // DeltaKind discriminates a Delta variant. Each variant uses a distinct
@@ -95,6 +138,12 @@ const (
 	// DeltaUsage is sent at most once per stream, near the end, with
 	// final input/output token counts. Usage is non-nil for this kind.
 	DeltaUsage
+	// DeltaToolCall is emitted once per assembled tool call when the
+	// stream finalizes the call (typically at finish_reason="tool_calls"
+	// or end-of-stream). ToolCall is non-nil. A single stream may emit
+	// multiple DeltaToolCall events when the model chose more than one
+	// tool to invoke this turn.
+	DeltaToolCall
 	// DeltaError indicates a mid-stream failure. Err is non-nil and the
 	// channel is closed immediately after this delta. Setup-time
 	// failures should be returned from Provider.Stream, not surfaced
@@ -112,15 +161,16 @@ type Usage struct {
 // Delta is a single event in a streaming response. Which fields are set
 // depends on Kind:
 //   - DeltaText:      Text
-//   - DeltaReasoning: Text  (carries reasoning chunk; Reasoning bool is
-//                            redundant because Kind already says so)
-//   - DeltaUsage:     Usage (non-nil)
-//   - DeltaError:     Err   (non-nil)
+//   - DeltaReasoning: Text     (reasoning chunk; not part of visible reply)
+//   - DeltaUsage:     Usage    (non-nil)
+//   - DeltaToolCall:  ToolCall (non-nil; assembled, not fragments)
+//   - DeltaError:     Err      (non-nil)
 type Delta struct {
-	Kind  DeltaKind
-	Text  string
-	Usage *Usage
-	Err   error
+	Kind     DeltaKind
+	Text     string
+	Usage    *Usage
+	ToolCall *ToolCall
+	Err      error
 }
 
 // Provider is a streaming-completion source. Implementations are expected
