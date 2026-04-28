@@ -150,7 +150,7 @@ func gatewayRunCmd() *cobra.Command {
 				WebDir:            webDir,
 				Auth:              server.AuthConfig{Mode: authMode, Token: token},
 				AgentResolver:     resolver,
-				ProviderFactory:   &agentProviderFactory{paths: paths},
+				ProviderFactory:   &agentProviderFactory{paths: paths, host: pluginHost},
 				WorkspaceResolver: resolver,
 				ToolRunnerFor:     newToolRunnerFactory(pluginHost),
 				Paths:             paths,

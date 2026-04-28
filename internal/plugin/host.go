@@ -155,6 +155,45 @@ func (h *Host) List() []string {
 	return out
 }
 
+// ProviderByName returns the plugin instance whose manifest offers a
+// provider by the given key, or nil if no loaded plugin advertises it.
+// First match wins (manifests should pick non-conflicting names; on
+// collision the host itself doesn't pick a winner).
+func (h *Host) ProviderByName(name string) *Instance {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, inst := range h.byName {
+		if inst == nil || inst.Manifest == nil {
+			continue
+		}
+		for _, ps := range inst.Manifest.OffersProviders {
+			if ps.GetName() == name {
+				return inst
+			}
+		}
+	}
+	return nil
+}
+
+// ChannelByName returns the plugin instance whose manifest offers a
+// channel by the given name, or nil if no loaded plugin advertises it.
+// Symmetric to ProviderByName.
+func (h *Host) ChannelByName(name string) *Instance {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for _, inst := range h.byName {
+		if inst == nil || inst.Manifest == nil {
+			continue
+		}
+		for _, ch := range inst.Manifest.OffersChannels {
+			if ch == name {
+				return inst
+			}
+		}
+	}
+	return nil
+}
+
 // Shutdown unregisters every plugin (invoking each stop callback). Call
 // this on gateway shutdown so subprocesses get a clean exit signal.
 func (h *Host) Shutdown() {

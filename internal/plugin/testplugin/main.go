@@ -38,12 +38,41 @@ func (s *stubPlugin) Initialize(ctx context.Context, req *pb.InitializeRequest) 
 				Description:      "Echo the input back as output. Used by integration tests.",
 				ParametersSchema: []byte(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`),
 			}},
+			OffersProviders: []*pb.ProviderSpec{{
+				Name:   "testprov",
+				Models: []string{"echo-1"},
+			}},
 			Needs: []pb.Capability{
 				pb.Capability_CAPABILITY_READ_CONFIG,
 				pb.Capability_CAPABILITY_LIST_AGENTS,
 			},
 		},
 	}, nil
+}
+
+// StreamCompletion implements the testprov "echo-1" model: emits two
+// text deltas spelling out the last user message, then a final usage
+// delta. Used by ToolRouter / PluginProvider integration tests.
+func (s *stubPlugin) StreamCompletion(req *pb.StreamCompletionRequest, stream pb.Plugin_StreamCompletionServer) error {
+	last := ""
+	for _, m := range req.GetMessages() {
+		if m.GetRole() == pb.Role_ROLE_USER {
+			last = m.GetContent()
+		}
+	}
+	if err := stream.Send(&pb.Delta{Kind: &pb.Delta_Text{Text: "echo: "}}); err != nil {
+		return err
+	}
+	if err := stream.Send(&pb.Delta{Kind: &pb.Delta_Text{Text: last}}); err != nil {
+		return err
+	}
+	if err := stream.Send(&pb.Delta{Kind: &pb.Delta_Usage{Usage: &pb.Usage{
+		InputTokens:  int32(len(last)),
+		OutputTokens: int32(len(last) + 6),
+	}}}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // RunTool implements the test-echo tool. Used by ToolRouter integration

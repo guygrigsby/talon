@@ -87,6 +87,58 @@ func TestLoadPlugin_FailsOnNonexistentBinary(t *testing.T) {
 	}
 }
 
+// TestLoadPlugin_ProviderDispatch is the end-to-end check for the
+// provider-plugin path: spawn the real testplugin subprocess, build a
+// PluginProvider against its testprov offering, exercise
+// StreamCompletion. Mirrors the production path agentProviderFactory
+// takes when the gateway routes a model whose provider segment matches
+// a loaded plugin.
+func TestLoadPlugin_ProviderDispatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("subprocess test; skipped under -short")
+	}
+	bin := buildTestPlugin(t)
+
+	h := NewHost("127.0.0.1:18790")
+	inst, err := h.LoadPlugin(t.Context(), "testplugin", LoadOptions{Cmd: []string{bin}})
+	if err != nil {
+		t.Fatalf("LoadPlugin: %v", err)
+	}
+	defer h.Unregister("testplugin")
+
+	// Manifest advertises offers_providers ["testprov" → ["echo-1"]];
+	// host.ProviderByName must find it.
+	if got := h.ProviderByName("testprov"); got == nil || got.Name != "testplugin" {
+		t.Fatalf("ProviderByName(testprov): got %+v", got)
+	}
+
+	p := NewPluginProvider("testprov", inst.Client)
+	ch, err := p.Stream(t.Context(), provider.Request{
+		Model:    "testprov/echo-1",
+		Messages: []provider.Message{{Role: provider.RoleUser, Content: "ping"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text strings.Builder
+	var sawUsage bool
+	for d := range ch {
+		switch d.Kind {
+		case provider.DeltaText:
+			text.WriteString(d.Text)
+		case provider.DeltaUsage:
+			sawUsage = true
+		}
+	}
+	// testplugin's StreamCompletion emits "echo: " + last user message.
+	if got := text.String(); got != "echo: ping" {
+		t.Errorf("got %q, want %q", got, "echo: ping")
+	}
+	if !sawUsage {
+		t.Errorf("expected a Usage delta from the plugin")
+	}
+}
+
 // TestLoadPlugin_ToolRouterDispatch is the end-to-end check for the
 // tool-plugin path: spawn the real testplugin subprocess, build a
 // ToolRouter that unions a local runner with the loaded plugin, then

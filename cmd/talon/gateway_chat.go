@@ -158,13 +158,14 @@ func (r *configAgentResolver) PrimaryModel(agentID string) (provider.ModelID, er
 	return "", fmt.Errorf("agent %q has no resolvable model (no per-agent model and no agents.defaults.model.primary)", agentID)
 }
 
-// agentProviderFactory implements server.ProviderFactory. For each request
-// it looks up the per-agent auth-profiles.json under the openclaw layer
-// (talon does not write credentials to its overlay). Currently only
-// "openai" has a concrete implementation; everything else returns
-// ErrProviderUnavailable so the caller surfaces a useful error.
+// agentProviderFactory implements server.ProviderFactory. Resolution
+// order: native built-ins (openai, deepseek) first, then any loaded
+// plugin whose manifest offers the requested provider name. Only fails
+// with ErrProviderUnavailable when neither side recognizes the name —
+// that's the signal the model targeted a provider nothing can serve.
 type agentProviderFactory struct {
 	paths openclaw.Paths
+	host  *plugin.Host // optional; nil disables plugin-served providers
 }
 
 func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provider, error) {
@@ -182,7 +183,13 @@ func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provi
 			return nil, fmt.Errorf("deepseek: %w", err)
 		}
 		return deepseek.New(deepseek.Options{APIKey: key}), nil
-	default:
-		return nil, fmt.Errorf("%w: %q (implemented: openai, deepseek)", server.ErrProviderUnavailable, providerName)
 	}
+	// No native match — try a plugin offering this provider.
+	if f.host != nil {
+		if inst := f.host.ProviderByName(providerName); inst != nil {
+			return plugin.NewPluginProvider(providerName, inst.Client), nil
+		}
+	}
+	return nil, fmt.Errorf("%w: %q (implemented natively: openai, deepseek; no loaded plugin offers it)",
+		server.ErrProviderUnavailable, providerName)
 }
