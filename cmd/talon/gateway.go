@@ -139,7 +139,7 @@ func gatewayRunCmd() *cobra.Command {
 				ToolRunnerFor:     makeToolRunner,
 				Paths:             paths,
 			})
-			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai, reads=enabled, tools=read/write/edit/bash/glob/grep)", addr, authMode)
+			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai/deepseek, reads=enabled, tools=read/write/edit/bash/glob/grep/remember)", addr, authMode)
 			// Forgettable-URL mitigation: print the deep-link the openclaw
 			// web UI needs after a fresh page load (cache cleared, new
 			// browser, etc). Token is included only when --auth=token; the

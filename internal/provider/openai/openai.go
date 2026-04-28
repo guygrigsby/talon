@@ -21,27 +21,42 @@ import (
 // endpoint (Azure, Together, etc).
 const DefaultBaseURL = "https://api.openai.com/v1"
 
-// Options configures a Provider. APIKey is required; the rest have defaults.
+// Options configures a Provider. APIKey is required; the rest have defaults
+// suitable for OpenAI's own API. To target an OpenAI-compatible provider
+// (DeepSeek, Together, Azure-OpenAI, etc.) override BaseURL plus Name +
+// ProviderKey so the Provider identifies itself correctly and validates
+// incoming ModelIDs against the right provider segment.
 type Options struct {
 	APIKey     string
 	BaseURL    string
 	HTTPClient *http.Client
+	// Name overrides Provider.Name(). Default "openai".
+	Name string
+	// ProviderKey is the expected ModelID provider segment. Stream
+	// rejects ModelIDs whose Provider() segment differs from this (an
+	// empty segment is always accepted for raw passthrough during
+	// testing). Default "openai".
+	ProviderKey string
 }
 
-// Provider is the OpenAI streaming-completion provider.
+// Provider is an OpenAI-compatible streaming-completion provider.
 type Provider struct {
-	apiKey     string
-	baseURL    string
-	httpClient *http.Client
+	apiKey      string
+	baseURL     string
+	httpClient  *http.Client
+	name        string
+	providerKey string
 }
 
 // New constructs a Provider. APIKey is required (Stream will return a setup
 // error if it is empty).
 func New(opts Options) *Provider {
 	p := &Provider{
-		apiKey:     opts.APIKey,
-		baseURL:    opts.BaseURL,
-		httpClient: opts.HTTPClient,
+		apiKey:      opts.APIKey,
+		baseURL:     opts.BaseURL,
+		httpClient:  opts.HTTPClient,
+		name:        opts.Name,
+		providerKey: opts.ProviderKey,
 	}
 	if p.baseURL == "" {
 		p.baseURL = DefaultBaseURL
@@ -49,11 +64,18 @@ func New(opts Options) *Provider {
 	if p.httpClient == nil {
 		p.httpClient = http.DefaultClient
 	}
+	if p.name == "" {
+		p.name = "openai"
+	}
+	if p.providerKey == "" {
+		p.providerKey = "openai"
+	}
 	return p
 }
 
-// Name reports the provider's stable identifier ("openai").
-func (p *Provider) Name() string { return "openai" }
+// Name reports the provider's stable identifier (default "openai"; override
+// via Options.Name for compatible providers).
+func (p *Provider) Name() string { return p.name }
 
 // Stream implements provider.Provider. See package provider for channel
 // semantics. The model segment of req.Model is passed to OpenAI verbatim;
@@ -61,14 +83,14 @@ func (p *Provider) Name() string { return "openai" }
 // raw passthrough during testing).
 func (p *Provider) Stream(ctx context.Context, req provider.Request) (<-chan provider.Delta, error) {
 	if p.apiKey == "" {
-		return nil, fmt.Errorf("openai: API key not configured")
+		return nil, fmt.Errorf("%s: API key not configured", p.name)
 	}
-	if pseg := req.Model.Provider(); pseg != "" && pseg != "openai" {
-		return nil, fmt.Errorf("openai: model %q is not an openai model", req.Model)
+	if pseg := req.Model.Provider(); pseg != "" && pseg != p.providerKey {
+		return nil, fmt.Errorf("%s: model %q does not target provider %q", p.name, req.Model, p.providerKey)
 	}
 	model := req.Model.Model()
 	if model == "" {
-		return nil, fmt.Errorf("openai: model id is empty")
+		return nil, fmt.Errorf("%s: model id is empty", p.name)
 	}
 
 	body, err := buildRequestBody(model, req)

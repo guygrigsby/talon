@@ -135,7 +135,7 @@ func TestStream_RejectsMissingAPIKey(t *testing.T) {
 func TestStream_RejectsWrongProvider(t *testing.T) {
 	p := New(Options{APIKey: "sk-test"})
 	_, err := p.Stream(context.Background(), provider.Request{Model: "anthropic/claude-opus-4-7"})
-	if err == nil || !strings.Contains(err.Error(), "not an openai model") {
+	if err == nil || !strings.Contains(err.Error(), "does not target provider") {
 		t.Errorf("expected wrong-provider error, got %v", err)
 	}
 }

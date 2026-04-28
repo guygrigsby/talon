@@ -7,6 +7,7 @@ import (
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/guygrigsby/talon/internal/provider"
+	"github.com/guygrigsby/talon/internal/provider/deepseek"
 	"github.com/guygrigsby/talon/internal/provider/openai"
 	"github.com/guygrigsby/talon/internal/server"
 	"github.com/guygrigsby/talon/internal/tools"
@@ -89,15 +90,21 @@ type agentProviderFactory struct {
 }
 
 func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provider, error) {
+	authPath := filepath.Join(f.paths.Openclaw.AgentDir(agentID), "agent", "auth-profiles.json")
 	switch providerName {
 	case "openai":
-		authPath := filepath.Join(f.paths.Openclaw.AgentDir(agentID), "agent", "auth-profiles.json")
 		key, err := openai.LoadAPIKey(authPath, "openai:default")
 		if err != nil {
 			return nil, fmt.Errorf("openai: %w", err)
 		}
 		return openai.New(openai.Options{APIKey: key}), nil
+	case "deepseek":
+		key, err := deepseek.LoadAPIKey(authPath)
+		if err != nil {
+			return nil, fmt.Errorf("deepseek: %w", err)
+		}
+		return deepseek.New(deepseek.Options{APIKey: key}), nil
 	default:
-		return nil, fmt.Errorf("%w: %q (only 'openai' is implemented)", server.ErrProviderUnavailable, providerName)
+		return nil, fmt.Errorf("%w: %q (implemented: openai, deepseek)", server.ErrProviderUnavailable, providerName)
 	}
 }
