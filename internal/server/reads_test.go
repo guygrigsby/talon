@@ -238,7 +238,14 @@ func TestConfigSchema_InvalidCacheReturnsError(t *testing.T) {
 func TestReadHandler_RegisterAddsAll(t *testing.T) {
 	r := NewRegistry()
 	NewReadHandler(readFixture(t, `{}`)).Register(r)
-	want := map[string]bool{"agents.list": false, "models.list": false, "config.schema": false, "agent.identity.get": false, "skills.status": false}
+	want := map[string]bool{
+		"agents.list":        false,
+		"models.list":        false,
+		"config.schema":      false,
+		"agent.identity.get": false,
+		"skills.status":      false,
+		"memory.append":      false,
+	}
 	for _, m := range r.Methods() {
 		if _, ok := want[m]; ok {
 			want[m] = true
@@ -386,6 +393,68 @@ func TestAgentIdentityGet_MissingIdentityFileReturnsNull(t *testing.T) {
 	}
 	if res != nil {
 		t.Errorf("expected nil when IDENTITY.md is absent, got %+v", res)
+	}
+}
+
+// --- memory.append ---------------------------------------------------------
+
+func TestMemoryAppend_WritesToAgentWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	wsDir := filepath.Join(dir, "ws")
+	if err := os.MkdirAll(wsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"agents":{"list":[{"id":"main","workspace":%q}]}}`, wsDir)
+	h := NewReadHandler(readFixture(t, body))
+
+	res, ferr := h.handleMemoryAppend(t.Context(), HandlerCtx{}, []byte(`{"agentId":"main","text":"important fact"}`))
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	if !res.(map[string]any)["ok"].(bool) {
+		t.Errorf("ok: %+v", res)
+	}
+	matches, _ := filepath.Glob(filepath.Join(wsDir, "memory", "*.md"))
+	if len(matches) == 0 {
+		t.Fatalf("no memory file written under %s", wsDir)
+	}
+	bodyBytes, _ := os.ReadFile(matches[0])
+	if !strings.Contains(string(bodyBytes), "important fact") {
+		t.Errorf("note not persisted: %q", bodyBytes)
+	}
+}
+
+func TestMemoryAppend_AcceptsSessionKey(t *testing.T) {
+	dir := t.TempDir()
+	wsDir := filepath.Join(dir, "ws")
+	if err := os.MkdirAll(wsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := fmt.Sprintf(`{"agents":{"list":[{"id":"main","workspace":%q}]}}`, wsDir)
+	h := NewReadHandler(readFixture(t, body))
+
+	if _, ferr := h.handleMemoryAppend(t.Context(), HandlerCtx{}, []byte(`{"sessionKey":"agent:main:main","text":"via session"}`)); ferr != nil {
+		t.Fatal(ferr)
+	}
+	matches, _ := filepath.Glob(filepath.Join(wsDir, "memory", "*.md"))
+	if len(matches) == 0 {
+		t.Fatalf("session-key path didn't write: %v", matches)
+	}
+}
+
+func TestMemoryAppend_RejectsEmptyText(t *testing.T) {
+	h := NewReadHandler(readFixture(t, `{"agents":{"list":[{"id":"main","workspace":"/tmp"}]}}`))
+	_, ferr := h.handleMemoryAppend(t.Context(), HandlerCtx{}, []byte(`{"text":""}`))
+	if ferr == nil || ferr.Code != ErrCodeBadRequest {
+		t.Errorf("want BAD_REQUEST for empty text, got %+v", ferr)
+	}
+}
+
+func TestMemoryAppend_AgentWithoutWorkspaceErrors(t *testing.T) {
+	h := NewReadHandler(readFixture(t, `{"agents":{"list":[{"id":"main"}]}}`))
+	_, ferr := h.handleMemoryAppend(t.Context(), HandlerCtx{}, []byte(`{"text":"x"}`))
+	if ferr == nil || ferr.Code != ErrCodeInternal {
+		t.Errorf("want INTERNAL when no workspace resolves, got %+v", ferr)
 	}
 }
 

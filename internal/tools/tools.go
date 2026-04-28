@@ -62,6 +62,7 @@ func New(workspace string) *Registry {
 	r.Register(&bashTool{ws: workspace})
 	r.Register(&globTool{ws: workspace})
 	r.Register(&grepTool{ws: workspace})
+	r.Register(&rememberTool{ws: workspace})
 	return r
 }
 

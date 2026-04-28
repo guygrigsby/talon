@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/guygrigsby/talon/internal/config"
+	"github.com/guygrigsby/talon/internal/memory"
 	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/tidwall/gjson"
 )
@@ -29,13 +30,14 @@ func NewReadHandler(paths openclaw.Paths) *ReadHandler {
 }
 
 // Register wires agents.list, models.list, config.schema,
-// agent.identity.get, and skills.status into r.
+// agent.identity.get, skills.status, and memory.append into r.
 func (h *ReadHandler) Register(r *Registry) {
 	r.Register("agents.list", h.handleAgentsList)
 	r.Register("models.list", h.handleModelsList)
 	r.Register("config.schema", h.handleConfigSchema)
 	r.Register("agent.identity.get", h.handleAgentIdentityGet)
 	r.Register("skills.status", h.handleSkillsStatus)
+	r.Register("memory.append", h.handleMemoryAppend)
 }
 
 // --- agents.list -----------------------------------------------------------
@@ -341,6 +343,52 @@ func splitLines(s string) []string {
 		out[i] = strings.TrimRight(l, "\r")
 	}
 	return out
+}
+
+// --- memory.append ---------------------------------------------------------
+
+type memoryAppendParams struct {
+	AgentID    string `json:"agentId"`
+	SessionKey string `json:"sessionKey"`
+	Text       string `json:"text"`
+}
+
+// handleMemoryAppend writes a durable note to the agent's daily memory
+// journal. Same on-disk shape as the chat-side `remember` tool — both
+// surfaces share the internal/memory writer so a manual RPC append and a
+// model-driven remember land in the same file.
+//
+// Agent resolution: agentId → derived from sessionKey → "main" (matches
+// agent.identity.get for consistency).
+func (h *ReadHandler) handleMemoryAppend(ctx context.Context, hc HandlerCtx, params json.RawMessage) (any, *FrameError) {
+	var p memoryAppendParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, &FrameError{Code: ErrCodeBadRequest, Message: "memory.append: " + err.Error()}
+		}
+	}
+	if strings.TrimSpace(p.Text) == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "memory.append: text is required"}
+	}
+	agentID := p.AgentID
+	if agentID == "" && p.SessionKey != "" {
+		agentID = AgentIDFromSessionKey(p.SessionKey)
+	}
+	if agentID == "" {
+		agentID = "main"
+	}
+	merged, err := config.MergedBytes(h.paths)
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "memory.append: " + err.Error()}
+	}
+	workspace := resolveWorkspace(merged, agentID)
+	if workspace == "" {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: fmt.Sprintf("memory.append: agent %q has no resolvable workspace", agentID)}
+	}
+	if err := memory.Append(workspace, p.Text); err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "memory.append: " + err.Error()}
+	}
+	return map[string]any{"ok": true, "agentId": agentID}, nil
 }
 
 // --- skills.status ---------------------------------------------------------
