@@ -42,6 +42,7 @@ func (s *stubPlugin) Initialize(ctx context.Context, req *pb.InitializeRequest) 
 				Name:   "testprov",
 				Models: []string{"echo-1"},
 			}},
+			OffersChannels: []string{"testchan"},
 			Needs: []pb.Capability{
 				pb.Capability_CAPABILITY_READ_CONFIG,
 				pb.Capability_CAPABILITY_LIST_AGENTS,
@@ -89,6 +90,53 @@ func (s *stubPlugin) RunTool(ctx context.Context, req *pb.RunToolRequest) (*pb.R
 		Output: fmt.Sprintf("echo: %s (agent=%s run=%s)",
 			req.GetArgumentsJson(), req.GetAgentId(), req.GetRunId()),
 	}, nil
+}
+
+// StartChannel implements the testchan channel: emits two pre-canned
+// inbound messages back-to-back (one room-scoped, one direct) and
+// then ends the stream. The host's ChannelDispatcher is expected to
+// roundtrip each through the agent and call SendChannelMessage with
+// the reply. Used by integration tests that want to exercise the
+// channel-plugin path end-to-end without spinning up a real platform.
+func (s *stubPlugin) StartChannel(req *pb.StartChannelRequest, stream pb.Plugin_StartChannelServer) error {
+	if req.GetChannelName() != "testchan" {
+		return fmt.Errorf("unknown channel: %q", req.GetChannelName())
+	}
+	msgs := []*pb.IncomingChannelMessage{
+		{
+			Channel:     "testchan",
+			SenderId:    "user-A",
+			DisplayName: "User A",
+			RoomId:      "room-1",
+			Text:        "hello room",
+			TsMs:        1700000000000,
+		},
+		{
+			Channel:     "testchan",
+			SenderId:    "user-B",
+			DisplayName: "User B",
+			Text:        "hi direct",
+			TsMs:        1700000001000,
+		},
+	}
+	for _, m := range msgs {
+		if err := stream.Send(m); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// SendChannelMessage records the outbound — the host calls this in
+// reply to incoming messages. Test fixture has nowhere to record
+// it persistently across processes, so the integration test in
+// internal/plugin reads the call back via its own mock instead.
+func (s *stubPlugin) SendChannelMessage(ctx context.Context, req *pb.SendChannelMessageRequest) (*pb.SendChannelMessageResponse, error) {
+	// Print one line per send so an interactive operator can see what
+	// went out. Tests don't depend on this being captured.
+	fmt.Fprintf(os.Stderr, "testplugin: SendChannelMessage channel=%q room=%q text=%q\n",
+		req.GetChannel(), req.GetRoomId(), req.GetText())
+	return &pb.SendChannelMessageResponse{Ok: true}, nil
 }
 
 func (s *stubPlugin) Shutdown(ctx context.Context, req *pb.ShutdownRequest) (*pb.ShutdownResponse, error) {

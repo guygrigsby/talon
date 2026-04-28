@@ -684,52 +684,71 @@ func (h *ChatHandler) runToolsParallel(ctx context.Context, emit emitTarget, run
 //
 // History is stored under a fresh "subagent:<agentId>:<runId>" key so
 // the subagent's transcript doesn't pollute the parent's. Tool events
-// (agent.tool start/result) forward into the parent's session via the
-// emit target stashed on parentCtx by the parent's runChatLoop — that's
-// how the subagent's tool calls show up live in the parent's UI tool
-// stream. Subagent runs don't honor SessionStore model overrides; they
-// always use the target agent's PrimaryModel.
+// forward into the parent's session via the emit target stashed on
+// parentCtx by the parent's runChatLoop. Subagent runs don't honor
+// SessionStore model overrides; they always use the target agent's
+// PrimaryModel.
 func (h *ChatHandler) RunInline(parentCtx context.Context, agentID, message string) (string, error) {
-	if h.resolver == nil || h.factory == nil || h.store == nil {
-		return "", errors.New("chat is not wired (no resolver/factory/store)")
-	}
-	if strings.TrimSpace(agentID) == "" || strings.TrimSpace(message) == "" {
-		return "", errors.New("subagent: agentId and message are required")
-	}
-	model, err := h.resolver.PrimaryModel(agentID)
-	if err != nil {
-		return "", fmt.Errorf("subagent resolve: %w", err)
-	}
-	providerName := model.Provider()
-	if providerName == "" {
-		return "", fmt.Errorf("subagent: model %q has no provider segment", model)
-	}
-	prov, err := h.factory.For(providerName, agentID)
-	if err != nil {
-		return "", fmt.Errorf("subagent provider: %w", err)
-	}
 	subRunID, err := newRunID()
 	if err != nil {
 		return "", err
 	}
 	storeKey := "subagent:" + agentID + ":" + subRunID
+	return h.runForSession(parentCtx, storeKey, subRunID, agentID, message)
+}
 
-	// Parent's emit target — present iff this RunInline was invoked from
-	// inside another runChatLoop (e.g. via the subagent tool). Forward
-	// our tool events into the parent's tool stream so the user sees
-	// what the subagent is doing live; suppress chat events so the
-	// subagent's text doesn't write into the parent's transcript.
+// RunForSession is like RunInline but uses an explicit sessionKey for
+// history. Subsequent calls with the same sessionKey continue the same
+// conversation — the channel-plugin path needs this so a Telegram user's
+// messages share state across turns instead of each one starting fresh.
+//
+// Like RunInline this suppresses chat (delta/final) events because the
+// caller (channel dispatcher) doesn't want UI-style streaming. Tool
+// events forward into any parent emit target if one's stashed on ctx.
+func (h *ChatHandler) RunForSession(ctx context.Context, sessionKey, agentID, message string) (string, error) {
+	if strings.TrimSpace(sessionKey) == "" {
+		return "", errors.New("RunForSession: sessionKey is required")
+	}
+	runID, err := newRunID()
+	if err != nil {
+		return "", err
+	}
+	return h.runForSession(ctx, sessionKey, runID, agentID, message)
+}
+
+// runForSession is the shared body of RunInline and RunForSession. The
+// only difference between them is how storeKey is chosen.
+func (h *ChatHandler) runForSession(parentCtx context.Context, storeKey, runID, agentID, message string) (string, error) {
+	if h.resolver == nil || h.factory == nil || h.store == nil {
+		return "", errors.New("chat is not wired (no resolver/factory/store)")
+	}
+	if strings.TrimSpace(agentID) == "" || strings.TrimSpace(message) == "" {
+		return "", errors.New("chat: agentId and message are required")
+	}
+	model, err := h.resolver.PrimaryModel(agentID)
+	if err != nil {
+		return "", fmt.Errorf("resolve agent: %w", err)
+	}
+	providerName := model.Provider()
+	if providerName == "" {
+		return "", fmt.Errorf("model %q has no provider segment", model)
+	}
+	prov, err := h.factory.For(providerName, agentID)
+	if err != nil {
+		return "", fmt.Errorf("provider: %w", err)
+	}
+
+	// Forward parent's tool emit target if one's on ctx (subagent path);
+	// suppress chat events either way.
 	parentEmit, _ := parentCtx.Value(emitContextKey{}).(emitTarget)
 	emit := emitTarget{
-		chatSess:   nil, // never emit chat to parent — the subagent's text lands as a tool result instead
+		chatSess:   nil,
 		toolSess:   parentEmit.toolSess,
 		runID:      parentEmit.runID,
 		sessionKey: parentEmit.sessionKey,
 	}
 	if emit.runID == "" {
-		// No parent context (e.g. CLI invocation). Use our own values
-		// so events still tag correctly even if no one's listening.
-		emit.runID = subRunID
+		emit.runID = runID
 		emit.sessionKey = storeKey
 	}
 

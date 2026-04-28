@@ -1,10 +1,12 @@
 package plugin
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/guygrigsby/talon/internal/provider"
@@ -137,6 +139,96 @@ func TestLoadPlugin_ProviderDispatch(t *testing.T) {
 	if !sawUsage {
 		t.Errorf("expected a Usage delta from the plugin")
 	}
+}
+
+// TestLoadPlugin_ChannelDispatch is the end-to-end check for the
+// channel-plugin path: spawn the real testplugin subprocess, look up
+// the testchan channel, drive a ChannelDispatcher against a recording
+// runner, and verify each inbound message produced an agent run + an
+// outbound SendChannelMessage. Mirrors the production wiring
+// startConfiguredChannels does in cmd/talon.
+func TestLoadPlugin_ChannelDispatch(t *testing.T) {
+	if testing.Short() {
+		t.Skip("subprocess test; skipped under -short")
+	}
+	bin := buildTestPlugin(t)
+
+	h := NewHost("127.0.0.1:18790")
+	inst, err := h.LoadPlugin(t.Context(), "testplugin", LoadOptions{Cmd: []string{bin}})
+	if err != nil {
+		t.Fatalf("LoadPlugin: %v", err)
+	}
+	defer h.Unregister("testplugin")
+
+	if got := h.ChannelByName("testchan"); got == nil || got.Name != "testplugin" {
+		t.Fatalf("ChannelByName(testchan) = %+v", got)
+	}
+
+	runner := &recordingChannelRunner{reply: "echo-back"}
+	d, err := NewChannelDispatcher(inst, ChannelBinding{
+		ChannelName: "testchan",
+		AgentID:     "main",
+		ConfigJSON:  []byte(`{}`),
+	}, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Start(t.Context())
+	d.Wait() // testchan emits 2 messages, then closes the stream
+	d.Stop()
+
+	calls := runner.snapshot()
+	if len(calls) != 2 {
+		t.Fatalf("runner saw %d calls, want 2", len(calls))
+	}
+	// Per-message handlers run concurrently, so order isn't fixed.
+	// Assert both expected sessionKeys are present + every call is for
+	// the right agent.
+	keys := map[string]bool{}
+	for _, c := range calls {
+		keys[c.sessionKey] = true
+		if c.agentID != "main" {
+			t.Errorf("agent id not propagated: %+v", c)
+		}
+	}
+	if !keys["channel:testchan:room:room-1"] {
+		t.Errorf("missing room-scoped key; got %+v", calls)
+	}
+	if !keys["channel:testchan:user:user-B"] {
+		t.Errorf("missing direct-scoped key; got %+v", calls)
+	}
+}
+
+// recordingChannelRunner is a SessionRunner that captures calls. Defined
+// here (not in channels_test.go) because the channel test file can't
+// share types across the bufconn/in-process and end-to-end paths
+// without exposing internal helpers.
+type recordingChannelRunner struct {
+	mu    sync.Mutex
+	calls []recordingChannelCall
+	reply string
+	err   error
+}
+
+type recordingChannelCall struct {
+	sessionKey string
+	agentID    string
+	message    string
+}
+
+func (r *recordingChannelRunner) RunForSession(_ context.Context, sessionKey, agentID, message string) (string, error) {
+	r.mu.Lock()
+	r.calls = append(r.calls, recordingChannelCall{sessionKey, agentID, message})
+	r.mu.Unlock()
+	return r.reply, r.err
+}
+
+func (r *recordingChannelRunner) snapshot() []recordingChannelCall {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]recordingChannelCall, len(r.calls))
+	copy(out, r.calls)
+	return out
 }
 
 // TestLoadPlugin_ToolRouterDispatch is the end-to-end check for the

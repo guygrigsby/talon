@@ -135,6 +135,102 @@ func loadConfiguredPlugins(ctx context.Context, host *plugin.Host, paths opencla
 	}
 }
 
+// pluginChannelOffer is one (plugin name, channel name) pair drawn
+// from a manifest. Lets parseChannelBindings stay a pure function over
+// data instead of having to read host.List() / host.Get().
+type pluginChannelOffer struct {
+	PluginName string
+	Channel    string
+}
+
+// channelBindingForPlugin pairs a plugin name with a ChannelBinding —
+// the plugin name is needed to look up the Instance the dispatcher
+// dials.
+type channelBindingForPlugin struct {
+	PluginName string
+	Binding    plugin.ChannelBinding
+}
+
+// parseChannelBindings reads each offered channel against the merged
+// config's channels.<name> sub-tree. Channels with no config tree are
+// silently skipped (declaring a channel offer in a manifest is not the
+// same as enabling it). agentId is read from channels.<name>.agentId
+// with "main" as the default so a plain `{ "telegram": { "botToken":
+// "..." } }` "just works".
+//
+// Pure function for testability; lifecycle wiring (host lookups,
+// dispatcher start/stop) lives in startConfiguredChannels.
+func parseChannelBindings(merged []byte, offers []pluginChannelOffer) []channelBindingForPlugin {
+	var out []channelBindingForPlugin
+	for _, off := range offers {
+		cfg := gjson.GetBytes(merged, fmt.Sprintf("channels.%s", off.Channel))
+		if !cfg.Exists() {
+			continue
+		}
+		agentID := cfg.Get("agentId").Str
+		if agentID == "" {
+			agentID = "main"
+		}
+		out = append(out, channelBindingForPlugin{
+			PluginName: off.PluginName,
+			Binding: plugin.ChannelBinding{
+				ChannelName: off.Channel,
+				AgentID:     agentID,
+				ConfigJSON:  []byte(cfg.Raw),
+			},
+		})
+	}
+	return out
+}
+
+// collectChannelOffers walks every loaded plugin's manifest and returns
+// each offered channel as a (plugin name, channel) pair. Pure data —
+// kept separate from parseChannelBindings so the parsing rule can be
+// tested without spinning up a real Host.
+func collectChannelOffers(host *plugin.Host) []pluginChannelOffer {
+	var out []pluginChannelOffer
+	for _, name := range host.List() {
+		inst := host.Get(name)
+		if inst == nil || inst.Manifest == nil {
+			continue
+		}
+		for _, channel := range inst.Manifest.GetOffersChannels() {
+			out = append(out, pluginChannelOffer{PluginName: name, Channel: channel})
+		}
+	}
+	return out
+}
+
+// startConfiguredChannels wires channel dispatchers for every loaded
+// plugin that offers a channel referenced in the merged config. Returns
+// the dispatchers so the caller can Stop() them on shutdown. Failures
+// log but don't propagate — a broken channel must not take down chat.
+func startConfiguredChannels(ctx context.Context, host *plugin.Host, paths openclaw.Paths, runner plugin.SessionRunner) []*plugin.ChannelDispatcher {
+	merged, err := config.MergedBytes(paths)
+	if err != nil {
+		log.Printf("channels: read merged config: %v", err)
+		return nil
+	}
+	bindings := parseChannelBindings(merged, collectChannelOffers(host))
+	out := make([]*plugin.ChannelDispatcher, 0, len(bindings))
+	for _, b := range bindings {
+		inst := host.Get(b.PluginName)
+		if inst == nil {
+			continue
+		}
+		d, err := plugin.NewChannelDispatcher(inst, b.Binding, runner)
+		if err != nil {
+			log.Printf("channel %s/%s: %v", b.PluginName, b.Binding.ChannelName, err)
+			continue
+		}
+		d.Start(ctx)
+		out = append(out, d)
+		log.Printf("plugin %s: channel %q dispatching to agent %q",
+			b.PluginName, b.Binding.ChannelName, b.Binding.AgentID)
+	}
+	return out
+}
+
 func (r *configAgentResolver) PrimaryModel(agentID string) (provider.ModelID, error) {
 	merged, err := config.MergedBytes(r.paths)
 	if err != nil {

@@ -179,8 +179,19 @@ func gatewayRunCmd() *cobra.Command {
 			// hits a live endpoint rather than connection-refused.
 			loadConfiguredPlugins(ctx, pluginHost, paths)
 			pluginNames := pluginHost.List()
-			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai/deepseek, reads=enabled, tools=read/write/edit/bash/glob/grep/remember/subagent, plugins=%d, host-svc=%s)",
-				addr, authMode, len(pluginNames), hostListener.Addr().String())
+
+			// Channel dispatchers wire each plugin-offered channel
+			// referenced in channels.<name> into the gateway's chat
+			// loop. Stops on gateway shutdown (defer below).
+			channelDispatchers := startConfiguredChannels(ctx, pluginHost, paths, srv.ChatHandler())
+			defer func() {
+				for _, d := range channelDispatchers {
+					d.Stop()
+				}
+			}()
+
+			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai/deepseek, reads=enabled, tools=read/write/edit/bash/glob/grep/remember/subagent, plugins=%d, channels=%d, host-svc=%s)",
+				addr, authMode, len(pluginNames), len(channelDispatchers), hostListener.Addr().String())
 			// Forgettable-URL mitigation: print the deep-link the openclaw
 			// web UI needs after a fresh page load (cache cleared, new
 			// browser, etc). Token is included only when --auth=token; the
