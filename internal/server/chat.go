@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -537,6 +538,29 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 	ctx = plugin.WithAgentID(ctx, agentID)
 	ctx = plugin.WithRunID(ctx, emit.runID)
 
+	// Per-turn timing (talon-perf): measured from runChatLoop entry to
+	// the moment we emit "final" (or return early). One log line per
+	// chat.send summarizes the breakdown so end-of-turn slowness shows
+	// up as a concrete number rather than a vibe. Cheap (one
+	// time.Since) and always-on so support investigations don't
+	// require restarting with a flag.
+	loopStart := time.Now()
+	var firstDeltaAt, lastDeltaAt, finalEmitStart, finalEmitEnd time.Time
+	defer func() {
+		if finalEmitEnd.IsZero() {
+			return // returned via error path; skip
+		}
+		log.Printf("chat.timing run=%s agent=%s iters=%d "+
+			"toFirstDelta=%s deltaSpan=%s afterLastDelta=%s finalEmit=%s total=%s",
+			emit.runID, agentID, seq,
+			firstDeltaAt.Sub(loopStart).Truncate(time.Millisecond),
+			lastDeltaAt.Sub(firstDeltaAt).Truncate(time.Millisecond),
+			finalEmitStart.Sub(lastDeltaAt).Truncate(time.Millisecond),
+			finalEmitEnd.Sub(finalEmitStart).Truncate(time.Millisecond),
+			finalEmitEnd.Sub(loopStart).Truncate(time.Millisecond),
+		)
+	}()
+
 	for iter := 0; iter < h.MaxToolIterations; iter++ {
 		history := h.store.Snapshot(storeKey)
 		reqMsgs := messagesFromHistory(history)
@@ -559,6 +583,10 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 		for d := range deltaCh {
 			switch d.Kind {
 			case provider.DeltaText:
+				if firstDeltaAt.IsZero() {
+					firstDeltaAt = time.Now()
+				}
+				lastDeltaAt = time.Now()
 				iterText.WriteString(d.Text)
 				accumulated.WriteString(d.Text)
 				seq++
@@ -592,7 +620,9 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 				h.store.Append(storeKey, "assistant", text)
 			}
 			seq++
+			finalEmitStart = time.Now()
 			_ = h.emitChat(emit.chatSess, emit.runID, emit.sessionKey, seq, "final", accumulated.String())
+			finalEmitEnd = time.Now()
 			return accumulated.String(), nil
 		}
 
