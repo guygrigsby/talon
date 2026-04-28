@@ -57,6 +57,15 @@ type Server struct {
 	registry  *Registry
 	startedAt time.Time
 
+	// Handler instances retained so cmd/talon can wire other surfaces
+	// (the gRPC plugin Host service) against the same in-process
+	// ChatStore/SessionStore as the WS surface — without these, plugins
+	// would see a different view of session state than the UI does.
+	chat       *ChatHandler
+	chatStore  *ChatStore
+	sessions_  *SessionStore // trailing _ to avoid collision with the field below
+	reads      *ReadHandler
+
 	// sessions tracks active authenticated sessions keyed by
 	// "<clientId>|<instanceId>" (only registered when both are
 	// non-empty). When a new connect handshake completes with a key
@@ -69,6 +78,29 @@ type Server struct {
 	sessions   map[string]*Session
 }
 
+// ChatHandler returns the in-process chat handler. nil if Config.AgentResolver
+// or ProviderFactory was not set (chat disabled). Used by the Host service
+// to wire RunSubagent.
+func (s *Server) ChatHandler() *ChatHandler { return s.chat }
+
+// ChatStore returns the shared in-memory chat history store. Always
+// non-nil. Used by the Host service to surface GetChatHistory to plugins
+// against the same data the WS chat.history sees.
+func (s *Server) ChatStore() *ChatStore { return s.chatStore }
+
+// SessionStore returns the shared per-session prefs store (model
+// overrides, etc). Always non-nil.
+func (s *Server) SessionStore() *SessionStore { return s.sessions_ }
+
+// ReadHandler returns the shared read-only RPC handler (or a fresh one
+// bound to Paths if reads weren't pre-registered). Always non-nil.
+func (s *Server) ReadHandler() *ReadHandler {
+	if s.reads != nil {
+		return s.reads
+	}
+	return NewReadHandler(s.cfg.Paths)
+}
+
 func New(cfg Config) *Server {
 	s := &Server{
 		cfg:       cfg,
@@ -79,6 +111,8 @@ func New(cfg Config) *Server {
 	}
 	chatStore := NewChatStore()
 	sessionStore := NewSessionStore()
+	s.chatStore = chatStore
+	s.sessions_ = sessionStore
 	if cfg.AgentResolver != nil && cfg.ProviderFactory != nil {
 		ch := NewChatHandler(cfg.AgentResolver, cfg.ProviderFactory, chatStore).WithSessions(sessionStore)
 		if cfg.WorkspaceResolver != nil && cfg.ToolRunnerFor != nil {
@@ -91,9 +125,11 @@ func New(cfg Config) *Server {
 			ch = ch.WithTools(cfg.WorkspaceResolver, factory)
 		}
 		ch.Register(s.registry)
+		s.chat = ch
 	}
 	if cfg.Paths.Talon.Dir != "" {
-		NewReadHandler(cfg.Paths).Register(s.registry)
+		s.reads = NewReadHandler(cfg.Paths)
+		s.reads.Register(s.registry)
 	}
 	NewSessionsHandler(sessionStore, chatStore).Register(s.registry)
 	s.routes()

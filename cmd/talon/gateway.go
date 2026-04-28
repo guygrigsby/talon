@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -15,8 +16,10 @@ import (
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/plugin"
+	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 	"github.com/guygrigsby/talon/internal/server"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc"
 )
 
 func gatewayCmd() *cobra.Command {
@@ -131,16 +134,15 @@ func gatewayRunCmd() *cobra.Command {
 			paths := resolvePaths()
 			resolver := &configAgentResolver{paths: paths}
 
-			// Plugin host. Empty hostAddr for now — back-channel
-			// (Host.GetConfig/ListAgents/etc.) isn't served yet, so
-			// tools-only plugins work but plugins that try to call
-			// back will get connection failures. Lifecycle: load
-			// configured plugins from plugins.entries.<name>.cmd
-			// before server.New so the ToolRunnerFor closure sees
-			// them; defer Shutdown so subprocesses exit cleanly on
-			// SIGINT/SIGTERM.
-			pluginHost := plugin.NewHost("")
-			loadConfiguredPlugins(ctx, pluginHost, paths)
+			// Plugin Host gRPC listener. Bind ephemeral on loopback
+			// — no plugin needs to reach this from another host
+			// today. The address is handed to plugins via env so they
+			// can dial back for capability-gated reads/writes.
+			hostListener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				return fmt.Errorf("plugin host listener: %w", err)
+			}
+			pluginHost := plugin.NewHost(hostListener.Addr().String())
 			defer pluginHost.Shutdown()
 
 			srv := server.New(server.Config{
@@ -153,9 +155,32 @@ func gatewayRunCmd() *cobra.Command {
 				ToolRunnerFor:     newToolRunnerFactory(pluginHost),
 				Paths:             paths,
 			})
+
+			// Now that the WS server has built its handlers, wire the
+			// plugin Host gRPC service against the SAME ChatStore /
+			// SessionStore so plugins see the same view as the UI.
+			// The capability interceptor enforces per-plugin manifest
+			// gates; an unrecognized cookie fails Unauthenticated.
+			hostService := server.NewHostService(paths, srv.ReadHandler(), srv.ChatHandler(), srv.ChatStore(), srv.SessionStore())
+			grpcSrv := grpc.NewServer(
+				grpc.UnaryInterceptor(pluginHost.UnaryInterceptor()),
+				grpc.StreamInterceptor(pluginHost.StreamInterceptor()),
+			)
+			pb.RegisterHostServer(grpcSrv, hostService)
+			go func() {
+				if err := grpcSrv.Serve(hostListener); err != nil {
+					log.Printf("plugin host: gRPC serve: %v", err)
+				}
+			}()
+			defer grpcSrv.GracefulStop()
+
+			// Load plugins AFTER the host service is serving so any
+			// back-channel call from the plugin during early life
+			// hits a live endpoint rather than connection-refused.
+			loadConfiguredPlugins(ctx, pluginHost, paths)
 			pluginNames := pluginHost.List()
-			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai/deepseek, reads=enabled, tools=read/write/edit/bash/glob/grep/remember/subagent, plugins=%d)",
-				addr, authMode, len(pluginNames))
+			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai/deepseek, reads=enabled, tools=read/write/edit/bash/glob/grep/remember/subagent, plugins=%d, host-svc=%s)",
+				addr, authMode, len(pluginNames), hostListener.Addr().String())
 			// Forgettable-URL mitigation: print the deep-link the openclaw
 			// web UI needs after a fresh page load (cache cleared, new
 			// browser, etc). Token is included only when --auth=token; the
