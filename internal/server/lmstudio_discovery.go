@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/netutil"
+	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/provider/openai"
 	"github.com/tidwall/gjson"
 )
 
@@ -47,7 +50,13 @@ type lmstudioModelList struct {
 // Honors the same loopback→host.docker.internal rewrite as the
 // chat path so a containerized gateway hitting "localhost:1234"
 // resolves to the user's host machine.
-func discoverLMStudioModels(ctx context.Context, merged []byte, httpClient *http.Client) ([]map[string]any, error) {
+//
+// authKey, when non-empty, is sent as the Authorization Bearer token.
+// LM Studio installs that require auth (e.g. a proxy in front, or
+// LM Studio's own auth toggle) reject unauthenticated requests with
+// a misleading "Unexpected endpoint" warning — same key the chat
+// path uses keeps both paths consistent.
+func discoverLMStudioModels(ctx context.Context, merged []byte, httpClient *http.Client, authKey string) ([]map[string]any, error) {
 	baseURL := lookupLMStudioBaseURLForDiscovery(merged)
 	if baseURL == "" {
 		return nil, errors.New("lmstudio: no base URL")
@@ -60,6 +69,9 @@ func discoverLMStudioModels(ctx context.Context, merged []byte, httpClient *http
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("lmstudio discover: build request: %w", err)
+	}
+	if authKey != "" {
+		req.Header.Set("Authorization", "Bearer "+authKey)
 	}
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -122,10 +134,32 @@ func lookupLMStudioBaseURLForDiscovery(merged []byte) string {
 // ctx instead — keeps cancel semantics clean.
 var httpClientForDiscovery = &http.Client{Transport: http.DefaultTransport}
 
+// resolveLMStudioAuthKey reads "lmstudio:default" from the main
+// agent's auth-profiles.json — the same on-disk file the chat
+// factory uses for openai/deepseek/lmstudio per-agent keys. Returns
+// "" when the profile isn't set; callers send the request without
+// a Bearer header in that case.
+//
+// LM Studio is a gateway-shared local resource (one server, many
+// agents could chat with it), so picking "main" is a reasonable
+// default. Future option: a gateway-level
+// `models.providers.lmstudio.apiKey` config so the key isn't
+// pinned to one agent.
+func resolveLMStudioAuthKey(paths openclaw.Paths) string {
+	authPath := filepath.Join(paths.Openclaw.AgentDir("main"), "agent", "auth-profiles.json")
+	key, err := openai.LoadProfileKeyOptional(authPath, "lmstudio:default", "lmstudio")
+	if err != nil {
+		// Malformed profile — log nothing here; the chat factory will
+		// surface the same error on the next chat.send.
+		return ""
+	}
+	return key
+}
+
 // callDiscoverLMStudio is the seam handleModelsList uses, so tests
 // can stub the discovery without spinning up a real LM Studio.
-var callDiscoverLMStudio = func(ctx context.Context, paths interface{}, merged []byte) ([]map[string]any, error) {
-	return discoverLMStudioModels(ctx, merged, httpClientForDiscovery)
+var callDiscoverLMStudio = func(ctx context.Context, paths openclaw.Paths, merged []byte) ([]map[string]any, error) {
+	return discoverLMStudioModels(ctx, merged, httpClientForDiscovery, resolveLMStudioAuthKey(paths))
 }
 
 // Compile-time use of imported config to avoid unused-import errors

@@ -29,7 +29,7 @@ func TestDiscoverLMStudioModels_HappyPath(t *testing.T) {
 	defer srv.Close()
 
 	merged := []byte(`{"models":{"providers":{"lmstudio":{"baseUrl":"` + srv.URL + `"}}}}`)
-	got, err := discoverLMStudioModels(context.Background(), merged, srv.Client())
+	got, err := discoverLMStudioModels(context.Background(), merged, srv.Client(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -63,7 +63,7 @@ func TestDiscoverLMStudioModels_FiltersUnloadedEntries(t *testing.T) {
 	defer srv.Close()
 
 	merged := []byte(`{"models":{"providers":{"lmstudio":{"baseUrl":"` + srv.URL + `"}}}}`)
-	got, err := discoverLMStudioModels(context.Background(), merged, srv.Client())
+	got, err := discoverLMStudioModels(context.Background(), merged, srv.Client(), "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestDiscoverLMStudioModels_FiltersUnloadedEntries(t *testing.T) {
 // back to the static catalog.
 func TestDiscoverLMStudioModels_ServerDownReturnsError(t *testing.T) {
 	merged := []byte(`{"models":{"providers":{"lmstudio":{"baseUrl":"http://127.0.0.1:1"}}}}`)
-	_, err := discoverLMStudioModels(context.Background(), merged, &http.Client{})
+	_, err := discoverLMStudioModels(context.Background(), merged, &http.Client{}, "")
 	if err == nil {
 		t.Fatal("expected error when LM Studio is unreachable")
 	}
@@ -93,8 +93,50 @@ func TestDiscoverLMStudioModels_NonOkPropagated(t *testing.T) {
 	}))
 	defer srv.Close()
 	merged := []byte(`{"models":{"providers":{"lmstudio":{"baseUrl":"` + srv.URL + `"}}}}`)
-	_, err := discoverLMStudioModels(context.Background(), merged, srv.Client())
+	_, err := discoverLMStudioModels(context.Background(), merged, srv.Client(), "")
 	if err == nil || !strings.Contains(err.Error(), "401") {
 		t.Errorf("expected 401 error, got %v", err)
+	}
+}
+
+// TestDiscoverLMStudioModels_SendsBearerWhenKeyProvided verifies the
+// auth path: when LM Studio sits behind a proxy or has its native
+// auth toggle on, an unauthenticated /v1/models request gets
+// rejected. With a key supplied, we attach the Bearer header so the
+// roundtrip succeeds — same key the chat factory uses.
+func TestDiscoverLMStudioModels_SendsBearerWhenKeyProvided(t *testing.T) {
+	var seenAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"data":[{"id":"loaded-x","state":"loaded"}]}`))
+	}))
+	defer srv.Close()
+
+	merged := []byte(`{"models":{"providers":{"lmstudio":{"baseUrl":"` + srv.URL + `"}}}}`)
+	if _, err := discoverLMStudioModels(context.Background(), merged, srv.Client(), "secret-token"); err != nil {
+		t.Fatal(err)
+	}
+	if seenAuth != "Bearer secret-token" {
+		t.Errorf("Authorization header = %q, want %q", seenAuth, "Bearer secret-token")
+	}
+}
+
+// TestDiscoverLMStudioModels_NoBearerWhenKeyEmpty: with no auth key
+// configured the request goes anonymous so unauthenticated LM Studio
+// installs Just Work without forcing the user to set up a profile.
+func TestDiscoverLMStudioModels_NoBearerWhenKeyEmpty(t *testing.T) {
+	var seenAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenAuth = r.Header.Get("Authorization")
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	defer srv.Close()
+
+	merged := []byte(`{"models":{"providers":{"lmstudio":{"baseUrl":"` + srv.URL + `"}}}}`)
+	if _, err := discoverLMStudioModels(context.Background(), merged, srv.Client(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if seenAuth != "" {
+		t.Errorf("expected no Authorization header, got %q", seenAuth)
 	}
 }
