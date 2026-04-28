@@ -69,10 +69,15 @@ func (h *ReadHandler) handleAgentsList(ctx context.Context, hc HandlerCtx, _ jso
 		if id == "" {
 			return true
 		}
-		row := map[string]any{"id": id}
-		if name := agent.Get("name").Str; name != "" {
-			row["name"] = name
+		// Always emit a non-empty name. Some UIs hide rows whose
+		// label is missing — falling back to the id keeps a freshly
+		// configured agent visible even before the user fills in
+		// `agents.list[].name`.
+		name := agent.Get("name").Str
+		if name == "" {
+			name = id
 		}
+		row := map[string]any{"id": id, "name": name}
 		if ws := agent.Get("workspace").Str; ws != "" {
 			row["workspace"] = ws
 		}
