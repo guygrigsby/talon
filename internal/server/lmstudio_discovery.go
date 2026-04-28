@@ -25,15 +25,20 @@ import (
 // want to delay the UI's model picker.
 const lmstudioDiscoveryTimeout = 800 * time.Millisecond
 
-// lmstudioModelEntry is the OpenAI-compatible /v1/models row shape.
-// LM Studio returns extra fields (architecture, max_context_length,
-// state); we pull what we use and ignore the rest.
+// lmstudioModelEntry is the /api/v0/models row shape — LM Studio's
+// native REST API returns richer metadata than the OpenAI-compat
+// /v1/models endpoint. Fields we don't consume are ignored.
 type lmstudioModelEntry struct {
-	ID       string `json:"id"`
-	Object   string `json:"object"`
-	OwnedBy  string `json:"owned_by"`
-	MaxCtx   int64  `json:"max_context_length"`
-	State    string `json:"state"` // "loaded" | "not-loaded" per LM Studio
+	ID                  string `json:"id"`
+	Object              string `json:"object"`
+	Type                string `json:"type"` // "llm" | "embeddings" | "vlm" | …
+	Publisher           string `json:"publisher"`
+	Arch                string `json:"arch"`              // e.g. "llama", "qwen2", "mistral"
+	CompatibilityType   string `json:"compatibility_type"` // "gguf" | "mlx" | …
+	Quantization        string `json:"quantization"`      // e.g. "Q4_K_M", "8-bit"
+	State               string `json:"state"`              // "loaded" | "not-loaded"
+	MaxCtx              int64  `json:"max_context_length"`
+	LoadedCtx           int64  `json:"loaded_context_length"`
 }
 
 type lmstudioModelList struct {
@@ -96,17 +101,32 @@ func discoverLMStudioModels(ctx context.Context, merged []byte, httpClient *http
 		if m.ID == "" {
 			continue
 		}
+		// Filter out non-chat model types so the picker doesn't
+		// surface embeddings, VLM-only, etc. Type is empty on older
+		// LM Studio /api/v0 versions — keep those entries to stay
+		// permissive there.
+		if m.Type != "" && m.Type != "llm" {
+			continue
+		}
 		// Only surface loaded entries when the server reports state.
 		// LM Studio versions that don't include `state` get the
 		// benefit of the doubt and show through.
 		if m.State != "" && m.State != "loaded" {
 			continue
 		}
+		// loaded_context_length is what the model is actually
+		// running with (user may have set a smaller window than the
+		// model's max). Falls back to max_context_length for older
+		// API versions.
+		ctx := m.LoadedCtx
+		if ctx == 0 {
+			ctx = m.MaxCtx
+		}
 		row := map[string]any{
 			"id":            m.ID,
 			"provider":      "lmstudio",
-			"name":          m.ID + " (loaded)",
-			"contextWindow": m.MaxCtx,
+			"name":          buildLMStudioDisplayName(m),
+			"contextWindow": ctx,
 			"reasoning":     false,
 		}
 		out = append(out, row)
@@ -114,13 +134,32 @@ func discoverLMStudioModels(ctx context.Context, merged []byte, httpClient *http
 	return out, nil
 }
 
+// buildLMStudioDisplayName produces a human-readable label that
+// includes architecture + quantization when LM Studio reports them,
+// since those distinguish otherwise-similar IDs (e.g. the same model
+// in MLX vs GGUF, Q4_K_M vs Q8_0). Falls back to the bare id when
+// the rich metadata isn't there.
+func buildLMStudioDisplayName(m lmstudioModelEntry) string {
+	var bits []string
+	if m.Arch != "" {
+		bits = append(bits, m.Arch)
+	}
+	if m.Quantization != "" {
+		bits = append(bits, m.Quantization)
+	}
+	if len(bits) == 0 {
+		return m.ID
+	}
+	return fmt.Sprintf("%s (%s)", m.ID, strings.Join(bits, ", "))
+}
+
 // lookupLMStudioBaseURLForDiscovery returns the same base URL the
 // chat factory's lookupLMStudioBaseURL would use, but reads only the
 // merged config (no openclaw.Paths needed at the call site here).
-// Defaults match: http://localhost:1234/v1, with the
+// Defaults match: http://localhost:1234/api/v0, with the
 // loopback-in-container rewrite applied.
 func lookupLMStudioBaseURLForDiscovery(merged []byte) string {
-	const defaultURL = "http://localhost:1234/v1"
+	const defaultURL = "http://localhost:1234/api/v0"
 	raw := defaultURL
 	if v := gjson.GetBytes(merged, "models.providers.lmstudio.baseUrl"); v.Exists() && v.Str != "" {
 		raw = v.Str

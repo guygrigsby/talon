@@ -22,7 +22,18 @@ func TestDiscoverLMStudioModels_HappyPath(t *testing.T) {
 		_, _ = w.Write([]byte(`{
 			"object": "list",
 			"data": [
-				{"id": "dolphin-mistral-24b-venice-addition", "object": "model", "owned_by": "user", "max_context_length": 32768, "state": "loaded"}
+				{
+					"id": "dolphin-mistral-24b-venice-addition",
+					"object": "model",
+					"type": "llm",
+					"publisher": "user",
+					"arch": "mistral",
+					"compatibility_type": "mlx",
+					"quantization": "Q4_K_M",
+					"state": "loaded",
+					"max_context_length": 32768,
+					"loaded_context_length": 16384
+				}
 			]
 		}`))
 	}))
@@ -42,8 +53,38 @@ func TestDiscoverLMStudioModels_HappyPath(t *testing.T) {
 	if got[0]["provider"] != "lmstudio" {
 		t.Errorf("provider = %v", got[0]["provider"])
 	}
-	if got[0]["contextWindow"].(int64) != 32768 {
-		t.Errorf("contextWindow = %v", got[0]["contextWindow"])
+	// loaded_context_length wins over max_context_length when both
+	// are present.
+	if got[0]["contextWindow"].(int64) != 16384 {
+		t.Errorf("contextWindow = %v, want loaded_context_length 16384", got[0]["contextWindow"])
+	}
+	// Display name folds in arch + quantization for disambiguation.
+	if name, _ := got[0]["name"].(string); name != "dolphin-mistral-24b-venice-addition (mistral, Q4_K_M)" {
+		t.Errorf("name = %q", name)
+	}
+}
+
+// TestDiscoverLMStudioModels_FiltersNonLLMTypes verifies the picker
+// excludes embeddings / VLM-only / etc. models the user might also
+// have loaded — the chat path can't drive those.
+func TestDiscoverLMStudioModels_FiltersNonLLMTypes(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"data": [
+				{"id":"chat-1","type":"llm","state":"loaded"},
+				{"id":"emb-1","type":"embeddings","state":"loaded"},
+				{"id":"vlm-1","type":"vlm","state":"loaded"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+	merged := []byte(`{"models":{"providers":{"lmstudio":{"baseUrl":"` + srv.URL + `"}}}}`)
+	got, err := discoverLMStudioModels(context.Background(), merged, srv.Client(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0]["id"] != "chat-1" {
+		t.Errorf("expected only the LLM entry, got %+v", got)
 	}
 }
 

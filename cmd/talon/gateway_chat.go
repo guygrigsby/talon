@@ -315,20 +315,29 @@ func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provi
 		server.ErrProviderUnavailable, providerName)
 }
 
-// lookupLMStudioBaseURL returns the LM Studio OpenAI-compatible base
-// URL from the merged config, defaulting to the upstream's standard
-// localhost:1234 endpoint. Looked up per-call so a config edit takes
-// effect on the next chat.send without restart.
+// lookupLMStudioBaseURL returns the LM Studio base URL from the
+// merged config, defaulting to LM Studio's native REST endpoint.
+// Looked up per-call so a config edit takes effect on the next
+// chat.send without restart.
+//
+// We default to /api/v0 (LM Studio's native API) instead of /v1
+// (OpenAI-compat shim). Both speak the OpenAI request/response
+// shape for chat, but /api/v0/models returns richer metadata
+// (architecture, quantization, loaded state, max_context_length)
+// — useful in the picker, and the only path discovery can
+// reliably parse to filter unloaded models. Users running an
+// older LM Studio that only exposes /v1 can override via
+// models.providers.lmstudio.baseUrl.
 //
 // When the gateway is running inside a container, "localhost" /
-// "127.0.0.1" inside the URL refers to the container — but the user
-// almost certainly meant their host machine, where LM Studio is
-// running. We rewrite the host segment to "host.docker.internal" so
-// LM Studio Just Works without per-host configuration. The rewrite
-// only fires when (1) we're in a container AND (2) the URL targets
-// a loopback host. Real LAN/remote URLs pass through.
+// "127.0.0.1" inside the URL refers to the container — but the
+// user almost certainly meant their host machine, where LM Studio
+// is running. We rewrite the host segment to "host.docker.internal"
+// so LM Studio Just Works without per-host configuration. The
+// rewrite only fires when (1) we're in a container AND (2) the URL
+// targets a loopback host. Real LAN/remote URLs pass through.
 func (f *agentProviderFactory) lookupLMStudioBaseURL() string {
-	const defaultURL = "http://localhost:1234/v1"
+	const defaultURL = "http://localhost:1234/api/v0"
 	raw := defaultURL
 	if merged, err := config.MergedBytes(f.paths); err == nil {
 		if v := gjson.GetBytes(merged, "models.providers.lmstudio.baseUrl"); v.Exists() && v.Str != "" {
