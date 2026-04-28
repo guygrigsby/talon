@@ -236,14 +236,28 @@ func TestConfigSchema_ReturnsCachedEnvelope(t *testing.T) {
 	}
 }
 
-func TestConfigSchema_MissingCacheReturnsHelpfulError(t *testing.T) {
+func TestConfigSchema_MissingCacheReturnsPermissiveEnvelope(t *testing.T) {
 	h := NewReadHandler(readFixture(t, `{}`))
-	_, ferr := h.handleConfigSchema(t.Context(), HandlerCtx{}, nil)
-	if ferr == nil {
-		t.Fatal("expected error when cache is missing")
+	res, ferr := h.handleConfigSchema(t.Context(), HandlerCtx{}, nil)
+	if ferr != nil {
+		t.Fatalf("missing cache should fall back, not error: %+v", ferr)
 	}
-	if !strings.Contains(ferr.Message, "schema --refresh") {
-		t.Errorf("error should hint at the refresh command: %q", ferr.Message)
+	env, ok := res.(map[string]any)
+	if !ok {
+		t.Fatalf("expected map envelope, got %T", res)
+	}
+	if env["generatedAt"] == nil {
+		t.Errorf("envelope missing generatedAt: %+v", env)
+	}
+	schema, ok := env["schema"].(map[string]any)
+	if !ok {
+		t.Fatalf("envelope.schema not a map: %+v", env["schema"])
+	}
+	if schema["type"] != "object" {
+		t.Errorf("schema.type = %v, want object", schema["type"])
+	}
+	if schema["additionalProperties"] != true {
+		t.Errorf("permissive schema should set additionalProperties=true: %+v", schema)
 	}
 }
 

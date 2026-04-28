@@ -9,6 +9,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/memory"
@@ -638,10 +639,17 @@ func (h *ReadHandler) handleConfigSchema(ctx context.Context, hc HandlerCtx, _ j
 	raw, err := os.ReadFile(cachePath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, &FrameError{
-				Code:    ErrCodeInternal,
-				Message: fmt.Sprintf("config.schema: cache empty at %s; populate it with `talon config schema --refresh` against an upstream openclaw gateway, or wait for native schema generation (talon-q4m)", cachePath),
-			}
+			// Cache hasn't been populated and we don't yet generate
+			// the schema natively (talon-q4m). The web UI calls
+			// config.schema on every startup, so erroring here means
+			// every page-load shows an error toast. Fall back to a
+			// permissive envelope: a JSON Schema that accepts any
+			// object. The UI's config editor loses field-level
+			// validation hints but the rest of the surface stays
+			// usable. Re-running `talon config schema --refresh`
+			// against an openclaw gateway populates the real
+			// envelope and replaces this stub.
+			return permissiveSchemaEnvelope(), nil
 		}
 		return nil, &FrameError{Code: ErrCodeInternal, Message: "config.schema: read cache: " + err.Error()}
 	}
@@ -651,4 +659,19 @@ func (h *ReadHandler) handleConfigSchema(ctx context.Context, hc HandlerCtx, _ j
 	// Pass the envelope through verbatim so the response is byte-identical
 	// to upstream gateway output.
 	return json.RawMessage(raw), nil
+}
+
+// permissiveSchemaEnvelope returns the fallback envelope for the
+// no-cache path. Shape mirrors what an openclaw gateway would
+// return — generatedAt + schema — so the UI's parsing path stays
+// the same. The schema itself is "any object permitted" so the UI's
+// editor renders the config tree without per-field constraints.
+func permissiveSchemaEnvelope() any {
+	return map[string]any{
+		"generatedAt": time.Now().UTC().Format("2006-01-02T15:04:05Z07:00"),
+		"schema": map[string]any{
+			"type":                 "object",
+			"additionalProperties": true,
+		},
+	}
 }
