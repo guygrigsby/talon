@@ -1,0 +1,31 @@
+# syntax=docker/dockerfile:1
+#
+# Image used by internal/e2e tests. Differs from the production
+# Dockerfile in three ways:
+#   1. Bundles internal/plugin/testplugin so tests have a known plugin
+#      binary at /usr/local/bin/talon-testplugin without needing a
+#      bind-mount.
+#   2. ENTRYPOINT/CMD split so a testcontainers Cmd: override
+#      changes flags without re-templating the whole command.
+#   3. mkdir /tmp/ws as a default workspace, since the chat handler
+#      requires every agent to resolve to a real directory.
+#
+# Image is cached by docker; subsequent test runs only rebuild layers
+# whose source bytes changed (typically zero on a hot loop).
+
+FROM golang:1.26-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/talon ./cmd/talon
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/talon-testplugin ./internal/plugin/testplugin
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates coreutils bash \
+    && mkdir -p /tmp/ws /root/.talon
+COPY --from=build /out/talon /usr/local/bin/talon
+COPY --from=build /out/talon-testplugin /usr/local/bin/talon-testplugin
+EXPOSE 18789
+ENTRYPOINT ["talon"]
+CMD ["gateway", "run", "--bind=lan", "--port=18789", "--auth=none", "--allow-unconfigured"]

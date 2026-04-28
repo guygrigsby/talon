@@ -13,7 +13,7 @@ WEB_DIST ?= ../openclaw/dist/control-ui
 
 GO_SRC := $(shell find cmd internal -name '*.go' 2>/dev/null)
 
-.PHONY: build all install run gateway-run gateway-run-with-ui test vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop proto proto-tools
+.PHONY: build all install run gateway-run gateway-run-with-ui test test-e2e vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop proto proto-tools
 
 build: $(BIN)
 
@@ -36,6 +36,13 @@ gateway-run-with-ui: build web-build
 
 test:
 	$(GO) test ./...
+
+# End-to-end tests boot talon-gateway in a Docker container via
+# testcontainers-go and exercise the full plugin lifecycle. Requires
+# Docker; takes ~20-30s per run cold (image build) or ~5s warm.
+# Build-tagged so `make test` stays fast.
+test-e2e:
+	$(GO) test -tags=e2e -count=1 -timeout=10m ./internal/e2e/...
 
 vet:
 	$(GO) vet ./...
