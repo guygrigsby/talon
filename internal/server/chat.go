@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/guygrigsby/talon/internal/agentcontext"
+	"github.com/guygrigsby/talon/internal/plugin"
 	"github.com/guygrigsby/talon/internal/provider"
 )
 
@@ -529,8 +530,12 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 	var accumulated strings.Builder // visible assistant text across iterations
 
 	// Stash the emit target on ctx so tools (e.g. subagent) can forward
-	// nested events into the same parent stream.
+	// nested events into the same parent stream. Plugin tools get the
+	// agent + run identifiers via plugin.With{Agent,Run}ID so they can
+	// scope behavior per-agent / correlate logs.
 	ctx = withEmitTarget(ctx, emit)
+	ctx = plugin.WithAgentID(ctx, agentID)
+	ctx = plugin.WithRunID(ctx, emit.runID)
 
 	for iter := 0; iter < h.MaxToolIterations; iter++ {
 		history := h.store.Snapshot(storeKey)

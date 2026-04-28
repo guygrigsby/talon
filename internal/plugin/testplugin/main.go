@@ -33,11 +33,32 @@ func (s *stubPlugin) Initialize(ctx context.Context, req *pb.InitializeRequest) 
 			Name:        "testplugin",
 			Version:     "0.1.0",
 			Description: "Integration-test fixture",
+			OffersTools: []*pb.ToolSpec{{
+				Name:             "test-echo",
+				Description:      "Echo the input back as output. Used by integration tests.",
+				ParametersSchema: []byte(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"]}`),
+			}},
 			Needs: []pb.Capability{
 				pb.Capability_CAPABILITY_READ_CONFIG,
 				pb.Capability_CAPABILITY_LIST_AGENTS,
 			},
 		},
+	}, nil
+}
+
+// RunTool implements the test-echo tool. Used by ToolRouter integration
+// tests; just echoes back whatever JSON was passed in so the test can
+// verify the round-trip end-to-end.
+func (s *stubPlugin) RunTool(ctx context.Context, req *pb.RunToolRequest) (*pb.RunToolResponse, error) {
+	if req.GetToolName() != "test-echo" {
+		return &pb.RunToolResponse{
+			Output:  fmt.Sprintf("unknown tool: %q", req.GetToolName()),
+			IsError: true,
+		}, nil
+	}
+	return &pb.RunToolResponse{
+		Output: fmt.Sprintf("echo: %s (agent=%s run=%s)",
+			req.GetArgumentsJson(), req.GetAgentId(), req.GetRunId()),
 	}, nil
 }
 
