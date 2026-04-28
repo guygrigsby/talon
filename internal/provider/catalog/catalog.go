@@ -49,9 +49,10 @@ type Model struct {
 // is a fresh slice on each call so callers can sort/filter without
 // affecting the package state.
 func DefaultCatalog() []Model {
-	out := make([]Model, 0, len(openAI)+len(deepSeek))
+	out := make([]Model, 0, len(openAI)+len(deepSeek)+len(lmStudio))
 	out = append(out, openAI...)
 	out = append(out, deepSeek...)
+	out = append(out, lmStudio...)
 	return out
 }
 
@@ -69,6 +70,20 @@ func ForProvider(providerName string) []Model {
 	return out
 }
 
+// LookupName returns the catalog's display name for a fully-qualified
+// model id ("openai/gpt-4o"). Returns "" when the model isn't in the
+// built-in catalog — callers should fall back to user-config or to
+// the id itself for display. Cheap (linear scan; the catalog has
+// dozens of entries, not thousands), called per agents.list.
+func LookupName(fullID string) string {
+	for _, m := range DefaultCatalog() {
+		if m.Provider+"/"+m.ID == fullID {
+			return m.Name
+		}
+	}
+	return ""
+}
+
 // =============================================================================
 // OpenAI
 // =============================================================================
@@ -81,6 +96,25 @@ func ForProvider(providerName string) []Model {
 // land (talon-578).
 
 var openAI = []Model{
+	// --- 4.1 family ----------------------------------------------------
+	// Released April 2025; 1M context across the whole family. Default
+	// pick for most chat workloads as of 2026.
+	{
+		Provider: "openai", ID: "gpt-4.1",
+		Name: "GPT-4.1", ContextWindow: 1000000,
+		Input: []string{"text", "image"},
+	},
+	{
+		Provider: "openai", ID: "gpt-4.1-mini",
+		Name: "GPT-4.1 mini", ContextWindow: 1000000,
+		Input: []string{"text", "image"},
+	},
+	{
+		Provider: "openai", ID: "gpt-4.1-nano",
+		Name: "GPT-4.1 nano", ContextWindow: 1000000,
+		Input: []string{"text", "image"},
+	},
+
 	// --- 4o family -----------------------------------------------------
 	{
 		Provider: "openai", ID: "gpt-4o",
@@ -90,6 +124,14 @@ var openAI = []Model{
 	{
 		Provider: "openai", ID: "gpt-4o-mini",
 		Name: "GPT-4o mini", ContextWindow: 128000,
+		Input: []string{"text", "image"},
+	},
+	{
+		// Sticky alias OpenAI ships pointing at the latest GPT-4o
+		// snapshot. Useful when you want "best 4o available" without
+		// pinning a date-stamped revision.
+		Provider: "openai", ID: "chatgpt-4o-latest",
+		Name: "ChatGPT-4o (latest)", ContextWindow: 128000,
 		Input: []string{"text", "image"},
 	},
 
@@ -103,6 +145,10 @@ var openAI = []Model{
 		Provider: "openai", ID: "gpt-4",
 		Name: "GPT-4", ContextWindow: 8192,
 	},
+	{
+		Provider: "openai", ID: "gpt-4-32k",
+		Name: "GPT-4 (32k)", ContextWindow: 32768,
+	},
 
 	// --- 3.5 (cheap baseline) -----------------------------------------
 	{
@@ -111,17 +157,36 @@ var openAI = []Model{
 	},
 
 	// --- reasoning (o-series) ------------------------------------------
+	// Reasoning=true → chat handler should suppress unsupported
+	// params like temperature when the per-model capability flags
+	// land (tracked separately).
 	{
 		Provider: "openai", ID: "o1",
 		Name: "o1", ContextWindow: 200000, Reasoning: true,
+		Input: []string{"text", "image"},
 	},
 	{
 		Provider: "openai", ID: "o1-mini",
 		Name: "o1 mini", ContextWindow: 128000, Reasoning: true,
 	},
 	{
+		Provider: "openai", ID: "o1-pro",
+		Name: "o1 pro", ContextWindow: 200000, Reasoning: true,
+		Input: []string{"text", "image"},
+	},
+	{
+		Provider: "openai", ID: "o3",
+		Name: "o3", ContextWindow: 200000, Reasoning: true,
+		Input: []string{"text", "image"},
+	},
+	{
 		Provider: "openai", ID: "o3-mini",
 		Name: "o3 mini", ContextWindow: 200000, Reasoning: true,
+	},
+	{
+		Provider: "openai", ID: "o4-mini",
+		Name: "o4 mini", ContextWindow: 200000, Reasoning: true,
+		Input: []string{"text", "image"},
 	},
 }
 
@@ -137,5 +202,41 @@ var deepSeek = []Model{
 	{
 		Provider: "deepseek", ID: "deepseek-reasoner",
 		Name: "DeepSeek Reasoner", ContextWindow: 64000, Reasoning: true,
+	},
+	{
+		Provider: "deepseek", ID: "deepseek-coder",
+		Name: "DeepSeek Coder", ContextWindow: 16000,
+	},
+}
+
+// =============================================================================
+// LM Studio (local OpenAI-compatible server)
+// =============================================================================
+//
+// Loaded models depend on what the user has running locally — we
+// can't ship an authoritative list. Common picks below give a
+// fresh-install picker something to point at; users override via
+// `models.providers.lmstudio.models[]` when they swap weights.
+//
+// The id field must match LM Studio's "Loaded model" identifier
+// (visible in LM Studio's server tab). LM Studio accepts whatever
+// you load — these are illustrative defaults, not guarantees.
+
+var lmStudio = []Model{
+	{
+		Provider: "lmstudio", ID: "llama-3.1-8b-instruct",
+		Name: "Llama 3.1 8B Instruct (local)", ContextWindow: 128000,
+	},
+	{
+		Provider: "lmstudio", ID: "qwen2.5-7b-instruct",
+		Name: "Qwen 2.5 7B Instruct (local)", ContextWindow: 32768,
+	},
+	{
+		Provider: "lmstudio", ID: "qwen2.5-coder-7b-instruct",
+		Name: "Qwen 2.5 Coder 7B (local)", ContextWindow: 32768,
+	},
+	{
+		Provider: "lmstudio", ID: "mistral-7b-instruct-v0.3",
+		Name: "Mistral 7B Instruct v0.3 (local)", ContextWindow: 32768,
 	},
 }

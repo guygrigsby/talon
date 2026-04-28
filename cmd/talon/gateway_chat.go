@@ -279,6 +279,20 @@ func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provi
 			return nil, fmt.Errorf("deepseek: %w", err)
 		}
 		return deepseek.New(deepseek.Options{APIKey: key}), nil
+	case "lmstudio":
+		// Local LM Studio (or any OpenAI-compatible local server). No
+		// auth needed; we send a placeholder bearer token because the
+		// shared openai package gates on a non-empty APIKey. Base URL
+		// is overrideable via models.providers.lmstudio.baseUrl so
+		// non-default ports / remote LAN servers work without code
+		// changes.
+		baseURL := f.lookupLMStudioBaseURL()
+		return openai.New(openai.Options{
+			APIKey:      "lm-studio", // local server ignores this
+			BaseURL:     baseURL,
+			Name:        "lmstudio",
+			ProviderKey: "lmstudio",
+		}), nil
 	}
 	// No native match — try a plugin offering this provider.
 	if f.host != nil {
@@ -286,6 +300,22 @@ func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provi
 			return plugin.NewPluginProvider(providerName, inst.Client), nil
 		}
 	}
-	return nil, fmt.Errorf("%w: %q (implemented natively: openai, deepseek; no loaded plugin offers it)",
+	return nil, fmt.Errorf("%w: %q (implemented natively: openai, deepseek, lmstudio; no loaded plugin offers it)",
 		server.ErrProviderUnavailable, providerName)
+}
+
+// lookupLMStudioBaseURL returns the LM Studio OpenAI-compatible base
+// URL from the merged config, defaulting to the upstream's standard
+// localhost:1234 endpoint. Looked up per-call so a config edit takes
+// effect on the next chat.send without restart.
+func (f *agentProviderFactory) lookupLMStudioBaseURL() string {
+	const defaultURL = "http://localhost:1234/v1"
+	merged, err := config.MergedBytes(f.paths)
+	if err != nil {
+		return defaultURL
+	}
+	if v := gjson.GetBytes(merged, "models.providers.lmstudio.baseUrl"); v.Exists() && v.Str != "" {
+		return v.Str
+	}
+	return defaultURL
 }

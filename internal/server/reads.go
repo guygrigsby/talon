@@ -84,10 +84,19 @@ func (h *ReadHandler) handleAgentsList(ctx context.Context, hc HandlerCtx, _ jso
 		} else if v := agent.Get("model"); v.Exists() && v.Type == gjson.String && v.Str != "" {
 			primary = v.Str
 		}
-		row["model"] = map[string]any{
+		modelEntry := map[string]any{
 			"primary":   primary,
 			"fallbacks": defaultFallbacks,
 		}
+		// Attach the human-readable name for the resolved primary
+		// model so the UI's "default selection" can render a label
+		// instead of the raw id. Resolution: user-defined name from
+		// models.providers.<X>.models[id==Y].name → catalog name →
+		// (omitted, UI falls back to id).
+		if name := resolveModelDisplayName(merged, primary); name != "" {
+			modelEntry["primaryName"] = name
+		}
+		row["model"] = modelEntry
 		agents = append(agents, row)
 		return true
 	})
@@ -103,6 +112,28 @@ func (h *ReadHandler) handleAgentsList(ctx context.Context, hc HandlerCtx, _ jso
 		"mainKey":   "main",
 		"scope":     "per-sender",
 	}, nil
+}
+
+// resolveModelDisplayName returns a human-readable label for fullID
+// ("openai/gpt-4o"), preferring a user-supplied name from
+// models.providers.<provider>.models[id==X].name and falling back to
+// the built-in catalog. Returns "" when neither has it; the caller
+// omits the field so the UI falls back to displaying the id.
+func resolveModelDisplayName(merged []byte, fullID string) string {
+	if fullID == "" {
+		return ""
+	}
+	prov, id, ok := strings.Cut(fullID, "/")
+	if !ok || prov == "" || id == "" {
+		return ""
+	}
+	// User config wins.
+	q := fmt.Sprintf("models.providers.%s.models.#(id==%q).name", prov, id)
+	if v := gjson.GetBytes(merged, q); v.Exists() && v.Str != "" {
+		return v.Str
+	}
+	// Catalog fallback.
+	return catalog.LookupName(fullID)
 }
 
 func hasAgentID(agents []map[string]any, id string) bool {
