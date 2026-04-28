@@ -168,8 +168,20 @@ func TestHostService_ListModels_ReturnsCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gjson.GetBytes(res.GetRawJson(), "models.0.id").Str != "gpt-5.4-mini" {
-		t.Errorf("first model: %s", res.GetRawJson())
+	// Verify the user-supplied model is present (not necessarily
+	// first; the response now unions a built-in catalog with the
+	// user's models.providers entries and sorts alphabetically).
+	raw := res.GetRawJson()
+	found := false
+	gjson.GetBytes(raw, "models").ForEach(func(_, m gjson.Result) bool {
+		if m.Get("id").Str == "gpt-5.4-mini" {
+			found = true
+			return false
+		}
+		return true
+	})
+	if !found {
+		t.Errorf("user-defined gpt-5.4-mini missing from ListModels: %s", raw)
 	}
 }
 

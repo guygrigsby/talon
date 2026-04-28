@@ -13,6 +13,7 @@ import (
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/memory"
 	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/provider/catalog"
 	"github.com/tidwall/gjson"
 )
 
@@ -131,7 +132,40 @@ func (h *ReadHandler) handleModelsList(ctx context.Context, hc HandlerCtx, _ jso
 		return true
 	})
 
-	var models []map[string]any
+	// rowsByKey lets config-defined entries (later) replace catalog
+	// defaults (first) on the same "<provider>/<id>" pair so users
+	// can override a single field — contextWindow, name — without
+	// re-typing the rest of the row.
+	rowsByKey := map[string]map[string]any{}
+	keyOrder := []string{}
+
+	addRow := func(key string, row map[string]any) {
+		if _, exists := rowsByKey[key]; !exists {
+			keyOrder = append(keyOrder, key)
+		}
+		rowsByKey[key] = row
+	}
+
+	// Built-in catalog first. Provides a sensible default model list
+	// for fresh installs that haven't filled out models.providers.<X>.
+	for _, m := range catalog.DefaultCatalog() {
+		key := m.Provider + "/" + m.ID
+		row := map[string]any{
+			"id":            m.ID,
+			"provider":      m.Provider,
+			"contextWindow": m.ContextWindow,
+			"reasoning":     m.Reasoning,
+		}
+		if m.Name != "" {
+			row["name"] = m.Name
+		}
+		if len(m.Input) > 0 {
+			row["input"] = append([]string(nil), m.Input...)
+		}
+		addRow(key, row)
+	}
+
+	// User config overlays — replace catalog entries on collision.
 	gjson.GetBytes(merged, "models.providers").ForEach(func(provName, prov gjson.Result) bool {
 		providerName := provName.Str
 		prov.Get("models").ForEach(func(_, m gjson.Result) bool {
@@ -159,14 +193,21 @@ func (h *ReadHandler) handleModelsList(ctx context.Context, hc HandlerCtx, _ jso
 			if inputs != nil {
 				row["input"] = inputs
 			}
-			if alias, ok := aliasByKey[key]; ok {
-				row["alias"] = alias
-			}
-			models = append(models, row)
+			addRow(key, row)
 			return true
 		})
 		return true
 	})
+
+	// Apply alias mappings + flatten in insertion order.
+	models := make([]map[string]any, 0, len(keyOrder))
+	for _, k := range keyOrder {
+		row := rowsByKey[k]
+		if alias, ok := aliasByKey[k]; ok {
+			row["alias"] = alias
+		}
+		models = append(models, row)
+	}
 
 	sort.Slice(models, func(i, j int) bool {
 		return models[i]["id"].(string) < models[j]["id"].(string)

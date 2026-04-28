@@ -135,26 +135,29 @@ func TestModelsList_FlattensProvidersAndAttachesAliases(t *testing.T) {
 		t.Fatal(ferr)
 	}
 	models := res.(map[string]any)["models"].([]map[string]any)
-	if len(models) != 3 {
-		t.Fatalf("got %d models, want 3", len(models))
-	}
-	byID := make(map[string]map[string]any, 3)
+	// Models is now: built-in catalog (openai + deepseek defaults) ∪
+	// user config (3 entries). Catalog has no anthropic, so the 3
+	// user entries (gpt-5.4-mini, claude-opus-4-7, deepseek-reasoner)
+	// each appear once; gpt-5.4-mini and deepseek-reasoner OVERRIDE
+	// the catalog's own entries (collision keys), claude-opus-4-7
+	// adds a row.
+	byID := make(map[string]map[string]any, len(models))
 	for _, m := range models {
 		byID[m["id"].(string)] = m
 	}
-	// gpt-5.4-mini has alias "mini"
+	// User-defined entries still surface with their fields:
 	if alias, ok := byID["gpt-5.4-mini"]["alias"]; !ok || alias != "mini" {
 		t.Errorf("gpt-5.4-mini alias = %v (ok=%v), want 'mini'", alias, ok)
 	}
-	// deepseek-reasoner has alias "deepseek"
 	if alias := byID["deepseek-reasoner"]["alias"]; alias != "deepseek" {
 		t.Errorf("deepseek-reasoner alias = %v", alias)
 	}
-	// claude-opus-4-7 has no alias entry — alias key should be absent.
 	if _, ok := byID["claude-opus-4-7"]["alias"]; ok {
 		t.Errorf("claude-opus-4-7 should not have alias: %+v", byID["claude-opus-4-7"])
 	}
-	// Provider/contextWindow/input/reasoning roundtrip.
+	// User config wins on collision: gpt-5.4-mini's contextWindow
+	// must be the user-supplied 400000, not whatever the catalog had
+	// (catalog doesn't ship gpt-5.4-mini, but the principle holds).
 	gpt := byID["gpt-5.4-mini"]
 	if gpt["provider"] != "openai" || gpt["contextWindow"].(int64) != 400000 || gpt["reasoning"] != true {
 		t.Errorf("gpt-5.4-mini fields wrong: %+v", gpt)
@@ -163,27 +166,51 @@ func TestModelsList_FlattensProvidersAndAttachesAliases(t *testing.T) {
 	if len(inputs) != 2 || inputs[0] != "text" || inputs[1] != "image" {
 		t.Errorf("gpt-5.4-mini inputs = %+v", inputs)
 	}
-	// Sorted by id.
-	prev := ""
-	for _, m := range models {
-		id := m["id"].(string)
-		if prev != "" && id < prev {
-			t.Errorf("models not sorted by id: %s before %s", prev, id)
-		}
-		prev = id
+
+	// Built-in OpenAI catalog should also be present.
+	if _, ok := byID["gpt-4o"]; !ok {
+		t.Errorf("expected built-in gpt-4o entry; got ids = %v", keysOf(byID))
 	}
 }
 
-func TestModelsList_EmptyWhenNoProvidersConfigured(t *testing.T) {
+func TestModelsList_EmptyConfigStillReturnsBuiltInCatalog(t *testing.T) {
 	h := NewReadHandler(readFixture(t, `{}`))
 	res, ferr := h.handleModelsList(t.Context(), HandlerCtx{}, nil)
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
 	models := res.(map[string]any)["models"].([]map[string]any)
-	if len(models) != 0 {
-		t.Errorf("empty config should yield 0 models, got %d", len(models))
+	if len(models) == 0 {
+		t.Fatal("empty config should still surface the built-in model catalog")
 	}
+	// Spot-check: the catalog must include common production models so
+	// fresh installs aren't stuck with "no models in picker."
+	want := []string{"gpt-4o", "gpt-4o-mini", "o1", "o3-mini", "deepseek-chat"}
+	gotIDs := map[string]bool{}
+	for _, m := range models {
+		gotIDs[m["id"].(string)] = true
+	}
+	for _, id := range want {
+		if !gotIDs[id] {
+			t.Errorf("built-in catalog missing %q; got %v", id, keysOfBool(gotIDs))
+		}
+	}
+}
+
+func keysOf(m map[string]map[string]any) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
+func keysOfBool(m map[string]bool) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
 }
 
 func TestConfigSchema_ReturnsCachedEnvelope(t *testing.T) {

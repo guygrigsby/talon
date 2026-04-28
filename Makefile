@@ -105,7 +105,7 @@ docker-build:
 # "$$HOME/.openclaw/workspace") resolve transparently inside the
 # container. HOME is propagated for the same reason.
 docker-run: docker-build
-	docker run --rm -it \
+	docker run --rm -i \
 	    --name $(DOCKER_NAME) \
 	    -p $(DOCKER_HOST_PORT):18789 \
 	    -e HOME=$(HOME) \
