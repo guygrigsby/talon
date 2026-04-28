@@ -163,3 +163,29 @@ func TestRewriteLoopback(t *testing.T) {
 		})
 	}
 }
+
+func TestConfigAgentResolver_ToolsEnabledDefaultTrue(t *testing.T) {
+	r := &configAgentResolver{paths: writeFixture(t, `{
+		"agents": {"list": [{"id": "main", "model": "openai/gpt-4o"}]}
+	}`)}
+	got, err := r.ToolsEnabled("main")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got {
+		t.Errorf("default should be true; got false")
+	}
+}
+
+func TestConfigAgentResolver_ToolsEnabledExplicitFalse(t *testing.T) {
+	r := &configAgentResolver{paths: writeFixture(t, `{
+		"agents": {"list": [{"id": "chat", "tools": {"enabled": false}}]}
+	}`)}
+	got, err := r.ToolsEnabled("chat")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got {
+		t.Errorf("expected false for explicit tools.enabled=false")
+	}
+}

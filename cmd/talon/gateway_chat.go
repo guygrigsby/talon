@@ -34,6 +34,24 @@ type configAgentResolver struct {
 	paths openclaw.Paths
 }
 
+// ToolsEnabled implements server.AgentToolsResolver. Reads
+// `agents.list[id==X].tools.enabled` from the merged config; default
+// is true (existing agents continue advertising tools to the model).
+// Set to false on a chat-only agent to suppress tool spec generation
+// + dispatch entirely — useful for personas pinned to local models
+// that don't support function calling.
+func (r *configAgentResolver) ToolsEnabled(agentID string) (bool, error) {
+	merged, err := config.MergedBytes(r.paths)
+	if err != nil {
+		return true, fmt.Errorf("read merged config: %w", err)
+	}
+	v := gjson.GetBytes(merged, fmt.Sprintf(`agents.list.#(id==%q).tools.enabled`, agentID))
+	if !v.Exists() {
+		return true, nil
+	}
+	return v.Bool(), nil
+}
+
 // Workspace implements server.WorkspaceResolver: per-agent workspace,
 // fallback to agents.defaults.workspace.
 func (r *configAgentResolver) Workspace(agentID string) (string, error) {

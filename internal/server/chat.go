@@ -33,6 +33,21 @@ type WorkspaceResolver interface {
 	Workspace(agentID string) (string, error)
 }
 
+// AgentToolsResolver is an OPTIONAL interface a resolver can satisfy
+// to mark some agents as chat-only — no tool runner constructed, no
+// tools advertised to the model. Useful for personas pinned to local
+// models that don't support function calling, or for agents whose
+// purpose is conversation rather than action. Returning false for
+// agentID skips both tool spec generation AND dispatch in
+// runChatLoop.
+//
+// Type-asserted in chat.go; resolvers that don't implement it
+// default to "tools enabled" — no behavior change for existing
+// agents.
+type AgentToolsResolver interface {
+	ToolsEnabled(agentID string) (bool, error)
+}
+
 // ProviderFactory yields the provider that serves a given provider name on
 // behalf of a given agent. The agent context lets the factory locate
 // per-agent credentials (e.g. <openclaw>/agents/<agentId>/agent/auth-profiles.json).
@@ -522,7 +537,13 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 		}
 	}
 	var runner ToolRunner
-	if workspace != "" && h.tools != nil {
+	toolsEnabled := true
+	if tr, ok := h.resolver.(AgentToolsResolver); ok {
+		if v, err := tr.ToolsEnabled(agentID); err == nil {
+			toolsEnabled = v
+		}
+	}
+	if toolsEnabled && workspace != "" && h.tools != nil {
 		runner = h.tools(workspace)
 	}
 	systemPrompt := agentcontext.Build(workspace)
