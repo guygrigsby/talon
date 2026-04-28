@@ -206,12 +206,22 @@ func (s *Session) handshake(ctx context.Context) error {
 }
 
 func (s *Session) handleRequest(ctx context.Context, f *Frame) {
+	start := time.Now()
 	hc := HandlerCtx{Session: s}
 	res, ferr := s.server.registry.Dispatch(ctx, hc, f.Method, f.Params)
+	dur := time.Since(start).Truncate(time.Microsecond)
+	// One line per RPC so the gateway logs become useful for
+	// debugging "why isn't the UI tab working" without needing a
+	// flag. Costs one map lookup + one log call per request; trivial
+	// next to the WS write that follows.
 	if ferr != nil {
+		s.server.logf("rpc method=%s id=%s dur=%s err=%s msg=%s",
+			f.Method, f.ID, dur, ferr.Code, ferr.Message)
 		_ = s.replyError(ctx, f.ID, ferr)
 		return
 	}
+	s.server.logf("rpc method=%s id=%s dur=%s ok",
+		f.Method, f.ID, dur)
 	_ = s.replyOK(ctx, f.ID, res)
 }
 
