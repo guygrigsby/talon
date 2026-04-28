@@ -4,7 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
+	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/openclaw"
@@ -308,14 +311,75 @@ func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provi
 // URL from the merged config, defaulting to the upstream's standard
 // localhost:1234 endpoint. Looked up per-call so a config edit takes
 // effect on the next chat.send without restart.
+//
+// When the gateway is running inside a container, "localhost" /
+// "127.0.0.1" inside the URL refers to the container — but the user
+// almost certainly meant their host machine, where LM Studio is
+// running. We rewrite the host segment to "host.docker.internal" so
+// LM Studio Just Works without per-host configuration. The rewrite
+// only fires when (1) we're in a container AND (2) the URL targets
+// a loopback host. Real LAN/remote URLs pass through.
 func (f *agentProviderFactory) lookupLMStudioBaseURL() string {
 	const defaultURL = "http://localhost:1234/v1"
-	merged, err := config.MergedBytes(f.paths)
+	raw := defaultURL
+	if merged, err := config.MergedBytes(f.paths); err == nil {
+		if v := gjson.GetBytes(merged, "models.providers.lmstudio.baseUrl"); v.Exists() && v.Str != "" {
+			raw = v.Str
+		}
+	}
+	return rewriteLoopbackForContainer(raw)
+}
+
+// inContainerOnce caches the /.dockerenv probe — file presence
+// doesn't change for the life of the process.
+var (
+	inContainerOnce sync.Once
+	inContainer     bool
+)
+
+// runningInContainer reports whether this process is in a Docker /
+// OCI container by checking for the /.dockerenv flag file (Docker)
+// and /run/.containerenv (Podman). Cached after first call.
+func runningInContainer() bool {
+	inContainerOnce.Do(func() {
+		for _, p := range []string{"/.dockerenv", "/run/.containerenv"} {
+			if _, err := os.Stat(p); err == nil {
+				inContainer = true
+				return
+			}
+		}
+	})
+	return inContainer
+}
+
+// rewriteLoopbackForContainer swaps localhost / 127.0.0.1 / ::1 in
+// rawURL for "host.docker.internal" when the process is in a
+// container. No-op outside containers, or when the URL targets a
+// non-loopback host.
+func rewriteLoopbackForContainer(rawURL string) string {
+	return rewriteLoopback(rawURL, runningInContainer())
+}
+
+// rewriteLoopback is the pure function — takes the inContainer bool
+// explicitly so tests can exercise both branches without filesystem
+// stubbing.
+func rewriteLoopback(rawURL string, inContainer bool) string {
+	if !inContainer {
+		return rawURL
+	}
+	u, err := url.Parse(rawURL)
 	if err != nil {
-		return defaultURL
+		return rawURL
 	}
-	if v := gjson.GetBytes(merged, "models.providers.lmstudio.baseUrl"); v.Exists() && v.Str != "" {
-		return v.Str
+	host := u.Hostname()
+	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		return rawURL
 	}
-	return defaultURL
+	port := u.Port()
+	if port != "" {
+		u.Host = "host.docker.internal:" + port
+	} else {
+		u.Host = "host.docker.internal"
+	}
+	return u.String()
 }

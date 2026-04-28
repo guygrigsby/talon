@@ -108,6 +108,7 @@ docker-run: docker-build
 	docker run --rm -i \
 	    --name $(DOCKER_NAME) \
 	    -p $(DOCKER_HOST_PORT):18789 \
+	    --add-host=host.docker.internal:host-gateway \
 	    -e HOME=$(HOME) \
 	    -v $(HOME)/.openclaw:$(HOME)/.openclaw \
 	    -v $(HOME)/.talon:$(HOME)/.talon \

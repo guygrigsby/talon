@@ -103,3 +103,62 @@ func TestConfigAgentResolver_NoModelAndNoDefaultsErrors(t *testing.T) {
 		t.Errorf("expected non-AgentNotFound error for missing model, got %v", err)
 	}
 }
+
+func TestRewriteLoopback(t *testing.T) {
+	cases := []struct {
+		name        string
+		in          string
+		inContainer bool
+		want        string
+	}{
+		{
+			name:        "host: rewrite skipped outside container",
+			in:          "http://localhost:1234/v1",
+			inContainer: false,
+			want:        "http://localhost:1234/v1",
+		},
+		{
+			name:        "container: localhost → host.docker.internal",
+			in:          "http://localhost:1234/v1",
+			inContainer: true,
+			want:        "http://host.docker.internal:1234/v1",
+		},
+		{
+			name:        "container: 127.0.0.1 → host.docker.internal",
+			in:          "http://127.0.0.1:1234/v1",
+			inContainer: true,
+			want:        "http://host.docker.internal:1234/v1",
+		},
+		{
+			name:        "container: ::1 → host.docker.internal",
+			in:          "http://[::1]:1234/v1",
+			inContainer: true,
+			want:        "http://host.docker.internal:1234/v1",
+		},
+		{
+			name:        "container: LAN host left alone",
+			in:          "http://10.0.0.5:1234/v1",
+			inContainer: true,
+			want:        "http://10.0.0.5:1234/v1",
+		},
+		{
+			name:        "container: public hostname left alone",
+			in:          "https://api.example.com/v1",
+			inContainer: true,
+			want:        "https://api.example.com/v1",
+		},
+		{
+			name:        "container: malformed URL passes through unchanged",
+			in:          "://broken",
+			inContainer: true,
+			want:        "://broken",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := rewriteLoopback(tc.in, tc.inContainer); got != tc.want {
+				t.Errorf("got %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
