@@ -1,0 +1,341 @@
+// talon.plugin.v1 is the wire contract every plugin (native or shim-hosted
+// openclaw extension) implements to participate in talon-gateway. Two
+// services:
+//
+//   service Plugin — host calls these on the plugin (ListTools, RunTool,
+//                    StreamCompletion, StartChannel, etc).
+//   service Host   — plugin calls these back on the host (GetConfig,
+//                    ListAgents, RunSubagent, etc). Every Host method has
+//                    an associated Capability the host gates against the
+//                    plugin's effective capability set:
+//                      effective(plugin, agent) =
+//                        manifest.needs ∪ user.grants − user.denies
+//
+// First-cut goals:
+//   - cover the surfaces talon already implements natively (tools,
+//     providers, channels-in/out, memory, subagent, identity)
+//   - keep capabilities a closed enum so the gating layer is simple
+//     reflection over a static map
+//   - leave room to add capabilities and methods without breaking
+//     existing plugins (proto3 forward-compat)
+//
+// Out of scope for this proto: subprocess handshake protocol (port +
+// auth-cookie negotiation), plugin manifest discovery on disk. Those are
+// host-runtime concerns landed in talon-bql.
+
+syntax = "proto3";
+
+package talon.plugin.v1;
+
+option go_package = "github.com/guygrigsby/talon/internal/plugin/pb;pb";
+
+// =============================================================================
+// Capabilities
+// =============================================================================
+
+// Capability is the closed set of host-side resources a plugin may
+// request. The host enforces these at request time against the plugin's
+// effective capability set. CAPABILITY_UNSPECIFIED is reserved as the
+// proto3 zero value.
+enum Capability {
+  CAPABILITY_UNSPECIFIED = 0;
+
+  // --- reads ----------------------------------------------------------
+  CAPABILITY_READ_CONFIG = 1;
+  CAPABILITY_READ_CHAT_HISTORY = 2;
+  CAPABILITY_READ_AGENT_IDENTITY = 3;
+  CAPABILITY_LIST_AGENTS = 4;
+  CAPABILITY_LIST_SESSIONS = 5;
+  CAPABILITY_LIST_MODELS = 6;
+
+  // --- writes ---------------------------------------------------------
+  CAPABILITY_APPEND_MEMORY = 20;
+  CAPABILITY_PATCH_SESSION = 21;
+
+  // --- active actions -------------------------------------------------
+  CAPABILITY_RUN_SUBAGENT = 40;
+  CAPABILITY_SEND_CHANNEL_MESSAGE = 41;
+}
+
+// Manifest is the plugin's self-description. Returned from
+// Plugin.Initialize and stored by the host for the lifetime of the
+// plugin process. The "offers" half describes what the plugin makes
+// available to the host (host calls these methods on the plugin); the
+// "needs" half is the plugin's capability ask.
+message Manifest {
+  string name = 1;
+  string version = 2;
+  string description = 3;
+
+  // What this plugin OFFERS to the host. Empty means the plugin doesn't
+  // implement that surface.
+  repeated ToolSpec offers_tools = 10;
+  repeated ProviderSpec offers_providers = 11;
+  repeated string offers_channels = 12;  // e.g. ["telegram"]
+
+  // What this plugin NEEDS from the host. The host gates each Host-side
+  // method against this list (intersected with user grants/denies).
+  repeated Capability needs = 20;
+}
+
+// =============================================================================
+// Common types — shared between Plugin and Host services
+// =============================================================================
+
+// Role mirrors provider.Role. ROLE_TOOL turns use tool_call_id to point
+// at the originating assistant tool_use.
+enum Role {
+  ROLE_UNSPECIFIED = 0;
+  ROLE_USER = 1;
+  ROLE_ASSISTANT = 2;
+  ROLE_SYSTEM = 3;
+  ROLE_TOOL = 4;
+}
+
+// Message is one turn of conversation passed across the wire. Mirrors
+// provider.Message.
+message Message {
+  Role role = 1;
+  string content = 2;
+  // Assistant turns invoking tools carry these. Empty for plain text turns.
+  repeated ToolCall tool_calls = 3;
+  // ROLE_TOOL only — id of the assistant tool_use this is the result for.
+  string tool_call_id = 4;
+}
+
+message ToolCall {
+  string id = 1;
+  string name = 2;
+  // JSON-encoded arguments. The receiving side decodes per the tool's
+  // ParametersSchema.
+  string arguments_json = 3;
+}
+
+message ToolSpec {
+  string name = 1;
+  string description = 2;
+  // JSON schema bytes (verbatim) — host passes these through to the
+  // provider's tools advertisement, plugin authors don't need a special
+  // protobuf representation for arbitrary JSON schemas.
+  bytes parameters_schema = 3;
+}
+
+message ProviderSpec {
+  // Provider key, must match the ModelID provider segment ("openai",
+  // "deepseek", etc.).
+  string name = 1;
+  // Concrete model ids this provider serves. If empty, the host treats
+  // the provider as accepting any model (caller-validated).
+  repeated string models = 2;
+}
+
+// Delta is one event in a streaming completion. Mirrors provider.Delta;
+// only one oneof variant is set per message.
+message Delta {
+  oneof kind {
+    string text = 1;        // visible token chunk
+    string reasoning = 2;   // hidden reasoning trace (o1/Claude-thinking)
+    Usage usage = 3;        // sent at most once near end-of-stream
+    ToolCall tool_call = 4; // assembled tool call (provider buffers fragments internally)
+    string error = 5;       // mid-stream failure; channel closes after
+  }
+}
+
+message Usage {
+  int32 input_tokens = 1;
+  int32 output_tokens = 2;
+  int32 reasoning_tokens = 3;
+}
+
+// =============================================================================
+// Plugin service — host calls plugin
+// =============================================================================
+
+service Plugin {
+  // Lifecycle. Initialize is the first call after the subprocess
+  // handshake completes; the response carries the manifest.
+  rpc Initialize(InitializeRequest) returns (InitializeResponse);
+  rpc Shutdown(ShutdownRequest) returns (ShutdownResponse);
+
+  // Tool capability.
+  rpc RunTool(RunToolRequest) returns (RunToolResponse);
+
+  // Provider capability — server-streaming completion deltas.
+  rpc StreamCompletion(StreamCompletionRequest) returns (stream Delta);
+
+  // Channel capability. StartChannel returns a server-stream of inbound
+  // messages from the channel (Telegram polling, Slack events, etc.).
+  // SendChannelMessage is the outbound side; idempotency is the
+  // plugin's responsibility.
+  rpc StartChannel(StartChannelRequest) returns (stream IncomingChannelMessage);
+  rpc SendChannelMessage(SendChannelMessageRequest) returns (SendChannelMessageResponse);
+}
+
+message InitializeRequest {
+  // Auth cookie negotiated during the subprocess handshake. Plugins
+  // pass this back on every Host-service call so the host can identify
+  // which manifest to enforce.
+  string auth_cookie = 1;
+  // Address (host:port) of the host's Host-service. Plugins dial this
+  // when they need to call back into talon.
+  string host_address = 2;
+}
+
+message InitializeResponse {
+  Manifest manifest = 1;
+}
+
+message ShutdownRequest {}
+message ShutdownResponse {}
+
+message RunToolRequest {
+  string tool_name = 1;
+  string arguments_json = 2;
+  // The agent context this invocation belongs to. Per-agent grants may
+  // widen or narrow the plugin's authority for this call.
+  string agent_id = 3;
+  // The chat runId — plugins use this to correlate back-channel calls
+  // (e.g. emitting tool-stream progress updates) with the parent run.
+  string run_id = 4;
+}
+
+message RunToolResponse {
+  string output = 1;
+  // Set true when the tool ran but the operation failed (model-visible
+  // error). Transport-level failures should propagate as a gRPC status,
+  // not via this flag.
+  bool is_error = 2;
+}
+
+message StreamCompletionRequest {
+  // Model id WITHOUT the provider prefix (e.g. "gpt-5.4-mini") — the
+  // routing already picked this provider, so the prefix is implicit.
+  string model = 1;
+  string system = 2;
+  repeated Message messages = 3;
+  repeated ToolSpec tools = 4;
+  // Generation options. Optional fields use proto3 explicit-presence so
+  // unset stays distinct from zero.
+  optional double temperature = 10;
+  int32 max_output_tokens = 11;
+}
+
+message StartChannelRequest {
+  string channel_name = 1;
+  // Channel-specific config tree (JSON bytes from the relevant
+  // channels.<name> sub-tree). Plugin parses per its own schema.
+  bytes channel_config = 2;
+}
+
+message IncomingChannelMessage {
+  string channel = 1;
+  string sender_id = 2;     // platform user id
+  string display_name = 3;
+  string room_id = 4;        // group/channel id; empty for direct
+  string text = 5;
+  int64 ts_ms = 6;           // unix-millis the platform reported
+}
+
+message SendChannelMessageRequest {
+  string channel = 1;
+  string room_id = 2;        // target room/sender for direct reply
+  string text = 3;
+}
+
+message SendChannelMessageResponse {
+  bool ok = 1;
+}
+
+// =============================================================================
+// Host service — plugin calls host (capability-gated)
+// =============================================================================
+//
+// Every method below has a Capability requirement enforced server-side.
+// The mapping (method → required capability) lives in Go code; this
+// proto documents the intent in trailing comments. Plugins must include
+// the auth_cookie from InitializeRequest in the gRPC metadata of every
+// outbound call so the host can identify the calling plugin.
+
+service Host {
+  // CAPABILITY_READ_CONFIG
+  rpc GetConfig(GetConfigRequest) returns (GetConfigResponse);
+
+  // CAPABILITY_LIST_AGENTS
+  rpc ListAgents(ListAgentsRequest) returns (ListAgentsResponse);
+
+  // CAPABILITY_READ_AGENT_IDENTITY
+  rpc GetAgentIdentity(GetAgentIdentityRequest) returns (GetAgentIdentityResponse);
+
+  // CAPABILITY_LIST_MODELS
+  rpc ListModels(ListModelsRequest) returns (ListModelsResponse);
+
+  // CAPABILITY_LIST_SESSIONS
+  rpc ListSessions(ListSessionsRequest) returns (ListSessionsResponse);
+
+  // CAPABILITY_READ_CHAT_HISTORY
+  rpc GetChatHistory(GetChatHistoryRequest) returns (GetChatHistoryResponse);
+
+  // CAPABILITY_APPEND_MEMORY
+  rpc AppendMemory(AppendMemoryRequest) returns (AppendMemoryResponse);
+
+  // CAPABILITY_RUN_SUBAGENT
+  rpc RunSubagent(RunSubagentRequest) returns (RunSubagentResponse);
+}
+
+message GetConfigRequest {
+  // Optional dot-path scope (e.g. "channels.telegram"). Empty returns
+  // the whole config the plugin is allowed to see. The host applies
+  // secret redaction the same way config.get does, plus any user-grant
+  // scoping that further narrows access.
+  string path = 1;
+}
+message GetConfigResponse {
+  // JSON value at the requested path. Bytes (not a structured proto)
+  // because config is arbitrary user JSON.
+  bytes raw_json = 1;
+}
+
+message ListAgentsRequest {}
+message ListAgentsResponse {
+  bytes raw_json = 1;  // openclaw-shape envelope (see agents.list)
+}
+
+message GetAgentIdentityRequest {
+  string agent_id = 1;
+}
+message GetAgentIdentityResponse {
+  string agent_id = 1;
+  string name = 2;
+  string emoji = 3;
+  string avatar = 4;
+}
+
+message ListModelsRequest {}
+message ListModelsResponse { bytes raw_json = 1; }
+
+message ListSessionsRequest {}
+message ListSessionsResponse { bytes raw_json = 1; }
+
+message GetChatHistoryRequest {
+  string session_key = 1;
+  int32 limit = 2;  // 0 = no limit
+}
+message GetChatHistoryResponse {
+  bytes raw_json = 1;
+}
+
+message AppendMemoryRequest {
+  string agent_id = 1;
+  string text = 2;
+}
+message AppendMemoryResponse {
+  bool ok = 1;
+}
+
+message RunSubagentRequest {
+  string agent_id = 1;
+  string prompt = 2;
+}
+message RunSubagentResponse {
+  string text = 1;
+}

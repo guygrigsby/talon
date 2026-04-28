@@ -21,11 +21,30 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/talon ./cmd/talon
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/talon-testplugin ./internal/plugin/testplugin
 
+# ---- shim install (Node) -------------------------------------------------
+# openclaw-plugin-host is a Node.js subprocess that loads existing
+# openclaw extensions and bridges them to talon's gRPC Plugin service.
+# Installed into a fixed location so plugins.entries.<name>.cmd can
+# reference it without per-host path probing.
+FROM node:20-alpine AS shim-install
+WORKDIR /shim
+COPY apps/openclaw-plugin-host/package.json ./package.json
+RUN npm install --omit=dev --no-audit --no-fund
+COPY apps/openclaw-plugin-host/ ./
+
+# ---- runtime --------------------------------------------------------------
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates coreutils bash \
+RUN apk add --no-cache ca-certificates coreutils bash nodejs \
     && mkdir -p /tmp/ws /root/.talon
 COPY --from=build /out/talon /usr/local/bin/talon
 COPY --from=build /out/talon-testplugin /usr/local/bin/talon-testplugin
+COPY --from=shim-install /shim /opt/openclaw-plugin-host
+# Stable wrapper so plugins.entries.<name>.cmd can be a single string.
+RUN ln -s /opt/openclaw-plugin-host/bin/openclaw-plugin-host.mjs /usr/local/bin/openclaw-plugin-host
+
+# Test fixtures (openclaw extensions used by internal/e2e tests).
+COPY internal/e2e/fixtures /opt/test-fixtures
+
 EXPOSE 18789
 ENTRYPOINT ["talon"]
 CMD ["gateway", "run", "--bind=lan", "--port=18789", "--auth=none", "--allow-unconfigured"]
