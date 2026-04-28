@@ -13,7 +13,7 @@ WEB_DIST ?= ../openclaw/dist/control-ui
 
 GO_SRC := $(shell find cmd internal -name '*.go' 2>/dev/null)
 
-.PHONY: build all install run gateway-run gateway-run-with-ui test test-e2e vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop proto proto-tools
+.PHONY: build all install run gateway-run gateway-run-with-ui test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop proto proto-tools
 
 build: $(BIN)
 
@@ -43,6 +43,20 @@ test:
 # Build-tagged so `make test` stays fast.
 test-e2e:
 	$(GO) test -tags=e2e -count=1 -timeout=10m ./internal/e2e/...
+
+# Microbenchmarks for the chat hot path, per-turn filesystem I/O,
+# and config merge. Provider-side latency is excluded — every bench
+# uses an in-process stub so we measure ONLY talon's own overhead.
+# Run before/after suspect changes; diff with `benchstat`.
+#
+# Quick sanity loop (< 1s): make bench BENCHTIME=200x
+# Stable numbers   (~30s): make bench BENCHTIME=5s
+BENCHTIME ?= 1s
+bench:
+	$(GO) test -run='^$$' -bench=. -benchmem -benchtime=$(BENCHTIME) \
+	    ./internal/server/... \
+	    ./internal/agentcontext/... \
+	    ./internal/config/...
 
 vet:
 	$(GO) vet ./...
