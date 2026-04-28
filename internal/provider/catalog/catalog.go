@@ -213,30 +213,11 @@ var deepSeek = []Model{
 // LM Studio (local OpenAI-compatible server)
 // =============================================================================
 //
-// Loaded models depend on what the user has running locally — we
-// can't ship an authoritative list. Common picks below give a
-// fresh-install picker something to point at; users override via
-// `models.providers.lmstudio.models[]` when they swap weights.
-//
-// The id field must match LM Studio's "Loaded model" identifier
-// (visible in LM Studio's server tab). LM Studio accepts whatever
-// you load — these are illustrative defaults, not guarantees.
+// LM Studio's catalog is whatever the user has loaded, which we can
+// only know by asking the server itself. The runtime path uses
+// dynamic discovery against /v1/models — see
+// internal/server/reads.go's lmstudio discovery hook. We
+// intentionally ship NO static entries here so a fresh install
+// shows the actual loaded model(s) and not stale placeholders.
 
-var lmStudio = []Model{
-	{
-		Provider: "lmstudio", ID: "llama-3.1-8b-instruct",
-		Name: "Llama 3.1 8B Instruct (local)", ContextWindow: 128000,
-	},
-	{
-		Provider: "lmstudio", ID: "qwen2.5-7b-instruct",
-		Name: "Qwen 2.5 7B Instruct (local)", ContextWindow: 32768,
-	},
-	{
-		Provider: "lmstudio", ID: "qwen2.5-coder-7b-instruct",
-		Name: "Qwen 2.5 Coder 7B (local)", ContextWindow: 32768,
-	},
-	{
-		Provider: "lmstudio", ID: "mistral-7b-instruct-v0.3",
-		Name: "Mistral 7B Instruct v0.3 (local)", ContextWindow: 32768,
-	},
-}
+var lmStudio = []Model{}

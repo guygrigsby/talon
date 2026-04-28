@@ -4,12 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/url"
-	"os"
 	"path/filepath"
-	"sync"
 
 	"github.com/guygrigsby/talon/internal/config"
+	"github.com/guygrigsby/talon/internal/netutil"
 	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/guygrigsby/talon/internal/plugin"
 	"github.com/guygrigsby/talon/internal/provider"
@@ -337,59 +335,5 @@ func (f *agentProviderFactory) lookupLMStudioBaseURL() string {
 			raw = v.Str
 		}
 	}
-	return rewriteLoopbackForContainer(raw)
-}
-
-// inContainerOnce caches the /.dockerenv probe — file presence
-// doesn't change for the life of the process.
-var (
-	inContainerOnce sync.Once
-	inContainer     bool
-)
-
-// runningInContainer reports whether this process is in a Docker /
-// OCI container by checking for the /.dockerenv flag file (Docker)
-// and /run/.containerenv (Podman). Cached after first call.
-func runningInContainer() bool {
-	inContainerOnce.Do(func() {
-		for _, p := range []string{"/.dockerenv", "/run/.containerenv"} {
-			if _, err := os.Stat(p); err == nil {
-				inContainer = true
-				return
-			}
-		}
-	})
-	return inContainer
-}
-
-// rewriteLoopbackForContainer swaps localhost / 127.0.0.1 / ::1 in
-// rawURL for "host.docker.internal" when the process is in a
-// container. No-op outside containers, or when the URL targets a
-// non-loopback host.
-func rewriteLoopbackForContainer(rawURL string) string {
-	return rewriteLoopback(rawURL, runningInContainer())
-}
-
-// rewriteLoopback is the pure function — takes the inContainer bool
-// explicitly so tests can exercise both branches without filesystem
-// stubbing.
-func rewriteLoopback(rawURL string, inContainer bool) string {
-	if !inContainer {
-		return rawURL
-	}
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	host := u.Hostname()
-	if host != "localhost" && host != "127.0.0.1" && host != "::1" {
-		return rawURL
-	}
-	port := u.Port()
-	if port != "" {
-		u.Host = "host.docker.internal:" + port
-	} else {
-		u.Host = "host.docker.internal"
-	}
-	return u.String()
+	return netutil.RewriteLoopbackForContainer(raw)
 }

@@ -230,6 +230,25 @@ func (h *ReadHandler) handleModelsList(ctx context.Context, hc HandlerCtx, _ jso
 		return true
 	})
 
+	// LM Studio discovery: ask the local server what's actually
+	// loaded and merge in any rows we don't already have. Failures
+	// (LM Studio not running, timeout, etc.) degrade silently — the
+	// catalog + user config still surface. Discovery rows lose to
+	// any same-key row already present so user overrides stick.
+	if dm, err := callDiscoverLMStudio(ctx, h.paths, merged); err == nil {
+		for _, row := range dm {
+			id, _ := row["id"].(string)
+			if id == "" {
+				continue
+			}
+			key := "lmstudio/" + id
+			if _, exists := rowsByKey[key]; exists {
+				continue
+			}
+			addRow(key, row)
+		}
+	}
+
 	// Apply alias mappings + flatten in insertion order.
 	models := make([]map[string]any, 0, len(keyOrder))
 	for _, k := range keyOrder {

@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/guygrigsby/talon/internal/netutil"
 	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/guygrigsby/talon/internal/server"
 )
@@ -156,7 +157,7 @@ func TestRewriteLoopback(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := rewriteLoopback(tc.in, tc.inContainer); got != tc.want {
+			if got := netutil.RewriteLoopback(tc.in, tc.inContainer); got != tc.want {
 				t.Errorf("got %q, want %q", got, tc.want)
 			}
 		})
