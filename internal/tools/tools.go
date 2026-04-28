@@ -45,9 +45,9 @@ type Registry struct {
 }
 
 // New constructs a Registry rooted at workspace and registers the default
-// builtin tools (read, write, edit, bash, glob, grep). Pass an empty
-// workspace string to skip the builtins (useful for tests that want to
-// register their own tools).
+// builtin tools (read, write, edit, bash, glob, grep, remember). Pass an
+// empty workspace string to skip the builtins (useful for tests that
+// want to register their own tools).
 func New(workspace string) *Registry {
 	r := &Registry{
 		workspace: workspace,
@@ -63,6 +63,19 @@ func New(workspace string) *Registry {
 	r.Register(&globTool{ws: workspace})
 	r.Register(&grepTool{ws: workspace})
 	r.Register(&rememberTool{ws: workspace})
+	return r
+}
+
+// NewWithSubagent is New plus the subagent tool wired to runner. Use this
+// for the user-facing chat (parent agent); inline subagent invocations
+// should keep using New so an agent can't recurse without bound. The
+// depth-counter in subagent.go is a second line of defense; using New
+// for inline runs keeps the subagent tool out of the registry entirely.
+func NewWithSubagent(workspace string, runner SubagentRunner) *Registry {
+	r := New(workspace)
+	if runner != nil && workspace != "" {
+		r.Register(&subagentTool{runner: runner})
+	}
 	return r
 }
 

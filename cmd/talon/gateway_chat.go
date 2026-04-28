@@ -51,10 +51,11 @@ func (r *configAgentResolver) Workspace(agentID string) (string, error) {
 }
 
 // makeToolRunner is the server.Config.ToolRunnerFor factory: build a
-// fresh tools.Registry per chat.send invocation, scoped to workspace.
-// tools.Registry implements ToolRunner.
-func makeToolRunner(workspace string) server.ToolRunner {
-	return tools.New(workspace)
+// fresh tools.Registry per chat.send, scoped to workspace, with the
+// subagent tool wired to the SubagentRunner the server hands us
+// (ChatHandler implements it via RunInline).
+func makeToolRunner(workspace string, sub server.SubagentRunner) server.ToolRunner {
+	return tools.NewWithSubagent(workspace, sub)
 }
 
 func (r *configAgentResolver) PrimaryModel(agentID string) (provider.ModelID, error) {

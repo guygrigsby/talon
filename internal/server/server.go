@@ -36,8 +36,19 @@ type Config struct {
 	// in chat.send. Leaving either nil keeps chat in text-only mode.
 	WorkspaceResolver WorkspaceResolver
 	// ToolRunnerFor returns a per-agent ToolRunner given a workspace
-	// directory. Called once per chat.send.
-	ToolRunnerFor func(workspace string) ToolRunner
+	// directory and the ChatHandler-backed SubagentRunner. The factory
+	// is called once per chat.send. Pass the runner through to
+	// tools.NewWithSubagent (or equivalent) so the model can delegate to
+	// other agents.
+	ToolRunnerFor func(workspace string, sub SubagentRunner) ToolRunner
+}
+
+// SubagentRunner is the indirection the tool registry uses to dispatch
+// the `subagent` tool back into a parent ChatHandler's multi-turn loop.
+// Same shape as tools.SubagentRunner — Go's structural typing means a
+// ChatHandler value satisfies both with no explicit conversion.
+type SubagentRunner interface {
+	RunInline(ctx context.Context, agentID, message string) (string, error)
 }
 
 type Server struct {
@@ -71,7 +82,13 @@ func New(cfg Config) *Server {
 	if cfg.AgentResolver != nil && cfg.ProviderFactory != nil {
 		ch := NewChatHandler(cfg.AgentResolver, cfg.ProviderFactory, chatStore).WithSessions(sessionStore)
 		if cfg.WorkspaceResolver != nil && cfg.ToolRunnerFor != nil {
-			ch = ch.WithTools(cfg.WorkspaceResolver, cfg.ToolRunnerFor)
+			// Wrap the user's factory so it always sees ch as the
+			// SubagentRunner. ChatHandler implements RunInline, so it
+			// satisfies the interface.
+			factory := func(ws string) ToolRunner {
+				return cfg.ToolRunnerFor(ws, ch)
+			}
+			ch = ch.WithTools(cfg.WorkspaceResolver, factory)
 		}
 		ch.Register(s.registry)
 	}

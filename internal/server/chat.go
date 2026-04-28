@@ -439,10 +439,10 @@ func (h *ChatHandler) handleSend(ctx context.Context, hc HandlerCtx, params json
 	return map[string]any{"runId": runID}, nil
 }
 
-// runStream drives the multi-turn chat loop. Each iteration: build messages
-// from store → stream the provider → handle text + tool calls → if tools
-// were invoked, run them and append results, then re-stream → otherwise
-// emit final and return. Capped at MaxToolIterations to prevent runaway.
+// runStream is the goroutine launched per chat.send. It owns the runs-map
+// cleanup and the StreamTimeout context, then delegates the per-iteration
+// work to runChatLoop. Streaming events fan out via sess; the final text
+// is discarded here (callers like RunInline use runChatLoop directly).
 func (h *ChatHandler) runStream(sess *Session, runID, sessionKey, agentID string, prov provider.Provider, model provider.ModelID, runKey string) {
 	defer func() {
 		if runKey != "" {
@@ -451,13 +451,26 @@ func (h *ChatHandler) runStream(sess *Session, runID, sessionKey, agentID string
 			h.runsMu.Unlock()
 		}
 	}()
-
 	ctx, cancel := context.WithTimeout(context.Background(), h.StreamTimeout)
 	defer cancel()
+	_, _ = h.runChatLoop(ctx, sess, runID, sessionKey, agentID, prov, model)
+}
 
-	// Resolve the agent's workspace once per chat.send. Used for two
-	// purposes: tool execution (when a runner is configured) and system-
-	// prompt composition from the workspace's context markdown files.
+// runChatLoop drives the multi-turn chat loop and returns the accumulated
+// assistant text. Each iteration: build messages from store → stream the
+// provider → handle text + tool calls → if tools were invoked, run them
+// (in parallel when there's more than one) and append results, then
+// re-stream → otherwise emit final and return. Capped at
+// MaxToolIterations to prevent runaway.
+//
+// sess may be nil; emit calls then no-op (PushEvent returns errNoSession,
+// the emitFailures counter trips after a few). That's the path RunInline
+// uses for subagent invocations: silent execution, returns the final text
+// to the caller for inclusion in the parent's tool-result stream.
+func (h *ChatHandler) runChatLoop(ctx context.Context, sess *Session, runID, sessionKey, agentID string, prov provider.Provider, model provider.ModelID) (string, error) {
+	// Resolve the agent's workspace once per loop. Used for two purposes:
+	// tool execution (when a runner is configured) and system-prompt
+	// composition from the workspace's context markdown files.
 	var workspace string
 	if h.workspace != nil {
 		if ws, err := h.workspace.Workspace(agentID); err == nil {
@@ -485,7 +498,7 @@ func (h *ChatHandler) runStream(sess *Session, runID, sessionKey, agentID string
 		if err != nil {
 			seq++
 			_ = h.emitError(sess, runID, sessionKey, seq, "provider", err.Error())
-			return
+			return accumulated.String(), err
 		}
 
 		var iterText strings.Builder
@@ -500,11 +513,12 @@ func (h *ChatHandler) runStream(sess *Session, runID, sessionKey, agentID string
 				seq++
 				if err := h.emitChat(sess, runID, sessionKey, seq, "delta", accumulated.String()); err != nil {
 					emitFailures++
-					if emitFailures >= 3 {
-						cancel()
+					// Inline mode (no session): every emit fails; don't
+					// abort — the caller wants the text.
+					if sess != nil && emitFailures >= 3 {
 						for range deltaCh {
 						}
-						return
+						return accumulated.String(), nil
 					}
 				}
 			case provider.DeltaToolCall:
@@ -514,7 +528,7 @@ func (h *ChatHandler) runStream(sess *Session, runID, sessionKey, agentID string
 			case provider.DeltaError:
 				seq++
 				_ = h.emitError(sess, runID, sessionKey, seq, "provider", d.Err.Error())
-				return
+				return accumulated.String(), d.Err
 			case provider.DeltaUsage:
 				// usage not surfaced over the wire yet.
 			}
@@ -528,7 +542,7 @@ func (h *ChatHandler) runStream(sess *Session, runID, sessionKey, agentID string
 			}
 			seq++
 			_ = h.emitChat(sess, runID, sessionKey, seq, "final", accumulated.String())
-			return
+			return accumulated.String(), nil
 		}
 
 		// Persist the assistant turn that emitted the tool calls so the
@@ -539,32 +553,121 @@ func (h *ChatHandler) runStream(sess *Session, runID, sessionKey, agentID string
 			// Model wanted tools but we have nowhere to run them. Surface
 			// a clear error rather than looping forever.
 			seq++
-			_ = h.emitError(sess, runID, sessionKey, seq, "tool-runner-unavailable",
-				"model invoked tools but no tool runner is configured for this agent")
-			return
+			err := errors.New("model invoked tools but no tool runner is configured for this agent")
+			_ = h.emitError(sess, runID, sessionKey, seq, "tool-runner-unavailable", err.Error())
+			return accumulated.String(), err
 		}
 
-		// Execute each tool call sequentially. tool failures are captured
-		// as the result string so the model can react in the next turn.
-		// Emit "agent" events with stream="tool" so the openclaw web UI's
-		// app-tool-stream renders the call (start) and result (result).
-		for _, tc := range toolCalls {
-			h.emitAgentToolStart(sess, runID, sessionKey, tc.ID, tc.Name, tc.ArgumentsJSON)
-			output, err := runner.Run(ctx, tc.Name, json.RawMessage(tc.ArgumentsJSON))
-			if err != nil {
-				output = "ERROR: " + err.Error()
-			}
-			h.emitAgentToolResult(sess, runID, sessionKey, tc.ID, tc.Name, output)
-			h.store.AppendToolResult(sessionKey, tc.ID, tc.Name, output)
+		// Run all tool calls in parallel (up to maxToolConcurrency at a
+		// time). Outputs are collected in the model's call order so the
+		// next turn's history is deterministic.
+		outputs := h.runToolsParallel(ctx, sess, runID, sessionKey, runner, toolCalls)
+		for i, tc := range toolCalls {
+			h.store.AppendToolResult(sessionKey, tc.ID, tc.Name, outputs[i])
 		}
-		// Loop back to re-stream with updated history.
 	}
 
 	// Iteration cap reached — model kept invoking tools without
 	// converging. Surface as a structured error.
 	seq++
-	_ = h.emitError(sess, runID, sessionKey, seq, "tool-loop-limit",
-		fmt.Sprintf("exceeded %d tool iterations without producing a final reply", h.MaxToolIterations))
+	err := fmt.Errorf("exceeded %d tool iterations without producing a final reply", h.MaxToolIterations)
+	_ = h.emitError(sess, runID, sessionKey, seq, "tool-loop-limit", err.Error())
+	return accumulated.String(), err
+}
+
+// maxToolConcurrency caps how many tool calls run concurrently in a
+// single turn. The model picks 1-N tools per turn; running them in
+// parallel cuts wall-clock for independent calls (especially useful for
+// subagents). 4 is a safe default — high enough to parallelize typical
+// turns, low enough to avoid swamping shared resources or hitting
+// per-provider rate limits.
+const maxToolConcurrency = 4
+
+// runToolsParallel executes toolCalls concurrently and returns outputs in
+// the original call order. Tool errors are captured into the output
+// string so the model can react; this function never returns its own
+// error. Stream events for each call (start/result) fire from the
+// goroutine that runs it.
+func (h *ChatHandler) runToolsParallel(ctx context.Context, sess *Session, runID, sessionKey string, runner ToolRunner, toolCalls []provider.ToolCall) []string {
+	outputs := make([]string, len(toolCalls))
+	if len(toolCalls) == 0 {
+		return outputs
+	}
+	if len(toolCalls) == 1 {
+		// Fast path — no goroutine overhead for the common single-call
+		// case.
+		tc := toolCalls[0]
+		h.emitAgentToolStart(sess, runID, sessionKey, tc.ID, tc.Name, tc.ArgumentsJSON)
+		out, err := runner.Run(ctx, tc.Name, json.RawMessage(tc.ArgumentsJSON))
+		if err != nil {
+			out = "ERROR: " + err.Error()
+		}
+		h.emitAgentToolResult(sess, runID, sessionKey, tc.ID, tc.Name, out)
+		outputs[0] = out
+		return outputs
+	}
+
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxToolConcurrency)
+	for i, tc := range toolCalls {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, tc provider.ToolCall) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			h.emitAgentToolStart(sess, runID, sessionKey, tc.ID, tc.Name, tc.ArgumentsJSON)
+			out, err := runner.Run(ctx, tc.Name, json.RawMessage(tc.ArgumentsJSON))
+			if err != nil {
+				out = "ERROR: " + err.Error()
+			}
+			h.emitAgentToolResult(sess, runID, sessionKey, tc.ID, tc.Name, out)
+			outputs[i] = out
+		}(i, tc)
+	}
+	wg.Wait()
+	return outputs
+}
+
+// RunInline executes a chat.send-like loop without a WS session. Used by
+// the subagent tool: the parent's chat.send is paused on the tool call,
+// this function runs the named agent's full multi-turn loop, and returns
+// the accumulated assistant text for the parent to feed back as a tool
+// result.
+//
+// A fresh sessionKey is allocated under "subagent:<agentId>:<runId>" so
+// the subagent's history doesn't pollute the parent's. Subagent runs
+// don't honor SessionStore model overrides — they always use the target
+// agent's PrimaryModel.
+func (h *ChatHandler) RunInline(parentCtx context.Context, agentID, message string) (string, error) {
+	if h.resolver == nil || h.factory == nil || h.store == nil {
+		return "", errors.New("chat is not wired (no resolver/factory/store)")
+	}
+	if strings.TrimSpace(agentID) == "" || strings.TrimSpace(message) == "" {
+		return "", errors.New("subagent: agentId and message are required")
+	}
+	model, err := h.resolver.PrimaryModel(agentID)
+	if err != nil {
+		return "", fmt.Errorf("subagent resolve: %w", err)
+	}
+	providerName := model.Provider()
+	if providerName == "" {
+		return "", fmt.Errorf("subagent: model %q has no provider segment", model)
+	}
+	prov, err := h.factory.For(providerName, agentID)
+	if err != nil {
+		return "", fmt.Errorf("subagent provider: %w", err)
+	}
+	runID, err := newRunID()
+	if err != nil {
+		return "", err
+	}
+	sessionKey := "subagent:" + agentID + ":" + runID
+
+	h.store.Append(sessionKey, "user", message)
+
+	ctx, cancel := context.WithTimeout(parentCtx, h.StreamTimeout)
+	defer cancel()
+	return h.runChatLoop(ctx, nil, runID, sessionKey, agentID, prov, model)
 }
 
 // messagesFromHistory translates ChatStore rows into provider.Messages,

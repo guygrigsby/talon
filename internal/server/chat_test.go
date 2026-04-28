@@ -846,6 +846,138 @@ func TestBuildToolResultPayload_PassesOutputThrough(t *testing.T) {
 	}
 }
 
+// --- subagent + parallelism (talon-xvw) -----------------------------------
+
+func TestChatHandler_RunInline_FullLoopReturnsFinalText(t *testing.T) {
+	scripted := &scriptedProvider{
+		scripts: [][]provider.Delta{
+			{
+				{Kind: provider.DeltaText, Text: "hello "},
+				{Kind: provider.DeltaText, Text: "from subagent"},
+			},
+		},
+	}
+	store := NewChatStore()
+	h := NewChatHandler(
+		&stubResolver{models: map[string]provider.ModelID{"coding": "openai/gpt-4o-mini"}},
+		&stubFactory{provider: scripted},
+		store,
+	)
+	out, err := h.RunInline(t.Context(), "coding", "do thing")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "hello from subagent" {
+		t.Errorf("got %q, want concatenated text", out)
+	}
+	// Subagent run created its own session under "subagent:coding:<runId>".
+	gotSubagent := false
+	for _, k := range store.Keys() {
+		if strings.HasPrefix(k, "subagent:coding:") {
+			gotSubagent = true
+			break
+		}
+	}
+	if !gotSubagent {
+		t.Errorf("expected a subagent:coding session in store: %v", store.Keys())
+	}
+}
+
+func TestChatHandler_RunInline_RejectsEmptyArgs(t *testing.T) {
+	h := NewChatHandler(&stubResolver{}, &stubFactory{}, NewChatStore())
+	if _, err := h.RunInline(t.Context(), "", "msg"); err == nil {
+		t.Error("expected error for empty agentID")
+	}
+	if _, err := h.RunInline(t.Context(), "coding", ""); err == nil {
+		t.Error("expected error for empty message")
+	}
+}
+
+func TestChatHandler_RunInline_PropagatesProviderError(t *testing.T) {
+	h := NewChatHandler(
+		&stubResolver{err: ErrAgentNotFound},
+		&stubFactory{provider: provider.NewStub("openai", nil)},
+		NewChatStore(),
+	)
+	_, err := h.RunInline(t.Context(), "missing", "x")
+	if err == nil {
+		t.Error("expected error when resolver fails")
+	}
+}
+
+// recordingRunner counts concurrent calls to verify the multi-call path
+// runs them in parallel rather than sequentially.
+type recordingRunner struct {
+	delay     time.Duration
+	mu        sync.Mutex
+	active    int
+	maxActive int
+	calls     int
+}
+
+func (r *recordingRunner) Specs() []provider.ToolSpec {
+	return []provider.ToolSpec{{Name: "wait"}}
+}
+
+func (r *recordingRunner) Run(ctx context.Context, name string, input json.RawMessage) (string, error) {
+	r.mu.Lock()
+	r.active++
+	r.calls++
+	if r.active > r.maxActive {
+		r.maxActive = r.active
+	}
+	r.mu.Unlock()
+	time.Sleep(r.delay)
+	r.mu.Lock()
+	r.active--
+	r.mu.Unlock()
+	return "ok", nil
+}
+
+func TestChatHandler_MultipleToolsRunInParallel(t *testing.T) {
+	// Provider emits 3 tool calls in a single turn; runner takes 50ms
+	// each. Sequential = 150ms minimum, parallel = ~50ms with cap=4.
+	scripted := &scriptedProvider{
+		scripts: [][]provider.Delta{
+			{
+				{Kind: provider.DeltaToolCall, ToolCall: &provider.ToolCall{ID: "c1", Name: "wait", ArgumentsJSON: `{}`}},
+				{Kind: provider.DeltaToolCall, ToolCall: &provider.ToolCall{ID: "c2", Name: "wait", ArgumentsJSON: `{}`}},
+				{Kind: provider.DeltaToolCall, ToolCall: &provider.ToolCall{ID: "c3", Name: "wait", ArgumentsJSON: `{}`}},
+			},
+			// Second call: assistant produces final text.
+			{{Kind: provider.DeltaText, Text: "all done"}},
+		},
+	}
+	runner := &recordingRunner{delay: 50 * time.Millisecond}
+	h := NewChatHandler(
+		&stubResolver{models: map[string]provider.ModelID{"main": "scripted/m"}},
+		&stubFactory{provider: scripted},
+		NewChatStore(),
+	).WithTools(&stubWorkspace{dir: "/tmp/ws"}, func(ws string) ToolRunner { return runner })
+
+	body := []byte(`{"sessionKey":"agent:main:main","message":"go","idempotencyKey":"r-par"}`)
+	start := time.Now()
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	runID := res.(map[string]any)["runId"].(string)
+	waitForRunDone(t, h, runID, "agent:main:main")
+	elapsed := time.Since(start)
+
+	if runner.calls != 3 {
+		t.Errorf("runner ran %d times, want 3", runner.calls)
+	}
+	if runner.maxActive < 2 {
+		t.Errorf("expected at least 2 concurrent runs, max observed = %d", runner.maxActive)
+	}
+	// Wall-clock should be much closer to 50ms than to 150ms; allow
+	// generous slop for CI scheduling jitter.
+	if elapsed > 130*time.Millisecond {
+		t.Errorf("3 parallel calls took %v; sequential would be ~150ms", elapsed)
+	}
+}
+
 func TestErrAgentNotFoundIsExported(t *testing.T) {
 	// Ensure the sentinel is wrappable, so callers can errors.Is on it.
 	wrapped := errors.New("wrap: " + ErrAgentNotFound.Error())

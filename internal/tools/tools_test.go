@@ -284,6 +284,79 @@ func TestRememberTool_RejectsEmptyText(t *testing.T) {
 	}
 }
 
+// --- subagent --------------------------------------------------------------
+
+type stubSubagent struct {
+	calls   []subagentCall
+	output  string
+	err     error
+}
+type subagentCall struct{ AgentID, Prompt string }
+
+func (s *stubSubagent) RunInline(ctx context.Context, agentID, message string) (string, error) {
+	s.calls = append(s.calls, subagentCall{AgentID: agentID, Prompt: message})
+	return s.output, s.err
+}
+
+func TestSubagentTool_DelegatesToRunner(t *testing.T) {
+	sub := &stubSubagent{output: "delegated reply"}
+	r := NewWithSubagent(newWorkspace(t), sub)
+	out, err := r.Run(t.Context(), "subagent", []byte(`{"agentId":"coding","prompt":"fix the bug"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != "delegated reply" {
+		t.Errorf("output = %q", out)
+	}
+	if len(sub.calls) != 1 || sub.calls[0].AgentID != "coding" || sub.calls[0].Prompt != "fix the bug" {
+		t.Errorf("runner saw wrong call: %+v", sub.calls)
+	}
+}
+
+func TestSubagentTool_RejectsMissingFields(t *testing.T) {
+	sub := &stubSubagent{output: "ok"}
+	r := NewWithSubagent(newWorkspace(t), sub)
+	for _, body := range []string{
+		`{}`,
+		`{"agentId":"main"}`,
+		`{"prompt":"hi"}`,
+		`{"agentId":"","prompt":"hi"}`,
+	} {
+		_, err := r.Run(t.Context(), "subagent", []byte(body))
+		if err == nil {
+			t.Errorf("expected rejection for %q", body)
+		}
+	}
+}
+
+func TestSubagentTool_DepthLimit(t *testing.T) {
+	sub := &stubSubagent{output: "ok"}
+	r := NewWithSubagent(newWorkspace(t), sub)
+	ctx := withSubagentDepth(t.Context(), maxSubagentDepth) // already at the cap
+	_, err := r.Run(ctx, "subagent", []byte(`{"agentId":"x","prompt":"y"}`))
+	if err == nil || !strings.Contains(err.Error(), "depth limit") {
+		t.Errorf("expected depth-limit error, got %v", err)
+	}
+}
+
+func TestNewWithSubagent_NilRunnerSkipsTool(t *testing.T) {
+	r := NewWithSubagent(newWorkspace(t), nil)
+	for _, name := range r.Names() {
+		if name == "subagent" {
+			t.Errorf("subagent tool should not register when runner is nil")
+		}
+	}
+}
+
+func TestNewWithSubagent_RegistersSubagentAlongsideBuiltins(t *testing.T) {
+	r := NewWithSubagent(newWorkspace(t), &stubSubagent{output: "ok"})
+	got := r.Names()
+	wantSubset := []string{"bash", "edit", "glob", "grep", "read", "remember", "subagent", "write"}
+	if strings.Join(got, ",") != strings.Join(wantSubset, ",") {
+		t.Errorf("Names() = %v, want %v", got, wantSubset)
+	}
+}
+
 // --- glob ------------------------------------------------------------------
 
 func TestGlobTool_ListsMatches(t *testing.T) {
