@@ -241,6 +241,7 @@ func TestReadHandler_RegisterAddsAll(t *testing.T) {
 	want := map[string]bool{
 		"agents.list":        false,
 		"models.list":        false,
+		"config.get":         false,
 		"config.schema":      false,
 		"agent.identity.get": false,
 		"skills.status":      false,
@@ -393,6 +394,94 @@ func TestAgentIdentityGet_MissingIdentityFileReturnsNull(t *testing.T) {
 	}
 	if res != nil {
 		t.Errorf("expected nil when IDENTITY.md is absent, got %+v", res)
+	}
+}
+
+// --- config.get -----------------------------------------------------------
+
+func TestConfigGet_EnvelopeShapeAndHash(t *testing.T) {
+	body := `{"gateway":{"port":18789}}`
+	h := NewReadHandler(readFixture(t, body))
+	res, ferr := h.handleConfigGet(t.Context(), HandlerCtx{}, nil)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	m := res.(map[string]any)
+	for _, k := range []string{"path", "exists", "raw", "hash", "parsed", "valid", "config", "issues"} {
+		if _, ok := m[k]; !ok {
+			t.Errorf("envelope missing %q: %+v", k, m)
+		}
+	}
+	if !m["valid"].(bool) {
+		t.Errorf("valid should be true for parseable config")
+	}
+	// hash should be a 64-char hex sha256
+	if h := m["hash"].(string); len(h) != 64 {
+		t.Errorf("hash length = %d, want 64", len(h))
+	}
+	// raw should be valid JSON.
+	if !json.Valid([]byte(m["raw"].(string))) {
+		t.Errorf("raw is not valid JSON: %s", m["raw"])
+	}
+}
+
+func TestConfigGet_RedactsKnownSecretLeaves(t *testing.T) {
+	body := `{
+		"gateway": {
+			"port": 18789,
+			"auth": {
+				"mode": "token",
+				"token": "real-secret-token",
+				"password": "real-password"
+			}
+		},
+		"channels": {
+			"telegram": {"enabled": true, "botToken": "telegram-secret"},
+			"slack": {"token": "slack-secret"}
+		},
+		"plugins": {"entries": {"brave": {"config": {"webSearch": {"apiKey": "brave-secret"}}}}},
+		"skills": {"entries": {"openai-whisper-api": {"apiKey": "whisper-secret"}}}
+	}`
+	h := NewReadHandler(readFixture(t, body))
+	res, _ := h.handleConfigGet(t.Context(), HandlerCtx{}, nil)
+	rawBytes := []byte(res.(map[string]any)["raw"].(string))
+
+	for _, secret := range []string{
+		"real-secret-token", "real-password", "telegram-secret", "slack-secret", "brave-secret", "whisper-secret",
+	} {
+		if strings.Contains(string(rawBytes), secret) {
+			t.Errorf("config.get response leaked secret %q", secret)
+		}
+	}
+	if !strings.Contains(string(rawBytes), "***REDACTED***") {
+		t.Errorf("expected ***REDACTED*** marker in output")
+	}
+	// Non-secret values must survive.
+	if !strings.Contains(string(rawBytes), `"port": 18789`) {
+		t.Errorf("non-secret port lost in redaction:\n%s", rawBytes)
+	}
+	if !strings.Contains(string(rawBytes), `"mode": "token"`) {
+		t.Errorf("non-secret mode lost in redaction (mode is enum, not secret):\n%s", rawBytes)
+	}
+}
+
+func TestConfigGet_HashChangesWhenContentChanges(t *testing.T) {
+	h1 := NewReadHandler(readFixture(t, `{"a":1}`))
+	h2 := NewReadHandler(readFixture(t, `{"a":2}`))
+	r1, _ := h1.handleConfigGet(t.Context(), HandlerCtx{}, nil)
+	r2, _ := h2.handleConfigGet(t.Context(), HandlerCtx{}, nil)
+	if r1.(map[string]any)["hash"] == r2.(map[string]any)["hash"] {
+		t.Errorf("hash should differ for different content")
+	}
+}
+
+func TestConfigGet_ExistsReflectsTalonOverlay(t *testing.T) {
+	// readFixture writes the openclaw layer but never the talon overlay,
+	// so exists should be false until something writes ~/.talon/openclaw.json.
+	h := NewReadHandler(readFixture(t, `{"a":1}`))
+	res, _ := h.handleConfigGet(t.Context(), HandlerCtx{}, nil)
+	if res.(map[string]any)["exists"].(bool) {
+		t.Errorf("exists should be false when talon overlay is absent")
 	}
 }
 

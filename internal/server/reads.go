@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -29,11 +31,12 @@ func NewReadHandler(paths openclaw.Paths) *ReadHandler {
 	return &ReadHandler{paths: paths}
 }
 
-// Register wires agents.list, models.list, config.schema,
+// Register wires agents.list, models.list, config.{get,schema},
 // agent.identity.get, skills.status, and memory.append into r.
 func (h *ReadHandler) Register(r *Registry) {
 	r.Register("agents.list", h.handleAgentsList)
 	r.Register("models.list", h.handleModelsList)
+	r.Register("config.get", h.handleConfigGet)
 	r.Register("config.schema", h.handleConfigSchema)
 	r.Register("agent.identity.get", h.handleAgentIdentityGet)
 	r.Register("skills.status", h.handleSkillsStatus)
@@ -443,6 +446,98 @@ func resolveWorkspace(merged []byte, agentID string) string {
 		return v.Str
 	}
 	return ""
+}
+
+// --- config.get ------------------------------------------------------------
+
+// secretLeafKeys is the set of leaf keys whose values get replaced with
+// "***REDACTED***" before config.get returns. We don't have openclaw's
+// schema-driven uiHints to drive redaction, so this is a conservative
+// hardcoded list covering the common openclaw secret-bearing keys
+// (gateway.auth.{token,password}, channels.<x>.{token,botToken,apiKey},
+// plugins.entries.<x>.config..apiKey, skills.entries.<x>.apiKey, etc).
+//
+// False negatives are worse than false positives here — match cautiously
+// and trust the user to grep before sharing config dumps.
+var secretLeafKeys = map[string]bool{
+	"token":     true,
+	"botToken":  true,
+	"password":  true,
+	"apiKey":    true,
+	"secret":    true,
+	"secretKey": true,
+	"clientSecret": true,
+	"refreshToken": true,
+	"accessToken":  true,
+}
+
+const redactedMarker = "***REDACTED***"
+
+// redactSecretsInPlace walks v (typed map[string]any from json.Unmarshal)
+// and replaces any string-valued leaf whose key is in secretLeafKeys.
+// Non-string values at those keys are left alone — the marker only makes
+// sense for strings, and we shouldn't lie about the type.
+func redactSecretsInPlace(v any) {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, val := range x {
+			if secretLeafKeys[k] {
+				if s, ok := val.(string); ok && s != "" {
+					x[k] = redactedMarker
+				}
+				continue
+			}
+			redactSecretsInPlace(val)
+		}
+	case []any:
+		for _, item := range x {
+			redactSecretsInPlace(item)
+		}
+	}
+}
+
+// handleConfigGet returns the merged config in the openclaw ConfigSnapshot
+// envelope shape the UI's controllers/config.ts consumes:
+//
+//	{path, exists, raw, hash, parsed, valid, config, issues}
+//
+// raw is the redacted, re-serialized JSON; parsed and config are the same
+// redacted map. Hash is sha256 of raw — the UI uses it for optimistic-
+// concurrency on writes (config.set, not yet implemented). issues is
+// always [] today; future work adds schema-validation results here.
+func (h *ReadHandler) handleConfigGet(ctx context.Context, hc HandlerCtx, _ json.RawMessage) (any, *FrameError) {
+	merged, err := config.MergedBytes(h.paths)
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "config.get: " + err.Error()}
+	}
+
+	var parsed map[string]any
+	valid := json.Unmarshal(merged, &parsed) == nil
+	if valid {
+		redactSecretsInPlace(parsed)
+	}
+
+	// Re-serialize the redacted view. Pretty-print so the UI's raw editor
+	// is human-readable.
+	rawBytes, err := json.MarshalIndent(parsed, "", "  ")
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "config.get: marshal: " + err.Error()}
+	}
+	hash := sha256.Sum256(rawBytes)
+
+	_, statErr := os.Stat(h.paths.Talon.Config)
+	exists := statErr == nil
+
+	return map[string]any{
+		"path":   h.paths.Talon.Config,
+		"exists": exists,
+		"raw":    string(rawBytes),
+		"hash":   hex.EncodeToString(hash[:]),
+		"parsed": parsed,
+		"valid":  valid,
+		"config": parsed,
+		"issues": []any{},
+	}, nil
 }
 
 // --- config.schema ---------------------------------------------------------

@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -312,6 +313,42 @@ func TestCompat_AgentIdentityGetAcceptsSessionKeyParam(t *testing.T) {
 	raw := jsonOf(t, res)
 	if mustString(t, raw, "name") != "Clawdia" {
 		t.Errorf("name didn't resolve via sessionKey: %s", raw)
+	}
+}
+
+// --- config.get ------------------------------------------------------------
+
+// TestCompat_ConfigGetEnvelope locks the openclaw ConfigSnapshot shape the
+// UI's controllers/config.ts consumes. Drift here breaks every config
+// view (auth, channels, models, plugins, etc).
+func TestCompat_ConfigGetEnvelope(t *testing.T) {
+	h := NewReadHandler(compatReadFixture(t, `{"gateway":{"port":18789,"auth":{"token":"redact-me"}}}`))
+	res, ferr := h.handleConfigGet(context.Background(), HandlerCtx{}, nil)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	raw := jsonOf(t, res)
+	// Required ConfigSnapshot fields per openclaw/ui/src/ui/types.ts.
+	mustString(t, raw, "path")
+	if mustExist(t, raw, "exists").Type != gjson.True && mustExist(t, raw, "exists").Type != gjson.False {
+		t.Errorf("exists must be a bool")
+	}
+	mustString(t, raw, "raw")
+	if h := mustString(t, raw, "hash"); len(h) != 64 {
+		t.Errorf("hash should be a 64-char sha256 hex, got len=%d", len(h))
+	}
+	if !mustExist(t, raw, "valid").Bool() {
+		t.Errorf("valid should be true for a parseable config")
+	}
+	if !mustExist(t, raw, "issues").IsArray() {
+		t.Errorf("issues must be an array")
+	}
+	mustExist(t, raw, "parsed")
+	mustExist(t, raw, "config")
+
+	// Redaction: the secret must not appear anywhere in the response.
+	if strings.Contains(string(raw), "redact-me") {
+		t.Errorf("config.get leaked a secret")
 	}
 }
 
