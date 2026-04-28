@@ -283,15 +283,25 @@ func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provi
 		}
 		return deepseek.New(deepseek.Options{APIKey: key}), nil
 	case "lmstudio":
-		// Local LM Studio (or any OpenAI-compatible local server). No
-		// auth needed; we send a placeholder bearer token because the
-		// shared openai package gates on a non-empty APIKey. Base URL
-		// is overrideable via models.providers.lmstudio.baseUrl so
-		// non-default ports / remote LAN servers work without code
-		// changes.
+		// Local LM Studio (or any OpenAI-compatible local server).
+		// Auth is OPTIONAL: most installs run unauthenticated on
+		// loopback. If the user has set up an "lmstudio:default"
+		// profile in auth-profiles.json (e.g. they're proxying LM
+		// Studio behind nginx with a token), we use that key;
+		// otherwise we send a placeholder the local server ignores.
+		// Base URL is overrideable via
+		// models.providers.lmstudio.baseUrl so non-default ports and
+		// remote LAN servers work without code changes.
+		key, err := openai.LoadProfileKeyOptional(authPath, "lmstudio:default", "lmstudio")
+		if err != nil {
+			return nil, fmt.Errorf("lmstudio: %w", err)
+		}
+		if key == "" {
+			key = "lm-studio" // placeholder — non-empty so the openai package's APIKey gate passes
+		}
 		baseURL := f.lookupLMStudioBaseURL()
 		return openai.New(openai.Options{
-			APIKey:      "lm-studio", // local server ignores this
+			APIKey:      key,
 			BaseURL:     baseURL,
 			Name:        "lmstudio",
 			ProviderKey: "lmstudio",

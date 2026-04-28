@@ -501,3 +501,60 @@ func TestLoadAPIKey_MissingProfile(t *testing.T) {
 	}
 }
 
+
+// --- LoadProfileKeyOptional -------------------------------------------------
+
+func TestLoadProfileKeyOptional_NoFileReturnsEmpty(t *testing.T) {
+	got, err := LoadProfileKeyOptional(filepath.Join(t.TempDir(), "missing.json"), "lmstudio:default", "lmstudio")
+	if err != nil {
+		t.Fatalf("missing file should not error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty for missing file", got)
+	}
+}
+
+func TestLoadProfileKeyOptional_NoProfileReturnsEmpty(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "auth-profiles.json")
+	body := `{"version":1,"profiles":{"openai:default":{"type":"api_key","provider":"openai","key":"sk-real"}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadProfileKeyOptional(path, "lmstudio:default", "lmstudio")
+	if err != nil {
+		t.Fatalf("missing profile should not error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("got %q, want empty for missing profile", got)
+	}
+}
+
+func TestLoadProfileKeyOptional_HappyPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "auth-profiles.json")
+	body := `{"version":1,"profiles":{"lmstudio:default":{"type":"api_key","provider":"lmstudio","key":"k-1"}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadProfileKeyOptional(path, "lmstudio:default", "lmstudio")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "k-1" {
+		t.Errorf("got %q, want k-1", got)
+	}
+}
+
+func TestLoadProfileKeyOptional_MalformedProfileStillErrors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "auth-profiles.json")
+	body := `{"version":1,"profiles":{"lmstudio:default":{"type":"api_key","provider":"lmstudio","key":""}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := LoadProfileKeyOptional(path, "lmstudio:default", "lmstudio")
+	if err == nil || !strings.Contains(err.Error(), "empty key") {
+		t.Errorf("empty-key profile should error, got %v", err)
+	}
+}
