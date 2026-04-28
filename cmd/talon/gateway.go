@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
+	"github.com/guygrigsby/talon/internal/plugin"
 	"github.com/guygrigsby/talon/internal/server"
 	"github.com/spf13/cobra"
 )
@@ -129,6 +130,19 @@ func gatewayRunCmd() *cobra.Command {
 
 			paths := resolvePaths()
 			resolver := &configAgentResolver{paths: paths}
+
+			// Plugin host. Empty hostAddr for now — back-channel
+			// (Host.GetConfig/ListAgents/etc.) isn't served yet, so
+			// tools-only plugins work but plugins that try to call
+			// back will get connection failures. Lifecycle: load
+			// configured plugins from plugins.entries.<name>.cmd
+			// before server.New so the ToolRunnerFor closure sees
+			// them; defer Shutdown so subprocesses exit cleanly on
+			// SIGINT/SIGTERM.
+			pluginHost := plugin.NewHost("")
+			loadConfiguredPlugins(ctx, pluginHost, paths)
+			defer pluginHost.Shutdown()
+
 			srv := server.New(server.Config{
 				Addr:              addr,
 				WebDir:            webDir,
@@ -136,10 +150,12 @@ func gatewayRunCmd() *cobra.Command {
 				AgentResolver:     resolver,
 				ProviderFactory:   &agentProviderFactory{paths: paths},
 				WorkspaceResolver: resolver,
-				ToolRunnerFor:     makeToolRunner,
+				ToolRunnerFor:     newToolRunnerFactory(pluginHost),
 				Paths:             paths,
 			})
-			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai/deepseek, reads=enabled, tools=read/write/edit/bash/glob/grep/remember)", addr, authMode)
+			pluginNames := pluginHost.List()
+			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai/deepseek, reads=enabled, tools=read/write/edit/bash/glob/grep/remember/subagent, plugins=%d)",
+				addr, authMode, len(pluginNames))
 			// Forgettable-URL mitigation: print the deep-link the openclaw
 			// web UI needs after a fresh page load (cache cleared, new
 			// browser, etc). Token is included only when --auth=token; the

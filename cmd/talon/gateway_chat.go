@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"log"
 	"path/filepath"
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/plugin"
 	"github.com/guygrigsby/talon/internal/provider"
 	"github.com/guygrigsby/talon/internal/provider/deepseek"
 	"github.com/guygrigsby/talon/internal/provider/openai"
@@ -50,12 +53,86 @@ func (r *configAgentResolver) Workspace(agentID string) (string, error) {
 	return "", fmt.Errorf("agent %q has no workspace and no agents.defaults.workspace", agentID)
 }
 
-// makeToolRunner is the server.Config.ToolRunnerFor factory: build a
-// fresh tools.Registry per chat.send, scoped to workspace, with the
-// subagent tool wired to the SubagentRunner the server hands us
-// (ChatHandler implements it via RunInline).
-func makeToolRunner(workspace string, sub server.SubagentRunner) server.ToolRunner {
-	return tools.NewWithSubagent(workspace, sub)
+// newToolRunnerFactory returns a ToolRunnerFor closure that wraps the
+// per-workspace base runner (builtins + subagent) in a plugin.ToolRouter
+// when host is non-nil. With host == nil it degrades to the base — same
+// behavior as before plugins existed, kept so test paths and
+// no-plugin gateways stay simple.
+//
+// host is captured by reference; new plugins loaded after this factory
+// is constructed light up automatically because ToolRouter walks
+// host.List() per Specs/Run call.
+func newToolRunnerFactory(host *plugin.Host) func(workspace string, sub server.SubagentRunner) server.ToolRunner {
+	return func(workspace string, sub server.SubagentRunner) server.ToolRunner {
+		base := tools.NewWithSubagent(workspace, sub)
+		if host == nil {
+			return base
+		}
+		return plugin.NewToolRouter(base, host)
+	}
+}
+
+// pluginSpec is one parsed plugins.entries.<name> entry that talon
+// should spawn (enabled=true with a non-empty cmd array).
+type pluginSpec struct {
+	name string
+	cmd  []string
+}
+
+// parsePluginSpecs walks plugins.entries.<name> in the merged config
+// JSON and returns the entries talon should LoadPlugin. Entries
+// without cmd (the openclaw-style enabled flags for native built-in
+// extensions) are silently skipped — those are managed by the runtime
+// they're shipped in, not by this loader. Pure function for testability.
+func parsePluginSpecs(merged []byte) []pluginSpec {
+	var specs []pluginSpec
+	gjson.GetBytes(merged, "plugins.entries").ForEach(func(nameKey, entry gjson.Result) bool {
+		if !entry.Get("enabled").Bool() {
+			return true
+		}
+		cmdResult := entry.Get("cmd")
+		if !cmdResult.IsArray() {
+			return true
+		}
+		var cmd []string
+		cmdResult.ForEach(func(_, v gjson.Result) bool {
+			if v.Type == gjson.String && v.Str != "" {
+				cmd = append(cmd, v.Str)
+			}
+			return true
+		})
+		if len(cmd) == 0 {
+			return true
+		}
+		specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd})
+		return true
+	})
+	return specs
+}
+
+// loadConfiguredPlugins reads the merged config, parses the spawn-able
+// plugin entries, and asks host to LoadPlugin each one. Each load logs
+// one line. Failures don't abort the gateway — they just leave the
+// plugin un-registered (a broken plugin shouldn't take down chat).
+func loadConfiguredPlugins(ctx context.Context, host *plugin.Host, paths openclaw.Paths) {
+	merged, err := config.MergedBytes(paths)
+	if err != nil {
+		log.Printf("plugins: read merged config: %v", err)
+		return
+	}
+	for _, spec := range parsePluginSpecs(merged) {
+		inst, err := host.LoadPlugin(ctx, spec.name, plugin.LoadOptions{Cmd: spec.cmd})
+		if err != nil {
+			log.Printf("plugin %s: load failed: %v", spec.name, err)
+			continue
+		}
+		log.Printf("plugin %s: loaded — tools=%d providers=%d channels=%d",
+			spec.name,
+			len(inst.Manifest.GetOffersTools()),
+			len(inst.Manifest.GetOffersProviders()),
+			len(inst.Manifest.GetOffersChannels()),
+		)
+	}
 }
 
 func (r *configAgentResolver) PrimaryModel(agentID string) (provider.ModelID, error) {
