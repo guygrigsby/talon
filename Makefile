@@ -13,7 +13,7 @@ WEB_DIST ?= ../openclaw/dist/control-ui
 
 GO_SRC := $(shell find cmd internal -name '*.go' 2>/dev/null)
 
-.PHONY: build all install run gateway-run gateway-run-with-ui test vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop
+.PHONY: build all install run gateway-run gateway-run-with-ui test vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop proto proto-tools
 
 build: $(BIN)
 
@@ -94,3 +94,20 @@ docker-run: docker-build
 
 docker-stop:
 	-docker stop $(DOCKER_NAME)
+
+# ---- proto ------------------------------------------------------------
+# Regenerates the gRPC plugin service stubs from the canonical .proto.
+# Requires `protoc` (Homebrew: brew install protobuf) and the Go gen
+# plugins (run `make proto-tools` to install them under $GOBIN).
+PROTO_DIR := internal/plugin/proto
+PROTO_OUT := internal/plugin/pb
+
+proto:
+	protoc --go_out=$(PROTO_OUT) --go_opt=paths=source_relative \
+	       --go-grpc_out=$(PROTO_OUT) --go-grpc_opt=paths=source_relative \
+	       -I$(PROTO_DIR) \
+	       $(PROTO_DIR)/plugin.proto
+
+proto-tools:
+	$(GO) install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+	$(GO) install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
