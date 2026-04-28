@@ -66,8 +66,10 @@ func New(cfg Config) *Server {
 		startedAt: time.Now(),
 		sessions:  make(map[string]*Session),
 	}
+	chatStore := NewChatStore()
+	sessionStore := NewSessionStore()
 	if cfg.AgentResolver != nil && cfg.ProviderFactory != nil {
-		ch := NewChatHandler(cfg.AgentResolver, cfg.ProviderFactory, NewChatStore())
+		ch := NewChatHandler(cfg.AgentResolver, cfg.ProviderFactory, chatStore).WithSessions(sessionStore)
 		if cfg.WorkspaceResolver != nil && cfg.ToolRunnerFor != nil {
 			ch = ch.WithTools(cfg.WorkspaceResolver, cfg.ToolRunnerFor)
 		}
@@ -76,6 +78,7 @@ func New(cfg Config) *Server {
 	if cfg.Paths.Talon.Dir != "" {
 		NewReadHandler(cfg.Paths).Register(s.registry)
 	}
+	NewSessionsHandler(sessionStore, chatStore).Register(s.registry)
 	s.routes()
 	return s
 }

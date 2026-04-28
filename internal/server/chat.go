@@ -130,6 +130,19 @@ func (s *ChatStore) Snapshot(sessionKey string) []ChatMessage {
 	return out
 }
 
+// Keys returns the sessionKeys with at least one stored message. Used by
+// sessions.list to surface chat-only sessions even if they've never been
+// patched.
+func (s *ChatStore) Keys() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, 0, len(s.history))
+	for k := range s.history {
+		out = append(out, k)
+	}
+	return out
+}
+
 // ToolRunner executes a tool by name and returns the rendered result.
 // Implementations are expected to be safe for concurrent use across
 // distinct chat runs.
@@ -146,6 +159,7 @@ type ChatHandler struct {
 	workspace WorkspaceResolver
 	tools     func(workspace string) ToolRunner
 	store     *ChatStore
+	sessions  *SessionStore
 
 	// runs tracks active runs by "sessionKey|idempotencyKey" so a duplicate
 	// chat.send returns the same runId without spawning a second stream.
@@ -184,6 +198,15 @@ func NewChatHandler(resolver AgentResolver, factory ProviderFactory, store *Chat
 func (h *ChatHandler) WithTools(ws WorkspaceResolver, mk func(workspace string) ToolRunner) *ChatHandler {
 	h.workspace = ws
 	h.tools = mk
+	return h
+}
+
+// WithSessions enables per-session UI overrides. When set, runStream
+// consults sessions.Model(sessionKey) before falling back to the agent's
+// PrimaryModel — that's how the UI's chat-model picker actually changes
+// the model that gets queried.
+func (h *ChatHandler) WithSessions(sessions *SessionStore) *ChatHandler {
+	h.sessions = sessions
 	return h
 }
 
@@ -364,9 +387,16 @@ func (h *ChatHandler) handleSend(ctx context.Context, hc HandlerCtx, params json
 	if err != nil {
 		return nil, &FrameError{Code: ErrCodeInternal, Message: "chat.send: resolve agent: " + err.Error()}
 	}
+	// Per-session UI override (sessions.patch model:"...") wins over the
+	// agent default. Without this, the chat-model picker is cosmetic.
+	if h.sessions != nil {
+		if override := h.sessions.Model(p.SessionKey); override != "" {
+			model = provider.ModelID(override)
+		}
+	}
 	providerName := model.Provider()
 	if providerName == "" {
-		return nil, &FrameError{Code: ErrCodeInternal, Message: "chat.send: agent's primary model is missing a provider segment: " + string(model)}
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "chat.send: model is missing a provider segment: " + string(model)}
 	}
 
 	prov, err := h.factory.For(providerName, agentID)
