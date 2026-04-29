@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/guygrigsby/talon/internal/plugin"
 	"github.com/guygrigsby/talon/internal/provider"
 	"github.com/guygrigsby/talon/internal/server"
@@ -174,7 +175,7 @@ func (stubLocal) Specs() []provider.ToolSpec { return []provider.ToolSpec{{Name:
 func (stubLocal) Run(_ any, _ string, _ any) (string, error) { panic("not used") }
 
 func TestNewToolRunnerFactory_NilHostDelegatesToBase(t *testing.T) {
-	factory := newToolRunnerFactory(nil)
+	factory := newToolRunnerFactory(nil, openclaw.Paths{})
 	runner := factory(t.TempDir(), nil)
 	specs := runner.Specs()
 	names := []string{}
@@ -193,7 +194,7 @@ func TestNewToolRunnerFactory_NilHostDelegatesToBase(t *testing.T) {
 
 func TestNewToolRunnerFactory_NonNilHostReturnsRouter(t *testing.T) {
 	host := plugin.NewHost("")
-	factory := newToolRunnerFactory(host)
+	factory := newToolRunnerFactory(host, openclaw.Paths{})
 	runner := factory(t.TempDir(), nil)
 	// Factory should produce a *plugin.ToolRouter when host is non-nil
 	// — even with no plugins loaded yet, the type ensures live-loaded

@@ -152,7 +152,7 @@ func gatewayRunCmd() *cobra.Command {
 				AgentResolver:     resolver,
 				ProviderFactory:   &agentProviderFactory{paths: paths, host: pluginHost},
 				WorkspaceResolver: resolver,
-				ToolRunnerFor:     newToolRunnerFactory(pluginHost),
+				ToolRunnerFor:     newToolRunnerFactory(pluginHost, paths),
 				Paths:             paths,
 			})
 

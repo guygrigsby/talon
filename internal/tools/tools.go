@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/guygrigsby/talon/internal/provider"
 )
 
@@ -75,6 +76,20 @@ func NewWithSubagent(workspace string, runner SubagentRunner) *Registry {
 	r := New(workspace)
 	if runner != nil && workspace != "" {
 		r.Register(&subagentTool{runner: runner})
+	}
+	return r
+}
+
+// NewWithSubagentAndPaths is NewWithSubagent plus the merged-config-aware
+// agents tool. Pass an empty Paths to skip it (used by tests that don't
+// have a real on-disk config layout).
+func NewWithSubagentAndPaths(workspace string, runner SubagentRunner, paths openclaw.Paths) *Registry {
+	r := NewWithSubagent(workspace, runner)
+	if workspace == "" {
+		return r
+	}
+	if paths.Talon.Config != "" || paths.Openclaw.Config != "" {
+		r.Register(NewAgentsTool(paths))
 	}
 	return r
 }

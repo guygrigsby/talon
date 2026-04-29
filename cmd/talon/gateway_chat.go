@@ -73,17 +73,22 @@ func (r *configAgentResolver) Workspace(agentID string) (string, error) {
 }
 
 // newToolRunnerFactory returns a ToolRunnerFor closure that wraps the
-// per-workspace base runner (builtins + subagent) in a plugin.ToolRouter
-// when host is non-nil. With host == nil it degrades to the base — same
-// behavior as before plugins existed, kept so test paths and
-// no-plugin gateways stay simple.
+// per-workspace base runner (builtins + subagent + merged-agents) in a
+// plugin.ToolRouter when host is non-nil. With host == nil it degrades
+// to the base — same behavior as before plugins existed, kept so test
+// paths and no-plugin gateways stay simple.
+//
+// paths is threaded so the `agents` tool can resolve the layered
+// overlay; without it agents only see ~/.openclaw/openclaw.json via
+// the read tool and miss talon-overlay-only entries (e.g. a "chat"
+// persona defined under ~/.talon).
 //
 // host is captured by reference; new plugins loaded after this factory
 // is constructed light up automatically because ToolRouter walks
 // host.List() per Specs/Run call.
-func newToolRunnerFactory(host *plugin.Host) func(workspace string, sub server.SubagentRunner) server.ToolRunner {
+func newToolRunnerFactory(host *plugin.Host, paths openclaw.Paths) func(workspace string, sub server.SubagentRunner) server.ToolRunner {
 	return func(workspace string, sub server.SubagentRunner) server.ToolRunner {
-		base := tools.NewWithSubagent(workspace, sub)
+		base := tools.NewWithSubagentAndPaths(workspace, sub, paths)
 		if host == nil {
 			return base
 		}
