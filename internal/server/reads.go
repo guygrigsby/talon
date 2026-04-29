@@ -37,6 +37,9 @@ func NewReadHandler(paths openclaw.Paths) *ReadHandler {
 // agent.identity.get, skills.status, and memory.append into r.
 func (h *ReadHandler) Register(r *Registry) {
 	r.Register("agents.list", h.handleAgentsList)
+	r.Register("agents.files.list", h.handleAgentsFilesList)
+	r.Register("agents.files.get", h.handleAgentsFilesGet)
+	r.Register("agents.files.set", h.handleAgentsFilesSet)
 	r.Register("models.list", h.handleModelsList)
 	r.Register("config.get", h.handleConfigGet)
 	r.Register("config.schema", h.handleConfigSchema)

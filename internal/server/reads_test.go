@@ -281,6 +281,9 @@ func TestReadHandler_RegisterAddsAll(t *testing.T) {
 	NewReadHandler(readFixture(t, `{}`)).Register(r)
 	want := map[string]bool{
 		"agents.list":        false,
+		"agents.files.list":  false,
+		"agents.files.get":   false,
+		"agents.files.set":   false,
 		"models.list":        false,
 		"config.get":         false,
 		"config.schema":      false,
