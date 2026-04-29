@@ -130,6 +130,7 @@ func New(cfg Config) *Server {
 	if cfg.Paths.Talon.Dir != "" {
 		s.reads = NewReadHandler(cfg.Paths)
 		s.reads.Register(s.registry)
+		NewImagesHandler(cfg.Paths).Register(s.registry)
 	}
 	NewSessionsHandler(sessionStore, chatStore).Register(s.registry)
 	s.routes()
