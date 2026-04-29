@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"path/filepath"
 
 	"github.com/guygrigsby/talon/internal/config"
@@ -288,8 +289,22 @@ type agentProviderFactory struct {
 	host  *plugin.Host // optional; nil disables plugin-served providers
 }
 
+// authProfilePath returns the auth-profiles.json path for agentID using
+// the standard talon layering: talon overlay first (so a talon-only agent
+// like "chat" can carry its own keys under ~/.talon/agents/<id>/), then
+// openclaw layer. The first path that exists wins; if neither exists we
+// return the openclaw path so the existing not-found error shape is
+// preserved for callers like LoadAPIKey that require a real file.
+func (f *agentProviderFactory) authProfilePath(agentID string) string {
+	talonAuth := filepath.Join(f.paths.Talon.AgentDir(agentID), "agent", "auth-profiles.json")
+	if _, err := os.Stat(talonAuth); err == nil {
+		return talonAuth
+	}
+	return filepath.Join(f.paths.Openclaw.AgentDir(agentID), "agent", "auth-profiles.json")
+}
+
 func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provider, error) {
-	authPath := filepath.Join(f.paths.Openclaw.AgentDir(agentID), "agent", "auth-profiles.json")
+	authPath := f.authProfilePath(agentID)
 	switch providerName {
 	case "openai":
 		key, err := openai.LoadAPIKey(authPath, "openai:default")
@@ -305,17 +320,31 @@ func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provi
 		return deepseek.New(deepseek.Options{APIKey: key}), nil
 	case "lmstudio":
 		// Local LM Studio (or any OpenAI-compatible local server).
-		// Auth is OPTIONAL: most installs run unauthenticated on
-		// loopback. If the user has set up an "lmstudio:default"
-		// profile in auth-profiles.json (e.g. they're proxying LM
-		// Studio behind nginx with a token), we use that key;
-		// otherwise we send a placeholder the local server ignores.
-		// Base URL is overrideable via
-		// models.providers.lmstudio.baseUrl so non-default ports and
-		// remote LAN servers work without code changes.
+		// Auth is OPTIONAL for unauthenticated local installs but
+		// REQUIRED when LM Studio is configured to enforce tokens
+		// (newer versions reject placeholder strings as "malformed").
+		//
+		// Resolution order:
+		//   1. per-agent agents/<id>/agent/auth-profiles.json
+		//   2. main agent's profile (LM Studio is a gateway-shared
+		//      local resource — see lmstudio_discovery.go for the
+		//      same fallback used by models.list)
+		//   3. placeholder "lm-studio" — works for unauthenticated
+		//      installs; LM Studio servers with auth enforced will
+		//      reject it with HTTP 401.
+		//
+		// Base URL is overrideable via models.providers.lmstudio.baseUrl
+		// so non-default ports and remote LAN servers work without
+		// code changes.
 		key, err := openai.LoadProfileKeyOptional(authPath, "lmstudio:default", "lmstudio")
 		if err != nil {
 			return nil, fmt.Errorf("lmstudio: %w", err)
+		}
+		if key == "" && agentID != "main" {
+			mainAuth := f.authProfilePath("main")
+			if k, err := openai.LoadProfileKeyOptional(mainAuth, "lmstudio:default", "lmstudio"); err == nil && k != "" {
+				key = k
+			}
 		}
 		if key == "" {
 			key = "lm-studio" // placeholder — non-empty so the openai package's APIKey gate passes
