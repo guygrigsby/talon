@@ -35,7 +35,16 @@ gateway-run-with-ui: build web-build
 	$(BIN) gateway run --web $(WEB_DIST) $(ARGS)
 
 test:
-	$(GO) test ./...
+	@TALON_BENCH=1 $(GO) test -p=1 ./...
+
+# test-fast skips the benchmark regression gate (see internal/benchcheck).
+# Use during tight iteration loops where the ~25s bench step bites.
+# Plain `go test ./...` also skips the gate because parallel package
+# execution under default GOMAXPROCS makes timings flaky — only
+# explicit `make test` (which serializes with -p=1 and sets
+# TALON_BENCH=1) trips the gate.
+test-fast:
+	$(GO) test -short ./...
 
 # End-to-end tests boot talon-gateway in a Docker container via
 # testcontainers-go and exercise the full plugin lifecycle. Requires

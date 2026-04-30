@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Baseline numbers for benchmark regression detection.",
+    "Captured: macOS, Apple Silicon (M-series), Go 1.26, 18 cores.",
+    "Each value is the median of 3 runs at -benchtime=3s.",
+    "",
+    "Tolerance contract: per-package TestBenchmarkRegression fails when",
+    "the AVERAGE ratio across that package's checked benchmarks exceeds",
+    "1 + tolerance_avg_pct/100. Per-bench drift is logged but doesn't",
+    "fail the test alone (jitter washes out over an average).",
+    "",
+    "Runtime escape hatches:",
+    "  - go test -short    : skips regression tests entirely",
+    "  - TALON_BENCH_SKIP=1: ditto (for CI on heterogeneous hardware)",
+    "",
+    "Outlier safeguard: any single bench at 2× baseline DOES fail the",
+    "test individually — that signals a real bug, not jitter.",
+    "",
+    "Regenerate after deliberate changes:",
+    "  go test -bench=. -benchmem -run=^$ -benchtime=3s -count=3 \\",
+    "    ./internal/config/ ./internal/server/ ./internal/agentcontext/",
+    "Take the median ns/op per bench, update the rows here."
+  ],
+  "tolerance_avg_pct": 3.0,
+  "benchmarks": {
+    "BenchmarkMergedBytes_TalonOnly":       {"ns_per_op": 1066,    "allocs_per_op": 2},
+    "BenchmarkMergedBytes_BothLayers":      {"ns_per_op": 2181,    "allocs_per_op": 4},
+    "BenchmarkChatTurn_SingleDelta":        {"ns_per_op": 1770,    "allocs_per_op": 38},
+    "BenchmarkChatTurn_ManyDeltas":         {"ns_per_op": 29217,   "allocs_per_op": 739},
+    "BenchmarkChatTurn_WithToolDispatch":   {"ns_per_op": 15081,   "allocs_per_op": 101},
+    "BenchmarkChatStore_AppendSnapshot":    {"ns_per_op": 521,     "allocs_per_op": 5},
+    "BenchmarkBuild_EmptyDir":              {"ns_per_op": 7910,    "allocs_per_op": 22},
+    "BenchmarkBuild_TypicalWorkspace":      {"ns_per_op": 73343,   "allocs_per_op": 67},
+    "BenchmarkBuild_MemoryHeavy":           {"ns_per_op": 518178,  "allocs_per_op": 504}
+  }
+}
