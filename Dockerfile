@@ -46,7 +46,8 @@ RUN apk add --no-cache \
     git \
     findutils \
     bash \
-    nodejs
+    nodejs \
+    npm
 
 COPY --from=builder /out/talon /usr/local/bin/talon
 COPY --from=shim-install /shim /opt/openclaw-plugin-host
