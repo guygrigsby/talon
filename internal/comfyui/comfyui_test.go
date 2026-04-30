@@ -112,7 +112,7 @@ func TestFetch_ReturnsBytesAndContentType(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	body, ctype, err := New(srv.URL).Fetch(t.Context(), ImageRef{Filename: "out.png", Subfolder: "sub", Type: "output"})
+	body, ctype, err := New(srv.URL).Fetch(t.Context(), ImageRef{Filename: "out.png", Subfolder: "sub", Type: "output"}, "")
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestFetch_ReturnsBytesAndContentType(t *testing.T) {
 }
 
 func TestFetch_RejectsEmptyFilename(t *testing.T) {
-	_, _, err := New("http://example.invalid").Fetch(t.Context(), ImageRef{})
+	_, _, err := New("http://example.invalid").Fetch(t.Context(), ImageRef{}, "")
 	if err == nil || !strings.Contains(err.Error(), "filename is required") {
 		t.Fatalf("expected validation error, got %v", err)
 	}

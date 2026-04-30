@@ -68,7 +68,8 @@ type ComfyUIClient interface {
 	Submit(ctx context.Context, workflow json.RawMessage, clientID string) (*comfyui.SubmitResult, error)
 	Events(ctx context.Context, clientID string) (<-chan comfyui.Event, <-chan error, error)
 	History(ctx context.Context, promptID string) (*comfyui.HistoryEntry, error)
-	Fetch(ctx context.Context, ref comfyui.ImageRef) ([]byte, string, error)
+	HistoryAll(ctx context.Context, max int) ([]comfyui.HistoryListEntry, error)
+	Fetch(ctx context.Context, ref comfyui.ImageRef, preview string) ([]byte, string, error)
 }
 
 // NewImagesHandler returns a handler bound to paths. The default dial
@@ -96,10 +97,11 @@ func (h *ImagesHandler) WithEmit(e func(sess *Session, runID, sessionKey, state 
 	return h
 }
 
-// Register wires images.generate + images.fetch into r.
+// Register wires images.generate + images.fetch + images.list into r.
 func (h *ImagesHandler) Register(r *Registry) {
 	r.Register("images.generate", h.handleGenerate)
 	r.Register("images.fetch", h.handleFetch)
+	r.Register("images.list", h.handleList)
 }
 
 // --- images.generate -------------------------------------------------------
@@ -344,6 +346,10 @@ type imagesFetchParams struct {
 	Filename  string `json:"filename"`
 	Subfolder string `json:"subfolder"`
 	Type      string `json:"type"`
+	// Preview, when non-empty, is forwarded to ComfyUI's /view as
+	// preview=<value> — typically "webp;quality=70" for thumbnail
+	// renders. Falls back to full-resolution PNG when omitted.
+	Preview string `json:"preview"`
 }
 
 func (h *ImagesHandler) handleFetch(_ context.Context, _ HandlerCtx, params json.RawMessage) (any, *FrameError) {
@@ -363,7 +369,7 @@ func (h *ImagesHandler) handleFetch(_ context.Context, _ HandlerCtx, params json
 	defer cancel()
 	body, ctype, err := cli.Fetch(ctx, comfyui.ImageRef{
 		Filename: p.Filename, Subfolder: p.Subfolder, Type: p.Type,
-	})
+	}, p.Preview)
 	if err != nil {
 		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.fetch: " + err.Error()}
 	}
@@ -377,6 +383,62 @@ func (h *ImagesHandler) handleFetch(_ context.Context, _ HandlerCtx, params json
 		"base64":      base64.StdEncoding.EncodeToString(body),
 		"dataUrl":     "data:" + ctype + ";base64," + base64.StdEncoding.EncodeToString(body),
 	}, nil
+}
+
+// --- images.list -----------------------------------------------------------
+
+type imagesListParams struct {
+	Limit int `json:"limit"`
+}
+
+// imagesListItem is the per-image envelope the gallery view consumes.
+// PromptID is included so the UI can group multi-image runs together if
+// the workflow ever evolves to emit them, even though today's default
+// workflow yields one image per prompt.
+type imagesListItem struct {
+	Filename  string `json:"filename"`
+	Subfolder string `json:"subfolder"`
+	Type      string `json:"type"`
+	PromptID  string `json:"promptId"`
+}
+
+func (h *ImagesHandler) handleList(_ context.Context, _ HandlerCtx, params json.RawMessage) (any, *FrameError) {
+	var p imagesListParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.list: " + err.Error()}
+		}
+	}
+	if p.Limit <= 0 || p.Limit > 200 {
+		// 50 is a sensible default for a thumbnail grid; >200 risks
+		// huge payloads even if the UI immediately discards excess.
+		p.Limit = 50
+	}
+	cfg, ferr := h.loadComfyUIConfig()
+	if ferr != nil {
+		return nil, ferr
+	}
+	cli := h.dial(cfg.BaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	entries, err := cli.HistoryAll(ctx, p.Limit)
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.list: " + err.Error()}
+	}
+	var items []imagesListItem
+	for _, e := range entries {
+		for _, out := range e.Entry.Outputs {
+			for _, ref := range out.Images {
+				items = append(items, imagesListItem{
+					Filename:  ref.Filename,
+					Subfolder: ref.Subfolder,
+					Type:      ref.Type,
+					PromptID:  e.PromptID,
+				})
+			}
+		}
+	}
+	return map[string]any{"images": items}, nil
 }
 
 // --- config + workflow loading --------------------------------------------

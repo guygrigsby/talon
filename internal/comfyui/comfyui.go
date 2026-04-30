@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/coder/websocket"
@@ -196,6 +197,49 @@ type HistoryStatus struct {
 	Completed bool   `json:"completed"`
 }
 
+// HistoryListEntry pairs a prompt id with its post-run record. Used by
+// HistoryAll to surface gallery-style listings without losing the id
+// (the keyed map at /history) the UI needs to associate refs back to
+// the run that produced them.
+type HistoryListEntry struct {
+	PromptID string
+	Entry    HistoryEntry
+}
+
+// HistoryAll fetches up to max recent records from /history. ComfyUI's
+// history is in-memory and resets on server restart; pre-restart runs
+// are not returned. The order matches ComfyUI's response order
+// (newest-first in current versions, but callers should not rely on
+// that and re-sort by their own criteria if needed).
+func (c *Client) HistoryAll(ctx context.Context, max int) ([]HistoryListEntry, error) {
+	u := c.BaseURL + "/history"
+	if max > 0 {
+		u += "?max_items=" + url.QueryEscape(itoa(max))
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return nil, fmt.Errorf("comfyui history list: build request: %w", err)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("comfyui history list: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("comfyui history list: http %d: %s", resp.StatusCode, truncate(string(raw), 256))
+	}
+	var envelope map[string]HistoryEntry
+	if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
+		return nil, fmt.Errorf("comfyui history list: decode: %w", err)
+	}
+	out := make([]HistoryListEntry, 0, len(envelope))
+	for id, entry := range envelope {
+		out = append(out, HistoryListEntry{PromptID: id, Entry: entry})
+	}
+	return out, nil
+}
+
 // History fetches the post-run record for promptID. While the run is
 // in flight ComfyUI returns either an empty object or omits the entry;
 // we return (nil, nil) in those cases so callers can poll without
@@ -227,8 +271,11 @@ func (c *Client) History(ctx context.Context, promptID string) (*HistoryEntry, e
 
 // Fetch downloads the image bytes addressed by ref. Returns the bytes
 // and the response Content-Type so the caller can pass it through to
-// the browser without sniffing.
-func (c *Client) Fetch(ctx context.Context, ref ImageRef) ([]byte, string, error) {
+// the browser without sniffing. When preview is non-empty it's passed
+// through as ComfyUI's `preview=<format>;quality=<n>` query param —
+// useful for thumbnail-sized variants in gallery views (e.g.
+// "webp;quality=70" runs ~10× smaller than the full PNG).
+func (c *Client) Fetch(ctx context.Context, ref ImageRef, preview string) ([]byte, string, error) {
 	if ref.Filename == "" {
 		return nil, "", fmt.Errorf("comfyui fetch: filename is required")
 	}
@@ -239,6 +286,9 @@ func (c *Client) Fetch(ctx context.Context, ref ImageRef) ([]byte, string, error
 	}
 	if ref.Type != "" {
 		q.Set("type", ref.Type)
+	}
+	if preview != "" {
+		q.Set("preview", preview)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/view?"+q.Encode(), nil)
 	if err != nil {
@@ -271,6 +321,8 @@ func httpToWS(s string) (string, error) {
 		return "", fmt.Errorf("base URL must start with http:// or https://: %q", s)
 	}
 }
+
+func itoa(n int) string { return strconv.Itoa(n) }
 
 func truncate(s string, n int) string {
 	if len(s) <= n {

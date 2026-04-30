@@ -193,10 +193,11 @@ func TestImagesFetch_RejectsMissingFilename(t *testing.T) {
 // --- handler happy path with stub client + captured events ----------------
 
 type stubComfyUI struct {
-	submit  func(ctx context.Context, w json.RawMessage, cid string) (*comfyui.SubmitResult, error)
-	events  func(ctx context.Context, cid string) (<-chan comfyui.Event, <-chan error, error)
-	history func(ctx context.Context, pid string) (*comfyui.HistoryEntry, error)
-	fetch   func(ctx context.Context, ref comfyui.ImageRef) ([]byte, string, error)
+	submit     func(ctx context.Context, w json.RawMessage, cid string) (*comfyui.SubmitResult, error)
+	events     func(ctx context.Context, cid string) (<-chan comfyui.Event, <-chan error, error)
+	history    func(ctx context.Context, pid string) (*comfyui.HistoryEntry, error)
+	historyAll func(ctx context.Context, max int) ([]comfyui.HistoryListEntry, error)
+	fetch      func(ctx context.Context, ref comfyui.ImageRef, preview string) ([]byte, string, error)
 }
 
 func (s *stubComfyUI) Submit(ctx context.Context, w json.RawMessage, cid string) (*comfyui.SubmitResult, error) {
@@ -208,8 +209,14 @@ func (s *stubComfyUI) Events(ctx context.Context, cid string) (<-chan comfyui.Ev
 func (s *stubComfyUI) History(ctx context.Context, pid string) (*comfyui.HistoryEntry, error) {
 	return s.history(ctx, pid)
 }
-func (s *stubComfyUI) Fetch(ctx context.Context, ref comfyui.ImageRef) ([]byte, string, error) {
-	return s.fetch(ctx, ref)
+func (s *stubComfyUI) HistoryAll(ctx context.Context, max int) ([]comfyui.HistoryListEntry, error) {
+	if s.historyAll == nil {
+		return nil, nil
+	}
+	return s.historyAll(ctx, max)
+}
+func (s *stubComfyUI) Fetch(ctx context.Context, ref comfyui.ImageRef, preview string) ([]byte, string, error) {
+	return s.fetch(ctx, ref, preview)
 }
 
 type capturedEvent struct {
@@ -402,6 +409,77 @@ func TestImagesGenerate_BailsAfterRepeatedEmitFailures(t *testing.T) {
 	}
 }
 
+// --- images.list -----------------------------------------------------------
+
+func TestImagesList_FlattensHistoryToImageItems(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	_ = os.WriteFile(paths.Talon.Config, []byte(`{"images":{"providers":{"comfyui":{"workflow":{"promptNodeId":"6"}}}}}`), 0o600)
+
+	stub := &stubComfyUI{
+		historyAll: func(_ context.Context, max int) ([]comfyui.HistoryListEntry, error) {
+			if max != 50 {
+				t.Errorf("default limit should be 50, got %d", max)
+			}
+			return []comfyui.HistoryListEntry{
+				{
+					PromptID: "p-1",
+					Entry: comfyui.HistoryEntry{
+						Outputs: map[string]comfyui.NodeOutput{
+							"9": {Images: []comfyui.ImageRef{
+								{Filename: "a.png", Type: "output"},
+								{Filename: "b.png", Type: "output"},
+							}},
+						},
+					},
+				},
+				{
+					PromptID: "p-2",
+					Entry: comfyui.HistoryEntry{
+						Outputs: map[string]comfyui.NodeOutput{
+							"9": {Images: []comfyui.ImageRef{{Filename: "c.png", Type: "output"}}},
+						},
+					},
+				},
+			}, nil
+		},
+	}
+	h := NewImagesHandler(paths).WithDial(func(string) ComfyUIClient { return stub })
+	res, ferr := h.handleList(t.Context(), HandlerCtx{}, []byte(`{}`))
+	if ferr != nil {
+		t.Fatalf("list: %+v", ferr)
+	}
+	images := res.(map[string]any)["images"].([]imagesListItem)
+	if len(images) != 3 {
+		t.Fatalf("got %d items, want 3", len(images))
+	}
+	// Group all items by prompt id and assert each filename appears once.
+	byPrompt := map[string][]string{}
+	for _, item := range images {
+		byPrompt[item.PromptID] = append(byPrompt[item.PromptID], item.Filename)
+	}
+	if len(byPrompt["p-1"]) != 2 || len(byPrompt["p-2"]) != 1 {
+		t.Fatalf("prompt grouping wrong: %+v", byPrompt)
+	}
+}
+
+func TestImagesList_RespectsLimit(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	_ = os.WriteFile(paths.Talon.Config, []byte(`{"images":{"providers":{"comfyui":{"workflow":{"promptNodeId":"6"}}}}}`), 0o600)
+
+	got := 0
+	stub := &stubComfyUI{
+		historyAll: func(_ context.Context, max int) ([]comfyui.HistoryListEntry, error) {
+			got = max
+			return nil, nil
+		},
+	}
+	h := NewImagesHandler(paths).WithDial(func(string) ComfyUIClient { return stub })
+	_, _ = h.handleList(t.Context(), HandlerCtx{}, []byte(`{"limit":12}`))
+	if got != 12 {
+		t.Errorf("limit pass-through: got %d, want 12", got)
+	}
+}
+
 // --- images.fetch ----------------------------------------------------------
 
 func TestImagesFetch_ReturnsBase64AndDataURL(t *testing.T) {
@@ -409,7 +487,7 @@ func TestImagesFetch_ReturnsBase64AndDataURL(t *testing.T) {
 	_ = os.WriteFile(paths.Talon.Config, []byte(`{"images":{"providers":{"comfyui":{"workflow":{"promptNodeId":"6"}}}}}`), 0o600)
 
 	stub := &stubComfyUI{
-		fetch: func(_ context.Context, ref comfyui.ImageRef) ([]byte, string, error) {
+		fetch: func(_ context.Context, ref comfyui.ImageRef, _ string) ([]byte, string, error) {
 			if ref.Filename != "out.png" || ref.Type != "output" {
 				return nil, "", fmt.Errorf("unexpected ref: %+v", ref)
 			}
