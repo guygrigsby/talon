@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
@@ -58,6 +59,17 @@ func main() {
 	root.AddCommand(statusCmd())
 	root.AddCommand(uiCmd())
 
+	// closeSharedRPC is wired as the post-run hook so any RPC client
+	// the command branches lazily opened gets its WS shut cleanly
+	// regardless of success vs error path. Cobra fires
+	// PersistentPostRunE only on RunE-style commands; defer covers
+	// the rest (and is idempotent).
+	root.PersistentPostRunE = func(*cobra.Command, []string) error {
+		closeSharedRPC()
+		return nil
+	}
+	defer closeSharedRPC()
+
 	if err := root.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, "talon:", err)
 		os.Exit(1)
@@ -74,8 +86,68 @@ func versionCmd() *cobra.Command {
 	}
 }
 
+// dialFn is the dialer the rest of the CLI uses. Indirected through
+// a package-level var so tests can substitute a stub without spinning
+// up a real WS server.
+var dialFn = dial
+
 func dial(ctx context.Context) (*gateway.Client, *config.Config, error) {
 	return dialWith(ctx, "", "")
+}
+
+// rpcConn is the shared RPC connection lazily-opened by sharedRPC()
+// and reused for every subsequent runRPC in the same process.
+//
+// Why share it at all: the WS handshake is a connect-challenge
+// round-trip per dial, ~2× the cost of a single RPC. Commands that
+// fire a single RPC see no benefit, but multi-RPC commands and the
+// future interactive REPL (talon-yct) save the per-call handshake.
+//
+// Lifecycle: opened on first sharedRPC() call, kept alive until
+// closeSharedRPC() runs from cobra's PersistentPostRunE in main().
+// dialOnce ensures concurrent first-callers don't race-dial; once
+// rpcConn.cli is non-nil we skip the lock entirely on the hot path.
+var rpcConn struct {
+	mu      sync.Mutex
+	cli     *gateway.Client
+	cfg     *config.Config
+	dialErr error
+	dialed  bool
+	// dialCount is exposed for tests; ordinary code reads neither
+	// the field nor sharedRPC's caching state.
+	dialCount int
+}
+
+func sharedRPC(ctx context.Context) (*gateway.Client, *config.Config, error) {
+	rpcConn.mu.Lock()
+	defer rpcConn.mu.Unlock()
+	if rpcConn.dialed {
+		return rpcConn.cli, rpcConn.cfg, rpcConn.dialErr
+	}
+	cli, cfg, err := dialFn(ctx)
+	rpcConn.dialed = true
+	rpcConn.dialCount++
+	rpcConn.cli = cli
+	rpcConn.cfg = cfg
+	rpcConn.dialErr = err
+	return cli, cfg, err
+}
+
+// closeSharedRPC tears down the shared RPC connection if one was
+// opened. Idempotent — safe to call from both the cobra
+// post-run hook and the deferred fallback in main().
+func closeSharedRPC() {
+	rpcConn.mu.Lock()
+	defer rpcConn.mu.Unlock()
+	if rpcConn.cli != nil {
+		_ = rpcConn.cli.Close()
+	}
+	rpcConn.cli = nil
+	rpcConn.cfg = nil
+	rpcConn.dialErr = nil
+	rpcConn.dialed = false
+	// dialCount is left intact so tests can introspect the cumulative
+	// open count across a sequence of calls within one test.
 }
 
 func dialWith(ctx context.Context, urlOverride, tokenOverride string) (*gateway.Client, *config.Config, error) {
@@ -99,14 +171,19 @@ func dialWith(ctx context.Context, urlOverride, tokenOverride string) (*gateway.
 }
 
 func runRPC(method string, params any) (json.RawMessage, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	cli, _, err := dial(ctx)
+	// dialCtx caps the connect handshake; rpcCtx is the per-call
+	// budget. Splitting them lets the cached connection outlive any
+	// single RPC's deadline without holding the WS open beyond the
+	// process exit (closeSharedRPC handles that).
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer dialCancel()
+	cli, _, err := sharedRPC(dialCtx)
 	if err != nil {
 		return nil, err
 	}
-	defer cli.Close()
-	return cli.Request(ctx, method, params)
+	rpcCtx, rpcCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer rpcCancel()
+	return cli.Request(rpcCtx, method, params)
 }
 
 // emit prints payload as 2-space-indented JSON. Used as the default for
