@@ -97,11 +97,12 @@ func (h *ImagesHandler) WithEmit(e func(sess *Session, runID, sessionKey, state 
 	return h
 }
 
-// Register wires images.generate + images.fetch + images.list into r.
+// Register wires the images.* RPCs into r.
 func (h *ImagesHandler) Register(r *Registry) {
 	r.Register("images.generate", h.handleGenerate)
 	r.Register("images.fetch", h.handleFetch)
 	r.Register("images.list", h.handleList)
+	r.Register("images.delete", h.handleDelete)
 }
 
 // --- images.generate -------------------------------------------------------
@@ -165,17 +166,24 @@ func (h *ImagesHandler) runGenerate(sess *Session, runID, sessionKey string, cfg
 		h.runsMu.Unlock()
 	}()
 
-	// emitFailures counts consecutive PushEvent failures so the run
-	// gives up when the client has disconnected. Without this the
-	// goroutine logs an error per progress frame all the way through
-	// the run for any short-lived caller (e.g. `talon gateway call`,
-	// which closes its WS as soon as it gets the {runId} response).
+	// emitFailures counts consecutive PushEvent failures so we stop
+	// spamming the gateway log when the client has disconnected. The
+	// run itself keeps going to completion regardless — persistence
+	// (index append) and ComfyUI accounting (queue drain) shouldn't
+	// depend on whether anyone's listening.
 	emitFailures := 0
+	emitDead := false
 	const emitFailureThreshold = 3
 	emit := func(state string, data map[string]any) bool {
+		if emitDead {
+			return true
+		}
 		if err := h.emit(sess, runID, sessionKey, state, data); err != nil {
 			emitFailures++
-			return emitFailures < emitFailureThreshold
+			if emitFailures >= emitFailureThreshold {
+				emitDead = true
+			}
+			return true
 		}
 		emitFailures = 0
 		return true
@@ -296,6 +304,21 @@ func (h *ImagesHandler) dispatchEvent(emit func(state string, data map[string]an
 		for _, out := range entry.Outputs {
 			refs = append(refs, out.Images...)
 		}
+		// Persist to the on-disk index so the gallery survives
+		// ComfyUI restarts. Best-effort: a write failure shouldn't
+		// fail the run — the user already has the image.
+		nowMs := time.Now().UnixMilli()
+		newItems := make([]imagesListItem, 0, len(refs))
+		for _, ref := range refs {
+			newItems = append(newItems, imagesListItem{
+				Filename:    ref.Filename,
+				Subfolder:   ref.Subfolder,
+				Type:        ref.Type,
+				PromptID:    promptID,
+				CreatedAtMs: nowMs,
+			})
+		}
+		_ = h.appendToImagesIndex(newItems)
 		emit("final", map[string]any{
 			"promptId": promptID,
 			"images":   refs,
@@ -392,14 +415,91 @@ type imagesListParams struct {
 }
 
 // imagesListItem is the per-image envelope the gallery view consumes.
-// PromptID is included so the UI can group multi-image runs together if
-// the workflow ever evolves to emit them, even though today's default
-// workflow yields one image per prompt.
+// CreatedAtMs orders the list newest-first when present; index entries
+// always carry a timestamp, history-only entries fall back to 0 (which
+// the UI sorts last).
 type imagesListItem struct {
-	Filename  string `json:"filename"`
-	Subfolder string `json:"subfolder"`
-	Type      string `json:"type"`
-	PromptID  string `json:"promptId"`
+	Filename    string `json:"filename"`
+	Subfolder   string `json:"subfolder"`
+	Type        string `json:"type"`
+	PromptID    string `json:"promptId"`
+	CreatedAtMs int64  `json:"createdAtMs,omitempty"`
+}
+
+// imagesIndexFile is the on-disk image index. Appended-to on every
+// successful generation; read on every images.list call. Lets the
+// gallery survive ComfyUI restarts (which clear its in-memory
+// /history). The file is JSON-array shape for simplicity; a JSONL
+// append-only log would scale better but we expect <10k entries on a
+// personal install for the foreseeable future.
+type imagesIndexFile struct {
+	Items []imagesListItem `json:"items"`
+}
+
+const imagesIndexFilename = "index.json"
+
+// imagesIndexPath returns the absolute path to the index file. Lives
+// in ~/.talon/images/ next to the user's exported workflow.
+func (h *ImagesHandler) imagesIndexPath() string {
+	return filepath.Join(h.paths.Talon.Dir, "images", imagesIndexFilename)
+}
+
+func (h *ImagesHandler) readImagesIndex() ([]imagesListItem, error) {
+	raw, err := os.ReadFile(h.imagesIndexPath())
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	var idx imagesIndexFile
+	if err := json.Unmarshal(raw, &idx); err != nil {
+		return nil, err
+	}
+	return idx.Items, nil
+}
+
+// appendToImagesIndex persists items to the index, deduping by filename
+// so re-runs of the same prompt-id (or repeated final events) don't
+// double-write. mkdir is best-effort — if it fails we fall through to
+// WriteFile which surfaces the real error.
+func (h *ImagesHandler) appendToImagesIndex(newItems []imagesListItem) error {
+	if len(newItems) == 0 {
+		return nil
+	}
+	dir := filepath.Dir(h.imagesIndexPath())
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return err
+	}
+	existing, _ := h.readImagesIndex() // nil on missing/corrupt; we'll rewrite
+	seen := make(map[string]struct{}, len(existing)+len(newItems))
+	merged := make([]imagesListItem, 0, len(existing)+len(newItems))
+	// Newest first: prepend new items, then existing in original order.
+	for _, it := range newItems {
+		key := it.Subfolder + "|" + it.Filename
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, it)
+	}
+	for _, it := range existing {
+		key := it.Subfolder + "|" + it.Filename
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, it)
+	}
+	body, err := json.MarshalIndent(imagesIndexFile{Items: merged}, "", "  ")
+	if err != nil {
+		return err
+	}
+	tmp := h.imagesIndexPath() + ".tmp"
+	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, h.imagesIndexPath())
 }
 
 func (h *ImagesHandler) handleList(_ context.Context, _ HandlerCtx, params json.RawMessage) (any, *FrameError) {
@@ -409,8 +509,8 @@ func (h *ImagesHandler) handleList(_ context.Context, _ HandlerCtx, params json.
 			return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.list: " + err.Error()}
 		}
 	}
-	if p.Limit <= 0 || p.Limit > 200 {
-		// 50 is a sensible default for a thumbnail grid; >200 risks
+	if p.Limit <= 0 || p.Limit > 500 {
+		// 50 is a sensible default for a thumbnail grid; >500 risks
 		// huge payloads even if the UI immediately discards excess.
 		p.Limit = 50
 	}
@@ -418,18 +518,23 @@ func (h *ImagesHandler) handleList(_ context.Context, _ HandlerCtx, params json.
 	if ferr != nil {
 		return nil, ferr
 	}
+
+	// Live history first — newer generations may not be in the index
+	// yet (e.g. handler restarted between generate and finalize).
 	cli := h.dial(cfg.BaseURL)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	entries, err := cli.HistoryAll(ctx, p.Limit)
+	entries, err := cli.HistoryAll(ctx, p.Limit*2)
 	if err != nil {
-		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.list: " + err.Error()}
+		// Don't fail the whole list — the persistent index might still
+		// have entries the user wants to see. Log and continue.
+		entries = nil
 	}
-	var items []imagesListItem
+	live := make([]imagesListItem, 0)
 	for _, e := range entries {
 		for _, out := range e.Entry.Outputs {
 			for _, ref := range out.Images {
-				items = append(items, imagesListItem{
+				live = append(live, imagesListItem{
 					Filename:  ref.Filename,
 					Subfolder: ref.Subfolder,
 					Type:      ref.Type,
@@ -438,7 +543,96 @@ func (h *ImagesHandler) handleList(_ context.Context, _ HandlerCtx, params json.
 			}
 		}
 	}
-	return map[string]any{"images": items}, nil
+
+	// Persistent index: survives ComfyUI restarts.
+	indexed, _ := h.readImagesIndex() // nil on first run
+
+	// Merge: index is the source of truth for createdAtMs; live entries
+	// fill in anything the index hasn't seen yet (e.g. images
+	// generated before this feature shipped).
+	seen := map[string]int{} // key → position in merged
+	merged := make([]imagesListItem, 0, len(indexed)+len(live))
+	for _, it := range indexed {
+		key := it.Subfolder + "|" + it.Filename
+		seen[key] = len(merged)
+		merged = append(merged, it)
+	}
+	for _, it := range live {
+		key := it.Subfolder + "|" + it.Filename
+		if _, dup := seen[key]; dup {
+			continue
+		}
+		seen[key] = len(merged)
+		merged = append(merged, it)
+	}
+
+	// Newest first: index entries are written newest-first by
+	// appendToImagesIndex; sorting would require timestamps on every
+	// row. Live-only entries (no createdAtMs) stay at the end.
+	if len(merged) > p.Limit {
+		merged = merged[:p.Limit]
+	}
+	return map[string]any{"images": merged}, nil
+}
+
+// --- images.delete ---------------------------------------------------------
+
+type imagesDeleteParams struct {
+	Filename  string `json:"filename"`
+	Subfolder string `json:"subfolder"`
+}
+
+// handleDelete removes an image from talon's index. The underlying file
+// on ComfyUI's disk is left in place — ComfyUI doesn't expose a delete
+// endpoint and we don't have filesystem access to its output directory
+// from this side of the LAN. The image disappears from the gallery
+// because images.list reads the index; users wanting on-disk cleanup
+// can prune ComfyUI's output dir themselves.
+func (h *ImagesHandler) handleDelete(_ context.Context, _ HandlerCtx, params json.RawMessage) (any, *FrameError) {
+	var p imagesDeleteParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.delete: " + err.Error()}
+	}
+	if p.Filename == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.delete: filename is required"}
+	}
+	existing, err := h.readImagesIndex()
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.delete: read index: " + err.Error()}
+	}
+	matchKey := p.Subfolder + "|" + p.Filename
+	kept := make([]imagesListItem, 0, len(existing))
+	removed := 0
+	for _, it := range existing {
+		if (it.Subfolder + "|" + it.Filename) == matchKey {
+			removed++
+			continue
+		}
+		kept = append(kept, it)
+	}
+	if removed == 0 {
+		// Nothing in the index — still report ok so the UI can drop
+		// the row optimistically without a special "not in index"
+		// branch. ComfyUI history items will reappear on the next
+		// list, but that's a known limitation.
+		return map[string]any{"ok": true, "removed": 0}, nil
+	}
+	dir := filepath.Dir(h.imagesIndexPath())
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.delete: mkdir: " + err.Error()}
+	}
+	body, err := json.MarshalIndent(imagesIndexFile{Items: kept}, "", "  ")
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.delete: marshal: " + err.Error()}
+	}
+	tmp := h.imagesIndexPath() + ".tmp"
+	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.delete: write: " + err.Error()}
+	}
+	if err := os.Rename(tmp, h.imagesIndexPath()); err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.delete: rename: " + err.Error()}
+	}
+	return map[string]any{"ok": true, "removed": removed}, nil
 }
 
 // --- config + workflow loading --------------------------------------------

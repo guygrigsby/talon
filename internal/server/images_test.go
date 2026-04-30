@@ -397,15 +397,17 @@ func TestImagesGenerate_BailsAfterRepeatedEmitFailures(t *testing.T) {
 			time.Sleep(10 * time.Millisecond)
 		}
 	}
-	// Final count should hit threshold (3) and stop, plus the initial
-	// queued emit. Total expected ≤ 4. Allow a little slack for race
-	// conditions but flag clear runaways.
+	// After the threshold (3) the closure stops calling h.emit, so
+	// the recorded count caps near 3 even though the run keeps going
+	// (persistence + ComfyUI accounting must not depend on the
+	// client staying connected). Allow a little slack for racing but
+	// flag clear runaways.
 	time.Sleep(200 * time.Millisecond)
 	mu.Lock()
 	final := emitCount
 	mu.Unlock()
 	if final > 5 {
-		t.Errorf("expected goroutine to bail near threshold (≤ ~4 emits); got %d", final)
+		t.Errorf("expected emits to stop near threshold (≤ ~4); got %d", final)
 	}
 }
 
@@ -417,8 +419,11 @@ func TestImagesList_FlattensHistoryToImageItems(t *testing.T) {
 
 	stub := &stubComfyUI{
 		historyAll: func(_ context.Context, max int) ([]comfyui.HistoryListEntry, error) {
-			if max != 50 {
-				t.Errorf("default limit should be 50, got %d", max)
+			// images.list over-fetches by 2× to leave headroom for
+			// merging the persistent index with live history; the
+			// final response is still capped at the requested limit.
+			if max != 100 {
+				t.Errorf("history fetch should be 2× default limit (100), got %d", max)
 			}
 			return []comfyui.HistoryListEntry{
 				{
@@ -475,8 +480,140 @@ func TestImagesList_RespectsLimit(t *testing.T) {
 	}
 	h := NewImagesHandler(paths).WithDial(func(string) ComfyUIClient { return stub })
 	_, _ = h.handleList(t.Context(), HandlerCtx{}, []byte(`{"limit":12}`))
-	if got != 12 {
-		t.Errorf("limit pass-through: got %d, want 12", got)
+	if got != 24 {
+		t.Errorf("history over-fetch should be 2×limit=24, got %d", got)
+	}
+}
+
+func TestImagesList_MergesIndexAndHistoryDedupedByFilename(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	_ = os.WriteFile(paths.Talon.Config, []byte(`{"images":{"providers":{"comfyui":{"workflow":{"promptNodeId":"6"}}}}}`), 0o600)
+
+	// Seed the index with one entry that overlaps with what live
+	// history will return.
+	indexPath := filepath.Join(paths.Talon.Dir, "images", "index.json")
+	_ = os.MkdirAll(filepath.Dir(indexPath), 0o700)
+	_ = os.WriteFile(indexPath, []byte(`{"items":[
+		{"filename":"old.png","subfolder":"","type":"output","promptId":"p-old","createdAtMs":111},
+		{"filename":"shared.png","subfolder":"","type":"output","promptId":"p-shared","createdAtMs":222}
+	]}`), 0o600)
+
+	stub := &stubComfyUI{
+		historyAll: func(_ context.Context, _ int) ([]comfyui.HistoryListEntry, error) {
+			return []comfyui.HistoryListEntry{
+				{
+					PromptID: "p-shared",
+					Entry: comfyui.HistoryEntry{
+						Outputs: map[string]comfyui.NodeOutput{
+							"9": {Images: []comfyui.ImageRef{{Filename: "shared.png", Type: "output"}}},
+						},
+					},
+				},
+				{
+					PromptID: "p-new",
+					Entry: comfyui.HistoryEntry{
+						Outputs: map[string]comfyui.NodeOutput{
+							"9": {Images: []comfyui.ImageRef{{Filename: "new.png", Type: "output"}}},
+						},
+					},
+				},
+			}, nil
+		},
+	}
+	h := NewImagesHandler(paths).WithDial(func(string) ComfyUIClient { return stub })
+	res, ferr := h.handleList(t.Context(), HandlerCtx{}, []byte(`{}`))
+	if ferr != nil {
+		t.Fatalf("list: %+v", ferr)
+	}
+	images := res.(map[string]any)["images"].([]imagesListItem)
+	// Index entries first (newest-first by file order), then live-only
+	// entries appended after.
+	wantOrder := []string{"old.png", "shared.png", "new.png"}
+	if len(images) != len(wantOrder) {
+		t.Fatalf("got %d items, want %d (%v)", len(images), len(wantOrder), images)
+	}
+	for i, want := range wantOrder {
+		if images[i].Filename != want {
+			t.Errorf("images[%d]=%q, want %q", i, images[i].Filename, want)
+		}
+	}
+	// Index-sourced entries keep their createdAtMs; live-only entries
+	// don't have one.
+	for _, it := range images {
+		switch it.Filename {
+		case "old.png":
+			if it.CreatedAtMs != 111 {
+				t.Errorf("old.png lost timestamp: %+v", it)
+			}
+		case "new.png":
+			if it.CreatedAtMs != 0 {
+				t.Errorf("live-only new.png shouldn't have timestamp: %+v", it)
+			}
+		}
+	}
+}
+
+func TestImagesList_TolerantOfHistoryFailure(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	_ = os.WriteFile(paths.Talon.Config, []byte(`{"images":{"providers":{"comfyui":{"workflow":{"promptNodeId":"6"}}}}}`), 0o600)
+	indexPath := filepath.Join(paths.Talon.Dir, "images", "index.json")
+	_ = os.MkdirAll(filepath.Dir(indexPath), 0o700)
+	_ = os.WriteFile(indexPath, []byte(`{"items":[{"filename":"a.png","type":"output","createdAtMs":1}]}`), 0o600)
+
+	stub := &stubComfyUI{
+		historyAll: func(_ context.Context, _ int) ([]comfyui.HistoryListEntry, error) {
+			return nil, errors.New("comfy down")
+		},
+	}
+	h := NewImagesHandler(paths).WithDial(func(string) ComfyUIClient { return stub })
+	res, ferr := h.handleList(t.Context(), HandlerCtx{}, []byte(`{}`))
+	if ferr != nil {
+		t.Fatalf("list should not fail when history is down: %+v", ferr)
+	}
+	if len(res.(map[string]any)["images"].([]imagesListItem)) != 1 {
+		t.Errorf("expected 1 indexed image to surface, got %+v", res)
+	}
+}
+
+// --- images.delete ---------------------------------------------------------
+
+func TestImagesDelete_RemovesFromIndex(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	_ = os.WriteFile(paths.Talon.Config, []byte(`{"images":{"providers":{"comfyui":{"workflow":{"promptNodeId":"6"}}}}}`), 0o600)
+	indexPath := filepath.Join(paths.Talon.Dir, "images", "index.json")
+	_ = os.MkdirAll(filepath.Dir(indexPath), 0o700)
+	_ = os.WriteFile(indexPath, []byte(`{"items":[
+		{"filename":"keep.png","type":"output"},
+		{"filename":"goner.png","type":"output"}
+	]}`), 0o600)
+
+	h := NewImagesHandler(paths)
+	res, ferr := h.handleDelete(t.Context(), HandlerCtx{}, []byte(`{"filename":"goner.png"}`))
+	if ferr != nil {
+		t.Fatalf("delete: %+v", ferr)
+	}
+	if res.(map[string]any)["removed"] != 1 {
+		t.Errorf("removed count: %+v", res)
+	}
+	raw, _ := os.ReadFile(indexPath)
+	if strings.Contains(string(raw), "goner.png") {
+		t.Errorf("goner.png still in index after delete: %s", raw)
+	}
+	if !strings.Contains(string(raw), "keep.png") {
+		t.Errorf("keep.png was wrongly removed: %s", raw)
+	}
+}
+
+func TestImagesDelete_NoIndexEntryStillReturnsOK(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	_ = os.WriteFile(paths.Talon.Config, []byte(`{"images":{"providers":{"comfyui":{"workflow":{"promptNodeId":"6"}}}}}`), 0o600)
+	h := NewImagesHandler(paths)
+	res, ferr := h.handleDelete(t.Context(), HandlerCtx{}, []byte(`{"filename":"never-existed.png"}`))
+	if ferr != nil {
+		t.Fatalf("delete: %+v", ferr)
+	}
+	if res.(map[string]any)["ok"] != true {
+		t.Errorf("ok flag missing: %+v", res)
 	}
 }
 
