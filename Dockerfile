@@ -21,11 +21,22 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /out/talon \
     ./cmd/talon
 
+# ---- shim install (Node) -------------------------------------------------
+# openclaw-plugin-host is the Node subprocess that loads vendored
+# openclaw extensions and bridges them to talon's gRPC plugin protocol.
+# Installed under a fixed path so plugins.bundled.shimCmd defaults work
+# without per-host configuration.
+FROM node:20-alpine AS shim-install
+WORKDIR /shim
+COPY apps/openclaw-plugin-host/package.json ./package.json
+RUN npm install --omit=dev --no-audit --no-fund
+COPY apps/openclaw-plugin-host/ ./
+
 # ---- runtime ----------------------------------------------------------
-# Alpine instead of distroless because the bash tool execs /bin/sh -c, and
-# the model is likely to invoke common Unix utilities (ls, cat, grep, find,
-# git). coreutils + git + grep cover the typical surface; add more if a
-# specific tool starts failing.
+# Alpine instead of distroless because (a) the bash tool execs /bin/sh -c
+# and the model is likely to invoke common Unix utilities, and (b) the
+# openclaw-plugin-host shim needs Node. coreutils + git + grep + bash
+# cover the typical surface; nodejs runs the shim subprocesses.
 FROM alpine:3.20
 
 RUN apk add --no-cache \
@@ -34,9 +45,20 @@ RUN apk add --no-cache \
     grep \
     git \
     findutils \
-    bash
+    bash \
+    nodejs
 
 COPY --from=builder /out/talon /usr/local/bin/talon
+COPY --from=shim-install /shim /opt/openclaw-plugin-host
+# Stable wrapper so plugins.bundled.shimCmd defaults can be a single
+# string ("openclaw-plugin-host") that resolves via PATH.
+RUN ln -s /opt/openclaw-plugin-host/bin/openclaw-plugin-host.mjs /usr/local/bin/openclaw-plugin-host
+
+# Bundled openclaw extensions (vendored from openclaw@<sha>; see
+# extensions/UPSTREAM.md). Users enable per-extension via
+# plugins.entries.<name>.bundled = "<dir-name>" — the gateway expands
+# that to a shim spawn against /opt/extensions/<dir-name>.
+COPY extensions /opt/extensions
 
 EXPOSE 18789
 

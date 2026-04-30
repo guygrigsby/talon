@@ -1,6 +1,7 @@
 package main
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
@@ -25,7 +26,7 @@ func TestParsePluginSpecs_OnlyEnabledWithCmd(t *testing.T) {
 			}
 		}
 	}`)
-	got := parsePluginSpecs(body)
+	got := parsePluginSpecs(body, pluginParseDefaults{})
 	if len(got) != 2 {
 		t.Fatalf("got %d specs, want 2 (telegram + weather)", len(got))
 	}
@@ -54,14 +55,14 @@ func TestParsePluginSpecs_OnlyEnabledWithCmd(t *testing.T) {
 }
 
 func TestParsePluginSpecs_NoEntriesSection(t *testing.T) {
-	got := parsePluginSpecs([]byte(`{}`))
+	got := parsePluginSpecs([]byte(`{}`), pluginParseDefaults{})
 	if len(got) != 0 {
 		t.Errorf("got %d specs from empty config, want 0", len(got))
 	}
 }
 
 func TestParsePluginSpecs_EmptyEntries(t *testing.T) {
-	got := parsePluginSpecs([]byte(`{"plugins":{"entries":{}}}`))
+	got := parsePluginSpecs([]byte(`{"plugins":{"entries":{}}}`), pluginParseDefaults{})
 	if len(got) != 0 {
 		t.Errorf("got %d specs from empty entries, want 0", len(got))
 	}
@@ -76,12 +77,83 @@ func TestParsePluginSpecs_FiltersBlankCmdEntries(t *testing.T) {
 			"b": {"enabled": true, "cmd": ["bin", ""]}
 		}}
 	}`)
-	got := parsePluginSpecs(body)
+	got := parsePluginSpecs(body, pluginParseDefaults{})
 	if len(got) != 1 {
 		t.Fatalf("got %d specs, want 1 (only b survives)", len(got))
 	}
 	if got[0].name != "b" || len(got[0].cmd) != 1 || got[0].cmd[0] != "bin" {
 		t.Errorf("b parsed wrong: %+v", got[0])
+	}
+}
+
+func TestParsePluginSpecs_BundledExpandsToShimCmd(t *testing.T) {
+	body := []byte(`{
+		"plugins": {
+			"bundled": {"path": "/opt/extensions"},
+			"entries": {
+				"anthropic": {"enabled": true, "bundled": "anthropic"},
+				"brave":     {"enabled": false, "bundled": "brave"}
+			}
+		}
+	}`)
+	got := parsePluginSpecs(body, pluginParseDefaults{})
+	if len(got) != 1 {
+		t.Fatalf("got %d specs, want 1 (anthropic only — brave is disabled)", len(got))
+	}
+	want := []string{"node", "openclaw-plugin-host", "/opt/extensions/anthropic"}
+	if got[0].name != "anthropic" || !reflect.DeepEqual(got[0].cmd, want) {
+		t.Errorf("anthropic resolved wrong: %+v (want %v)", got[0], want)
+	}
+}
+
+func TestParsePluginSpecs_BundledHonorsShimCmdOverride(t *testing.T) {
+	body := []byte(`{
+		"plugins": {
+			"bundled": {
+				"path": "/opt/extensions",
+				"shimCmd": ["/usr/bin/node", "--experimental-vm-modules", "/opt/openclaw-plugin-host/bin/openclaw-plugin-host.mjs"]
+			},
+			"entries": {
+				"anthropic": {"enabled": true, "bundled": "anthropic"}
+			}
+		}
+	}`)
+	got := parsePluginSpecs(body, pluginParseDefaults{})
+	if len(got) != 1 || got[0].cmd[0] != "/usr/bin/node" || got[0].cmd[3] != "/opt/extensions/anthropic" {
+		t.Fatalf("shimCmd override not applied: %+v", got)
+	}
+}
+
+func TestParsePluginSpecs_BundledWithoutPathSkips(t *testing.T) {
+	// Enabling a bundled extension without setting bundled.path is
+	// almost certainly a config mistake — we skip the entry but the
+	// gateway logs a hint so the user notices it didn't load.
+	body := []byte(`{
+		"plugins": {
+			"entries": {"anthropic": {"enabled": true, "bundled": "anthropic"}}
+		}
+	}`)
+	got := parsePluginSpecs(body, pluginParseDefaults{})
+	if len(got) != 0 {
+		t.Errorf("expected bundled entry without path to be skipped, got %+v", got)
+	}
+}
+
+func TestParsePluginSpecs_ExplicitCmdWinsOverBundled(t *testing.T) {
+	// If a user supplies both, the explicit cmd wins. Surfaces as an
+	// escape hatch when the bundled shim path is wrong but the user
+	// still wants the named entry to load from somewhere specific.
+	body := []byte(`{
+		"plugins": {
+			"bundled": {"path": "/opt/extensions"},
+			"entries": {
+				"anthropic": {"enabled": true, "bundled": "anthropic", "cmd": ["/custom/bin"]}
+			}
+		}
+	}`)
+	got := parsePluginSpecs(body, pluginParseDefaults{})
+	if len(got) != 1 || got[0].cmd[0] != "/custom/bin" {
+		t.Errorf("explicit cmd should override bundled: %+v", got)
 	}
 }
 

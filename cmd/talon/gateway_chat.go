@@ -104,35 +104,107 @@ type pluginSpec struct {
 	cmd  []string
 }
 
+// defaultPluginDefaults probes the runtime for sensible bundled-plugin
+// defaults so users don't have to set plugins.bundled.path on a
+// standard Docker install. Resolution order:
+//
+//  1. TALON_EXTENSIONS_PATH env var (explicit, highest priority).
+//  2. /opt/extensions if it exists (the path the Dockerfile bakes in).
+//
+// Both yield empty when nothing's set; the merged config can still
+// supply plugins.bundled.path explicitly, in which case neither
+// default applies.
+func defaultPluginDefaults() pluginParseDefaults {
+	if v := os.Getenv("TALON_EXTENSIONS_PATH"); v != "" {
+		return pluginParseDefaults{bundledPath: v}
+	}
+	if _, err := os.Stat("/opt/extensions"); err == nil {
+		return pluginParseDefaults{bundledPath: "/opt/extensions"}
+	}
+	return pluginParseDefaults{}
+}
+
+// pluginParseDefaults provides fallback values for the bundled-extension
+// shortcut when the merged config doesn't set them. Production callers
+// fill bundledPath from the runtime environment (TALON_EXTENSIONS_PATH
+// or a probe of /opt/extensions); tests can pass zero values.
+type pluginParseDefaults struct {
+	bundledPath string
+	shimCmd     []string
+}
+
 // parsePluginSpecs walks plugins.entries.<name> in the merged config
-// JSON and returns the entries talon should LoadPlugin. Entries
-// without cmd (the openclaw-style enabled flags for native built-in
-// extensions) are silently skipped — those are managed by the runtime
-// they're shipped in, not by this loader. Pure function for testability.
-func parsePluginSpecs(merged []byte) []pluginSpec {
+// and returns the entries talon should LoadPlugin.
+//
+// Two ways an entry produces a spawn cmd:
+//
+//  1. Explicit cmd: `cmd: ["/path/to/binary", ...]`. Used as-is.
+//  2. Bundled openclaw extension: `bundled: "anthropic"`. Resolves to
+//     `<shimCmd...> <plugins.bundled.path>/anthropic`. The shim is the
+//     Node-side openclaw-plugin-host that bridges the extension's
+//     register*() hooks to talon's gRPC plugin protocol.
+//
+// Entries without either are silently skipped — openclaw-style
+// enabled flags for native runtime built-ins, not subprocesses we own.
+// Pure function for testability.
+func parsePluginSpecs(merged []byte, defaults pluginParseDefaults) []pluginSpec {
+	bundledPath := gjson.GetBytes(merged, "plugins.bundled.path").Str
+	if bundledPath == "" {
+		bundledPath = defaults.bundledPath
+	}
+	shimCmd := stringArray(gjson.GetBytes(merged, "plugins.bundled.shimCmd"))
+	if len(shimCmd) == 0 {
+		shimCmd = defaults.shimCmd
+	}
+	if len(shimCmd) == 0 {
+		// Default shim invocation: rely on PATH lookup of node and the
+		// openclaw-plugin-host symlink. The Dockerfile sets both up;
+		// host installs need Node + the shim on PATH.
+		shimCmd = []string{"node", "openclaw-plugin-host"}
+	}
+
 	var specs []pluginSpec
 	gjson.GetBytes(merged, "plugins.entries").ForEach(func(nameKey, entry gjson.Result) bool {
 		if !entry.Get("enabled").Bool() {
 			return true
 		}
-		cmdResult := entry.Get("cmd")
-		if !cmdResult.IsArray() {
+		// Explicit cmd wins.
+		if cmd := stringArray(entry.Get("cmd")); len(cmd) > 0 {
+			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd})
 			return true
 		}
-		var cmd []string
-		cmdResult.ForEach(func(_, v gjson.Result) bool {
-			if v.Type == gjson.String && v.Str != "" {
-				cmd = append(cmd, v.Str)
+		// Bundled-extension shortcut. Skip silently when bundled.path
+		// isn't configured (the user enabled a bundled extension but
+		// didn't tell us where they live — log so they can spot it).
+		if extName := entry.Get("bundled").Str; extName != "" {
+			if bundledPath == "" {
+				log.Printf("plugin %s: bundled=%q but plugins.bundled.path is unset; skipping", nameKey.Str, extName)
+				return true
 			}
-			return true
-		})
-		if len(cmd) == 0 {
+			fullCmd := append(append([]string(nil), shimCmd...), filepath.Join(bundledPath, extName))
+			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: fullCmd})
 			return true
 		}
-		specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd})
 		return true
 	})
 	return specs
+}
+
+// stringArray reads a JSON array of strings into a Go slice, skipping
+// non-string entries. Callers treat an empty result as "absent" rather
+// than "explicit empty array" — both shapes mean the same thing here.
+func stringArray(v gjson.Result) []string {
+	if !v.IsArray() {
+		return nil
+	}
+	var out []string
+	v.ForEach(func(_, item gjson.Result) bool {
+		if item.Type == gjson.String && item.Str != "" {
+			out = append(out, item.Str)
+		}
+		return true
+	})
+	return out
 }
 
 // loadConfiguredPlugins reads the merged config, parses the spawn-able
@@ -145,7 +217,7 @@ func loadConfiguredPlugins(ctx context.Context, host *plugin.Host, paths opencla
 		log.Printf("plugins: read merged config: %v", err)
 		return
 	}
-	for _, spec := range parsePluginSpecs(merged) {
+	for _, spec := range parsePluginSpecs(merged, defaultPluginDefaults()) {
 		inst, err := host.LoadPlugin(ctx, spec.name, plugin.LoadOptions{Cmd: spec.cmd})
 		if err != nil {
 			log.Printf("plugin %s: load failed: %v", spec.name, err)
