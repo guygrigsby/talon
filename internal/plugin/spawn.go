@@ -187,15 +187,42 @@ func forwardStdout(name string, r io.Reader) {
 // (which already minted a cookie for the env handoff) reuses it instead
 // of re-generating. Tests should keep using Host.Register, which
 // generates its own cookie.
+//
+// Like Host.Register, we register the cookie BEFORE calling Initialize
+// so the plugin can call back into the host during init (e.g. to read
+// config). The bootstrap manifest grants just CAPABILITY_READ_CONFIG;
+// the real manifest replaces it once Initialize returns.
 func registerInitialized(h *Host, ctx context.Context, name, cookie string, client pb.PluginClient, stop func()) (*Instance, error) {
+	bootInst := &Instance{
+		Name:     name,
+		Cookie:   cookie,
+		Manifest: &pb.Manifest{Needs: []pb.Capability{pb.Capability_CAPABILITY_READ_CONFIG}},
+		Client:   client,
+		stop:     stop,
+	}
+	h.mu.Lock()
+	if _, exists := h.byName[name]; exists {
+		h.mu.Unlock()
+		return nil, fmt.Errorf("plugin %s: already registered", name)
+	}
+	h.byCookie[cookie] = bootInst
+	h.mu.Unlock()
+	rollback := func() {
+		h.mu.Lock()
+		delete(h.byCookie, cookie)
+		h.mu.Unlock()
+	}
+
 	resp, err := client.Initialize(ctx, &pb.InitializeRequest{
 		AuthCookie:  cookie,
 		HostAddress: h.hostAddr,
 	})
 	if err != nil {
+		rollback()
 		return nil, fmt.Errorf("plugin %s: initialize: %w", name, err)
 	}
 	if resp.GetManifest() == nil {
+		rollback()
 		return nil, fmt.Errorf("plugin %s: initialize returned no manifest", name)
 	}
 	inst := &Instance{
@@ -208,6 +235,7 @@ func registerInitialized(h *Host, ctx context.Context, name, cookie string, clie
 	h.mu.Lock()
 	if _, exists := h.byName[name]; exists {
 		h.mu.Unlock()
+		rollback()
 		return nil, fmt.Errorf("plugin %s: already registered", name)
 	}
 	h.byName[name] = inst

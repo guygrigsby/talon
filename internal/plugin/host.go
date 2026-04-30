@@ -84,20 +84,50 @@ func (h *Host) Register(ctx context.Context, name string, client pb.PluginClient
 	if err != nil {
 		return nil, err
 	}
+	// Register the cookie BEFORE calling Initialize so the plugin can
+	// call back into the host during init (typical case: a config
+	// read to decide what to register). The bootstrap manifest grants
+	// just enough capability for that read; the real manifest lands
+	// after Initialize returns and replaces this one.
+	bootInst := &Instance{
+		Name:     name,
+		Cookie:   cookie,
+		Manifest: &pb.Manifest{Needs: []pb.Capability{pb.Capability_CAPABILITY_READ_CONFIG}},
+		Client:   client,
+		stop:     stop,
+	}
+	h.mu.Lock()
+	if _, exists := h.byName[name]; exists {
+		h.mu.Unlock()
+		if stop != nil {
+			stop()
+		}
+		return nil, fmt.Errorf("plugin %s: already registered", name)
+	}
+	h.byCookie[cookie] = bootInst
+	h.mu.Unlock()
+	// Roll back the bootstrap registration on any failure path so a
+	// rejected plugin doesn't leave a phantom cookie that another
+	// caller could exploit.
+	rollback := func() {
+		h.mu.Lock()
+		delete(h.byCookie, cookie)
+		h.mu.Unlock()
+		if stop != nil {
+			stop()
+		}
+	}
+
 	resp, err := client.Initialize(ctx, &pb.InitializeRequest{
 		AuthCookie:  cookie,
 		HostAddress: h.hostAddr,
 	})
 	if err != nil {
-		if stop != nil {
-			stop()
-		}
+		rollback()
 		return nil, fmt.Errorf("plugin %s: initialize: %w", name, err)
 	}
 	if resp.GetManifest() == nil {
-		if stop != nil {
-			stop()
-		}
+		rollback()
 		return nil, fmt.Errorf("plugin %s: initialize returned no manifest", name)
 	}
 	inst := &Instance{
@@ -107,13 +137,12 @@ func (h *Host) Register(ctx context.Context, name string, client pb.PluginClient
 		Client:   client,
 		stop:     stop,
 	}
-
 	h.mu.Lock()
 	if _, exists := h.byName[name]; exists {
+		// Lost the race against another LoadPlugin call with the same
+		// name — rare but theoretically possible. Drop and roll back.
 		h.mu.Unlock()
-		if stop != nil {
-			stop()
-		}
+		rollback()
 		return nil, fmt.Errorf("plugin %s: already registered", name)
 	}
 	h.byName[name] = inst

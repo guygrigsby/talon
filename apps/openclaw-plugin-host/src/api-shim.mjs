@@ -20,41 +20,54 @@ export class Captured {
   constructor() {
     /** @type {Array<{ name: string, factory: Function, options: object }>} */
     this.toolFactories = [];
+    /** @type {Array<{ name: string, factory: Function, options: object }>} */
+    this.providerFactories = [];
+    /** @type {Array<{ name: string, factory: Function, options: object }>} */
+    this.channelFactories = [];
     /** @type {Array<{ kind: string, args: any[] }>} */
     this.unsupported = [];
   }
 
   /**
-   * Realize the registered tool factories against a context. Returns a
-   * map keyed by tool name. Called once at Initialize time, before the
-   * first RunTool. Re-realizing on every RunTool would be cleaner for
-   * config hot-reload but openclaw extensions historically expect the
-   * factory to run once per process lifetime.
+   * Realize all register*() factories against a single context.
+   * Tools/providers/channels share the same ctx so an extension can,
+   * say, look up a provider's API key from ctx.config and reuse it
+   * across tool factories.
    */
   realizeTools(ctx) {
-    /** @type {Map<string, any>} */
-    const tools = new Map();
-    for (const { name: hint, factory, options } of this.toolFactories) {
-      let tool;
-      try {
-        tool = factory(ctx);
-      } catch (err) {
-        process.stderr.write(
-          `[openclaw-shim] tool factory for ${JSON.stringify(hint || options.name || "?")} threw: ${err?.stack ?? err}\n`,
-        );
-        continue;
-      }
-      const name = tool?.name ?? options?.name ?? hint;
-      if (!name) {
-        process.stderr.write(
-          `[openclaw-shim] tool factory returned an object without a name; dropping\n`,
-        );
-        continue;
-      }
-      tools.set(name, tool);
-    }
-    return tools;
+    return realizeFactories(this.toolFactories, ctx, "tool");
   }
+  realizeProviders(ctx) {
+    return realizeFactories(this.providerFactories, ctx, "provider");
+  }
+  realizeChannels(ctx) {
+    return realizeFactories(this.channelFactories, ctx, "channel");
+  }
+}
+
+function realizeFactories(specs, ctx, kind) {
+  /** @type {Map<string, any>} */
+  const out = new Map();
+  for (const { name: hint, factory, options } of specs) {
+    let inst;
+    try {
+      inst = factory(ctx);
+    } catch (err) {
+      process.stderr.write(
+        `[openclaw-shim] ${kind} factory for ${JSON.stringify(hint || options.name || "?")} threw: ${err?.stack ?? err}\n`,
+      );
+      continue;
+    }
+    const name = inst?.name ?? options?.name ?? hint;
+    if (!name) {
+      process.stderr.write(
+        `[openclaw-shim] ${kind} factory returned an object without a name; dropping\n`,
+      );
+      continue;
+    }
+    out.set(name, inst);
+  }
+  return out;
 }
 
 /**
@@ -76,32 +89,20 @@ export function buildApi(captured) {
   return {
     // === bridged ====================================================
     registerTool(factory, options = {}) {
-      // openclaw signature: registerTool(factory, { name?: string }).
-      // Some extensions pass a tool object directly instead of a
-      // factory; accept both for forward compat.
-      if (typeof factory === "function") {
-        captured.toolFactories.push({
-          name: options?.name ?? "",
-          factory,
-          options: options ?? {},
-        });
-      } else if (factory && typeof factory === "object") {
-        captured.toolFactories.push({
-          name: factory.name ?? options?.name ?? "",
-          factory: () => factory,
-          options: options ?? {},
-        });
-      } else {
-        process.stderr.write(
-          `[openclaw-shim] registerTool: ignored, expected function or object, got ${typeof factory}\n`,
-        );
-      }
+      capturePushFactory(captured.toolFactories, factory, options, "registerTool");
     },
 
-    // === captured-but-ignored (Phase 2+) ============================
+    // === bridged in Phase 2 =========================================
+    registerProvider(factory, options = {}) {
+      capturePushFactory(captured.providerFactories, factory, options, "registerProvider");
+    },
+    registerChannel(factory, options = {}) {
+      capturePushFactory(captured.channelFactories, factory, options, "registerChannel");
+    },
+
+    // === captured-but-ignored (later phases) ========================
     registerHttpRoute: (...args) => warn("registerHttpRoute", args),
     registerWebSearchProvider: (...args) => warn("registerWebSearchProvider", args),
-    registerProvider: (...args) => warn("registerProvider", args),
     registerCommand: (...args) => warn("registerCommand", args),
     registerService: (...args) => warn("registerService", args),
     registerMemory: (...args) => warn("registerMemory", args),
@@ -118,6 +119,26 @@ export function buildApi(captured) {
       debug: (...args) => process.stderr.write(`[shim:debug] ${formatArgs(args)}\n`),
     },
   };
+}
+
+// capturePushFactory is the shared push helper for registerTool /
+// registerProvider / registerChannel. Accepts either a factory function
+// or an already-built object (some extensions pass the latter for
+// brevity); normalizes both to a factory(ctx) closure.
+function capturePushFactory(target, factory, options, label) {
+  if (typeof factory === "function") {
+    target.push({ name: options?.name ?? "", factory, options: options ?? {} });
+  } else if (factory && typeof factory === "object") {
+    target.push({
+      name: factory.name ?? options?.name ?? "",
+      factory: () => factory,
+      options: options ?? {},
+    });
+  } else {
+    process.stderr.write(
+      `[openclaw-shim] ${label}: ignored, expected function or object, got ${typeof factory}\n`,
+    );
+  }
 }
 
 function formatArgs(args) {
