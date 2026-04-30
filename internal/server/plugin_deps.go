@@ -20,17 +20,20 @@ import (
 // PluginDepsHandler serves the plugins.deps.* RPCs the UI uses to drive
 // runtime-dependency installation for bundled openclaw extensions.
 //
-// Bundled extensions ship with a package.json declaring runtime deps,
-// but we don't pre-install them at vendor time (npm install per
-// extension is cheap if the user's enabling 1-2, expensive if we
-// blanket-install all 116). Manual install lets users opt in
-// per-extension, with progress and errors surfaced through the UI
-// rather than buried in a startup log line.
+// Lookup chain for extension code (highest priority first):
 //
-// Installs land in-place at <bundled.path>/<name>/node_modules/. In
-// Docker that's ephemeral unless /opt/extensions is bind-mounted; the
-// alternative (separate writable layout with NODE_PATH indirection)
-// is a v1 concern.
+//  1. ~/.talon/extensions/<name>      — talon overlay (writable)
+//  2. ~/.openclaw/extensions/<name>   — openclaw layer (read-only,
+//                                        picks up user installs from
+//                                        a prior openclaw setup)
+//  3. /opt/extensions/<name>          — image-baked bundle (Docker)
+//
+// Install destination is always (1). If the source for a given
+// extension is (2) or (3), the install path copies it into the talon
+// overlay first, then npm install runs in the writable copy. This
+// gives drop-in compat with openclaw's user-install location AND
+// makes installs survive container rebuilds without a separate
+// volume mount (~/.talon is already a host bind in docker-run).
 type PluginDepsHandler struct {
 	paths openclaw.Paths
 
@@ -71,6 +74,11 @@ func (h *PluginDepsHandler) Register(r *Registry) {
 type pluginDepsStatusItem struct {
 	Name              string `json:"name"`
 	Path              string `json:"path"`
+	// Source identifies which dir in the lookup chain this extension
+	// came from: "talon" / "openclaw" / "bundled". The UI surfaces
+	// it so users can see whether they're looking at their own
+	// installs or the shipped defaults.
+	Source            string `json:"source"`
 	HasPackageJSON    bool   `json:"hasPackageJson"`
 	DepCount          int    `json:"depCount"`
 	Installed         bool   `json:"installed"`
@@ -78,36 +86,63 @@ type pluginDepsStatusItem struct {
 	Error             string `json:"error,omitempty"`
 }
 
+// extensionSource pairs a directory with a label for the lookup-chain
+// merge. Order matters: earlier entries win on name collision.
+type extensionSource struct {
+	root  string
+	label string
+}
+
 func (h *PluginDepsHandler) handleStatus(_ context.Context, _ HandlerCtx, _ json.RawMessage) (any, *FrameError) {
-	root, ferr := h.bundledRoot()
-	if ferr != nil {
-		return nil, ferr
+	sources := h.extensionSources()
+	if len(sources) == 0 {
+		return map[string]any{
+			"items":      []pluginDepsStatusItem{},
+			"sources":    []map[string]string{},
+			"writeRoot":  h.talonExtensionsRoot(),
+		}, nil
 	}
-	if root == "" {
-		// No bundled path configured; return an empty list rather than
-		// an error so the UI can render a "no extensions configured"
-		// state without distinguishing it from a missing path.
-		return map[string]any{"items": []pluginDepsStatusItem{}, "bundledPath": ""}, nil
-	}
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		return nil, &FrameError{Code: ErrCodeInternal, Message: "plugins.deps.status: " + err.Error()}
-	}
-	items := make([]pluginDepsStatusItem, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
+
+	seen := map[string]bool{}
+	items := make([]pluginDepsStatusItem, 0)
+	for _, src := range sources {
+		entries, err := os.ReadDir(src.root)
+		if err != nil {
+			// Missing dirs in the chain are fine — the chain itself
+			// is what falls through to fallbacks. Real I/O errors on
+			// existing dirs we surface so users notice perms issues.
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return nil, &FrameError{Code: ErrCodeInternal, Message: "plugins.deps.status: " + err.Error()}
 		}
-		// Skip dotfiles + the npm-shared node_modules sibling at the
-		// root so the list is just real extension dirs.
-		name := e.Name()
-		if strings.HasPrefix(name, ".") || name == "node_modules" {
-			continue
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			name := e.Name()
+			if strings.HasPrefix(name, ".") || name == "node_modules" {
+				continue
+			}
+			if seen[name] {
+				continue // earlier source already provided this name
+			}
+			seen[name] = true
+			item := statusForExtension(filepath.Join(src.root, name), name)
+			item.Source = src.label
+			items = append(items, item)
 		}
-		items = append(items, statusForExtension(filepath.Join(root, name), name))
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
-	return map[string]any{"items": items, "bundledPath": root}, nil
+	srcRows := make([]map[string]string, 0, len(sources))
+	for _, s := range sources {
+		srcRows = append(srcRows, map[string]string{"label": s.label, "path": s.root})
+	}
+	return map[string]any{
+		"items":     items,
+		"sources":   srcRows,
+		"writeRoot": h.talonExtensionsRoot(),
+	}, nil
 }
 
 // statusForExtension reports whether an extension dir has a package.json
@@ -159,26 +194,19 @@ func (h *PluginDepsHandler) handleInstall(_ context.Context, _ HandlerCtx, param
 	if p.Name == "" {
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.install: name is required"}
 	}
-	// Reject anything that isn't a bare directory name — no slashes,
-	// no traversal. Defense-in-depth even though the UI only ever
-	// sends names from plugins.deps.status's own output.
 	if strings.ContainsAny(p.Name, `/\`) || p.Name == "." || p.Name == ".." {
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.install: invalid name"}
 	}
-	root, ferr := h.bundledRoot()
-	if ferr != nil {
-		return nil, ferr
-	}
-	if root == "" {
-		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.install: plugins.bundled.path not configured"}
-	}
-	dir := filepath.Join(root, p.Name)
-	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+
+	// Resolve the source dir from the lookup chain. The result
+	// becomes the install destination too — except when the source
+	// is a read-only fallback, in which case we copy it into the
+	// talon overlay first.
+	srcDir, srcLabel := h.locateExtension(p.Name)
+	if srcDir == "" {
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.install: extension not found: " + p.Name}
 	}
-	pkgPath := filepath.Join(dir, "package.json")
-	if _, err := os.Stat(pkgPath); err != nil {
-		// Nothing to install — return ok with a no-op note.
+	if _, err := os.Stat(filepath.Join(srcDir, "package.json")); err != nil {
 		return map[string]any{
 			"ok":      true,
 			"name":    p.Name,
@@ -186,11 +214,21 @@ func (h *PluginDepsHandler) handleInstall(_ context.Context, _ HandlerCtx, param
 		}, nil
 	}
 
+	dir := srcDir
+	talonRoot := h.talonExtensionsRoot()
+	if srcLabel != "talon" && talonRoot != "" {
+		dest := filepath.Join(talonRoot, p.Name)
+		if err := copyDirectory(srcDir, dest); err != nil {
+			return nil, &FrameError{Code: ErrCodeInternal, Message: "plugins.deps.install: copy to overlay: " + err.Error()}
+		}
+		dir = dest
+	}
+
 	ctx, cancel := context.WithTimeout(context.Background(), h.installTimeout)
 	defer cancel()
 	cmd := h.npmCmd(ctx, dir)
 	out, err := cmd.CombinedOutput()
-	tail := tailLines(string(out), 80) // bound the response payload
+	tail := tailLines(string(out), 80)
 	if err != nil {
 		return map[string]any{
 			"ok":     false,
@@ -199,10 +237,12 @@ func (h *PluginDepsHandler) handleInstall(_ context.Context, _ HandlerCtx, param
 			"output": tail,
 		}, nil
 	}
-	// Re-stat to confirm node_modules exists (npm sometimes reports
-	// success without writing anything if package.json had no deps
-	// but a leftover lockfile, etc.).
 	status := statusForExtension(dir, p.Name)
+	if dir == filepath.Join(talonRoot, p.Name) {
+		status.Source = "talon"
+	} else {
+		status.Source = srcLabel
+	}
 	return map[string]any{
 		"ok":     true,
 		"name":   p.Name,
@@ -211,25 +251,130 @@ func (h *PluginDepsHandler) handleInstall(_ context.Context, _ HandlerCtx, param
 	}, nil
 }
 
-// bundledRoot resolves plugins.bundled.path the same way the spawn
-// path does — config first, env var second, /opt/extensions third.
-// Kept separate from the cmd/talon-side defaults for testability;
-// the in-server handler sees only the merged config + env.
-func (h *PluginDepsHandler) bundledRoot() (string, *FrameError) {
-	merged, err := config.MergedBytes(h.paths)
-	if err != nil {
-		return "", &FrameError{Code: ErrCodeInternal, Message: "plugins.deps: read config: " + err.Error()}
+// extensionSources returns the lookup chain talon walks to find
+// extension dirs. Order matters — the talon overlay wins, then the
+// openclaw layer (read-only, drop-in compat), then the image-baked
+// bundle. Absent dirs aren't filtered here; callers handle ENOENT.
+func (h *PluginDepsHandler) extensionSources() []extensionSource {
+	out := []extensionSource{}
+	if root := h.talonExtensionsRoot(); root != "" {
+		out = append(out, extensionSource{root: root, label: "talon"})
 	}
-	if v := gjson.GetBytes(merged, "plugins.bundled.path"); v.Exists() && v.Str != "" {
-		return v.Str, nil
+	if root := h.openclawExtensionsRoot(); root != "" {
+		out = append(out, extensionSource{root: root, label: "openclaw"})
+	}
+	if root := h.bundledExtensionsRoot(); root != "" {
+		// Avoid double-listing if a config explicitly pointed
+		// bundled.paths at one of the layered dirs.
+		duplicate := false
+		for _, s := range out {
+			if s.root == root {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			out = append(out, extensionSource{root: root, label: "bundled"})
+		}
+	}
+	return out
+}
+
+// locateExtension walks the chain and returns the first dir + label
+// that contains a directory matching name. Returns ("", "") when no
+// source has it.
+func (h *PluginDepsHandler) locateExtension(name string) (dir, label string) {
+	for _, src := range h.extensionSources() {
+		candidate := filepath.Join(src.root, name)
+		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+			return candidate, src.label
+		}
+	}
+	return "", ""
+}
+
+// talonExtensionsRoot is the writable destination for installs.
+// Defaults to <Talon.Dir>/extensions; overridable via
+// plugins.bundled.writeRoot in config (rarely needed).
+func (h *PluginDepsHandler) talonExtensionsRoot() string {
+	if h.paths.Talon.Dir == "" {
+		return ""
+	}
+	merged, err := config.MergedBytes(h.paths)
+	if err == nil {
+		if v := gjson.GetBytes(merged, "plugins.bundled.writeRoot"); v.Exists() && v.Str != "" {
+			return v.Str
+		}
+	}
+	return filepath.Join(h.paths.Talon.Dir, "extensions")
+}
+
+// openclawExtensionsRoot returns ~/.openclaw/extensions when present.
+// We don't WRITE there (that violates talon's read-only invariant on
+// the openclaw layer) but reading lets users with a prior openclaw
+// install see their custom extensions in talon's UI without copying.
+func (h *PluginDepsHandler) openclawExtensionsRoot() string {
+	if h.paths.Openclaw.Dir == "" || h.paths.SkipOpenclaw {
+		return ""
+	}
+	candidate := filepath.Join(h.paths.Openclaw.Dir, "extensions")
+	if _, err := os.Stat(candidate); err != nil {
+		return ""
+	}
+	return candidate
+}
+
+// bundledExtensionsRoot returns the image-baked default. Resolution:
+// plugins.bundled.path config first, TALON_EXTENSIONS_PATH env second,
+// /opt/extensions third (Docker convention).
+func (h *PluginDepsHandler) bundledExtensionsRoot() string {
+	merged, err := config.MergedBytes(h.paths)
+	if err == nil {
+		if v := gjson.GetBytes(merged, "plugins.bundled.path"); v.Exists() && v.Str != "" {
+			return v.Str
+		}
 	}
 	if v := os.Getenv("TALON_EXTENSIONS_PATH"); v != "" {
-		return v, nil
+		return v
 	}
 	if _, err := os.Stat("/opt/extensions"); err == nil {
-		return "/opt/extensions", nil
+		return "/opt/extensions"
 	}
-	return "", nil
+	return ""
+}
+
+// copyDirectory clones src → dst recursively. We only invoke this
+// when promoting a read-only-source extension into the writable
+// overlay before npm install; sizes are tens of KB at most so this
+// doesn't need to be optimized for huge trees.
+func copyDirectory(src, dst string) error {
+	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, relErr := filepath.Rel(src, path)
+		if relErr != nil {
+			return relErr
+		}
+		target := filepath.Join(dst, rel)
+		if info.IsDir() {
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		// Skip symlinks and special files — extensions are plain JS
+		// trees in practice, and we don't want to surprise users with
+		// surprise FIFO copies.
+		if info.Mode()&os.ModeType != 0 {
+			return nil
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			return err
+		}
+		return os.WriteFile(target, raw, info.Mode().Perm())
+	})
 }
 
 // tailLines returns at most n lines from the tail of s. Keeps the UI

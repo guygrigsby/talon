@@ -104,33 +104,39 @@ type pluginSpec struct {
 	cmd  []string
 }
 
-// defaultPluginDefaults probes the runtime for sensible bundled-plugin
-// defaults so users don't have to set plugins.bundled.path on a
-// standard Docker install. Resolution order:
+// defaultPluginDefaults probes the runtime for the bundled-extension
+// lookup chain. Order matches the in-server PluginDepsHandler:
 //
-//  1. TALON_EXTENSIONS_PATH env var (explicit, highest priority).
-//  2. /opt/extensions if it exists (the path the Dockerfile bakes in).
+//  1. ~/.talon/extensions   — talon overlay (writable; where deps land)
+//  2. ~/.openclaw/extensions — openclaw layer (read-only fallback)
+//  3. TALON_EXTENSIONS_PATH or /opt/extensions — image-baked bundle
 //
-// Both yield empty when nothing's set; the merged config can still
-// supply plugins.bundled.path explicitly, in which case neither
-// default applies.
-func defaultPluginDefaults() pluginParseDefaults {
+// Spawn picks the first dir that contains the named extension.
+// That makes the post-install talon-overlay copy (with node_modules)
+// win over the bundled read-only copy that has no deps installed.
+func defaultPluginDefaults(paths openclaw.Paths) pluginParseDefaults {
+	out := pluginParseDefaults{}
+	if paths.Talon.Dir != "" {
+		out.bundledPaths = append(out.bundledPaths, filepath.Join(paths.Talon.Dir, "extensions"))
+	}
+	if paths.Openclaw.Dir != "" && !paths.SkipOpenclaw {
+		out.bundledPaths = append(out.bundledPaths, filepath.Join(paths.Openclaw.Dir, "extensions"))
+	}
 	if v := os.Getenv("TALON_EXTENSIONS_PATH"); v != "" {
-		return pluginParseDefaults{bundledPath: v}
+		out.bundledPaths = append(out.bundledPaths, v)
+	} else if _, err := os.Stat("/opt/extensions"); err == nil {
+		out.bundledPaths = append(out.bundledPaths, "/opt/extensions")
 	}
-	if _, err := os.Stat("/opt/extensions"); err == nil {
-		return pluginParseDefaults{bundledPath: "/opt/extensions"}
-	}
-	return pluginParseDefaults{}
+	return out
 }
 
 // pluginParseDefaults provides fallback values for the bundled-extension
 // shortcut when the merged config doesn't set them. Production callers
-// fill bundledPath from the runtime environment (TALON_EXTENSIONS_PATH
-// or a probe of /opt/extensions); tests can pass zero values.
+// fill bundledPaths from the runtime environment via
+// defaultPluginDefaults; tests pass an explicit list (or empty).
 type pluginParseDefaults struct {
-	bundledPath string
-	shimCmd     []string
+	bundledPaths []string
+	shimCmd      []string
 }
 
 // parsePluginSpecs walks plugins.entries.<name> in the merged config
@@ -148,18 +154,23 @@ type pluginParseDefaults struct {
 // enabled flags for native runtime built-ins, not subprocesses we own.
 // Pure function for testability.
 func parsePluginSpecs(merged []byte, defaults pluginParseDefaults) []pluginSpec {
-	bundledPath := gjson.GetBytes(merged, "plugins.bundled.path").Str
-	if bundledPath == "" {
-		bundledPath = defaults.bundledPath
+	// Build the lookup chain. plugins.bundled.path (singular, legacy)
+	// or plugins.bundled.paths (array) override the runtime defaults.
+	// Either form lands as a slice walked in declared order.
+	bundledPaths := stringArray(gjson.GetBytes(merged, "plugins.bundled.paths"))
+	if len(bundledPaths) == 0 {
+		if v := gjson.GetBytes(merged, "plugins.bundled.path"); v.Exists() && v.Str != "" {
+			bundledPaths = []string{v.Str}
+		}
+	}
+	if len(bundledPaths) == 0 {
+		bundledPaths = defaults.bundledPaths
 	}
 	shimCmd := stringArray(gjson.GetBytes(merged, "plugins.bundled.shimCmd"))
 	if len(shimCmd) == 0 {
 		shimCmd = defaults.shimCmd
 	}
 	if len(shimCmd) == 0 {
-		// Default shim invocation: rely on PATH lookup of node and the
-		// openclaw-plugin-host symlink. The Dockerfile sets both up;
-		// host installs need Node + the shim on PATH.
 		shimCmd = []string{"node", "openclaw-plugin-host"}
 	}
 
@@ -168,26 +179,41 @@ func parsePluginSpecs(merged []byte, defaults pluginParseDefaults) []pluginSpec 
 		if !entry.Get("enabled").Bool() {
 			return true
 		}
-		// Explicit cmd wins.
 		if cmd := stringArray(entry.Get("cmd")); len(cmd) > 0 {
 			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd})
 			return true
 		}
-		// Bundled-extension shortcut. Skip silently when bundled.path
-		// isn't configured (the user enabled a bundled extension but
-		// didn't tell us where they live — log so they can spot it).
 		if extName := entry.Get("bundled").Str; extName != "" {
-			if bundledPath == "" {
-				log.Printf("plugin %s: bundled=%q but plugins.bundled.path is unset; skipping", nameKey.Str, extName)
+			extDir := resolveBundledDir(bundledPaths, extName)
+			if extDir == "" {
+				log.Printf("plugin %s: bundled=%q not found in any of plugins.bundled.paths %v; skipping",
+					nameKey.Str, extName, bundledPaths)
 				return true
 			}
-			fullCmd := append(append([]string(nil), shimCmd...), filepath.Join(bundledPath, extName))
+			fullCmd := append(append([]string(nil), shimCmd...), extDir)
 			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: fullCmd})
 			return true
 		}
 		return true
 	})
 	return specs
+}
+
+// resolveBundledDir walks paths in order and returns the first dir
+// matching <root>/<name> that exists. Empty result means the
+// extension isn't installed in any source — caller skips with a
+// log line.
+func resolveBundledDir(paths []string, name string) string {
+	for _, root := range paths {
+		if root == "" {
+			continue
+		}
+		candidate := filepath.Join(root, name)
+		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
+			return candidate
+		}
+	}
+	return ""
 }
 
 // stringArray reads a JSON array of strings into a Go slice, skipping
@@ -217,7 +243,7 @@ func loadConfiguredPlugins(ctx context.Context, host *plugin.Host, paths opencla
 		log.Printf("plugins: read merged config: %v", err)
 		return
 	}
-	for _, spec := range parsePluginSpecs(merged, defaultPluginDefaults()) {
+	for _, spec := range parsePluginSpecs(merged, defaultPluginDefaults(paths)) {
 		inst, err := host.LoadPlugin(ctx, spec.name, plugin.LoadOptions{Cmd: spec.cmd})
 		if err != nil {
 			log.Printf("plugin %s: load failed: %v", spec.name, err)

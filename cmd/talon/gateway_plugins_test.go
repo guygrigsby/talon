@@ -1,6 +1,9 @@
 package main
 
 import (
+	"fmt"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -87,47 +90,52 @@ func TestParsePluginSpecs_FiltersBlankCmdEntries(t *testing.T) {
 }
 
 func TestParsePluginSpecs_BundledExpandsToShimCmd(t *testing.T) {
-	body := []byte(`{
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "anthropic"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(fmt.Sprintf(`{
 		"plugins": {
-			"bundled": {"path": "/opt/extensions"},
+			"bundled": {"path": %q},
 			"entries": {
 				"anthropic": {"enabled": true, "bundled": "anthropic"},
 				"brave":     {"enabled": false, "bundled": "brave"}
 			}
 		}
-	}`)
+	}`, root))
 	got := parsePluginSpecs(body, pluginParseDefaults{})
 	if len(got) != 1 {
 		t.Fatalf("got %d specs, want 1 (anthropic only — brave is disabled)", len(got))
 	}
-	want := []string{"node", "openclaw-plugin-host", "/opt/extensions/anthropic"}
+	want := []string{"node", "openclaw-plugin-host", filepath.Join(root, "anthropic")}
 	if got[0].name != "anthropic" || !reflect.DeepEqual(got[0].cmd, want) {
 		t.Errorf("anthropic resolved wrong: %+v (want %v)", got[0], want)
 	}
 }
 
 func TestParsePluginSpecs_BundledHonorsShimCmdOverride(t *testing.T) {
-	body := []byte(`{
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "anthropic"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(fmt.Sprintf(`{
 		"plugins": {
 			"bundled": {
-				"path": "/opt/extensions",
+				"path": %q,
 				"shimCmd": ["/usr/bin/node", "--experimental-vm-modules", "/opt/openclaw-plugin-host/bin/openclaw-plugin-host.mjs"]
 			},
 			"entries": {
 				"anthropic": {"enabled": true, "bundled": "anthropic"}
 			}
 		}
-	}`)
+	}`, root))
 	got := parsePluginSpecs(body, pluginParseDefaults{})
-	if len(got) != 1 || got[0].cmd[0] != "/usr/bin/node" || got[0].cmd[3] != "/opt/extensions/anthropic" {
+	if len(got) != 1 || got[0].cmd[0] != "/usr/bin/node" || got[0].cmd[3] != filepath.Join(root, "anthropic") {
 		t.Fatalf("shimCmd override not applied: %+v", got)
 	}
 }
 
 func TestParsePluginSpecs_BundledWithoutPathSkips(t *testing.T) {
-	// Enabling a bundled extension without setting bundled.path is
-	// almost certainly a config mistake — we skip the entry but the
-	// gateway logs a hint so the user notices it didn't load.
 	body := []byte(`{
 		"plugins": {
 			"entries": {"anthropic": {"enabled": true, "bundled": "anthropic"}}
@@ -139,10 +147,47 @@ func TestParsePluginSpecs_BundledWithoutPathSkips(t *testing.T) {
 	}
 }
 
+func TestParsePluginSpecs_BundledLookupChainPrefersFirstHit(t *testing.T) {
+	// Two roots; the same extension exists in both. The first root
+	// in defaults.bundledPaths wins, mirroring the talon-overlay >
+	// openclaw > image-bundle precedence the resolver enforces in
+	// production.
+	overlayRoot := t.TempDir()
+	bundleRoot := t.TempDir()
+	for _, r := range []string{overlayRoot, bundleRoot} {
+		if err := os.MkdirAll(filepath.Join(r, "anthropic"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	body := []byte(`{
+		"plugins": {"entries": {"anthropic": {"enabled": true, "bundled": "anthropic"}}}
+	}`)
+	got := parsePluginSpecs(body, pluginParseDefaults{
+		bundledPaths: []string{overlayRoot, bundleRoot},
+	})
+	if len(got) != 1 || got[0].cmd[2] != filepath.Join(overlayRoot, "anthropic") {
+		t.Errorf("expected first-path hit to win: %+v", got)
+	}
+}
+
+func TestParsePluginSpecs_BundledFallsThroughWhenFirstPathMissing(t *testing.T) {
+	overlayRoot := t.TempDir() // empty — no anthropic here
+	bundleRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(bundleRoot, "anthropic"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{
+		"plugins": {"entries": {"anthropic": {"enabled": true, "bundled": "anthropic"}}}
+	}`)
+	got := parsePluginSpecs(body, pluginParseDefaults{
+		bundledPaths: []string{overlayRoot, bundleRoot},
+	})
+	if len(got) != 1 || got[0].cmd[2] != filepath.Join(bundleRoot, "anthropic") {
+		t.Errorf("expected fallthrough to second path: %+v", got)
+	}
+}
+
 func TestParsePluginSpecs_ExplicitCmdWinsOverBundled(t *testing.T) {
-	// If a user supplies both, the explicit cmd wins. Surfaces as an
-	// escape hatch when the bundled shim path is wrong but the user
-	// still wants the named entry to load from somewhere specific.
 	body := []byte(`{
 		"plugins": {
 			"bundled": {"path": "/opt/extensions"},

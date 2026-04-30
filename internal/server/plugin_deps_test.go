@@ -68,8 +68,8 @@ func TestPluginDepsStatus_ReportsPerExtension(t *testing.T) {
 		t.Fatalf("status: %+v", ferr)
 	}
 	envelope := res.(map[string]any)
-	if envelope["bundledPath"] != root {
-		t.Errorf("bundledPath wrong: %v", envelope["bundledPath"])
+	if envelope["writeRoot"] != root {
+		t.Errorf("writeRoot wrong: %v (want %q)", envelope["writeRoot"], root)
 	}
 	items := envelope["items"].([]pluginDepsStatusItem)
 	byName := map[string]pluginDepsStatusItem{}
@@ -95,26 +95,77 @@ func TestPluginDepsStatus_ReportsPerExtension(t *testing.T) {
 	}
 }
 
-func TestPluginDepsStatus_EmptyWhenNoBundledPath(t *testing.T) {
+func TestPluginDepsStatus_EmptyWhenNoSources(t *testing.T) {
+	// Build a Paths where every layer in the lookup chain is empty:
+	// no talon overlay extensions dir, no openclaw layer at all,
+	// no /opt/extensions. The chain returns no items.
 	paths := readFixture(t, `{}`)
+	paths.SkipOpenclaw = true
 	if err := os.WriteFile(paths.Talon.Config, []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("TALON_EXTENSIONS_PATH", "")
-	// Ensure no /opt/extensions exists in test env (it shouldn't on
-	// a dev machine, but be explicit).
+
+	h := NewPluginDepsHandler(paths)
+	// Skip if the test box happens to have /opt/extensions populated
+	// (a real dev machine running talon's Docker image locally would).
+	if _, err := os.Stat("/opt/extensions"); err == nil {
+		t.Skip("test env has /opt/extensions populated")
+	}
+	res, ferr := h.handleStatus(t.Context(), HandlerCtx{}, nil)
+	if ferr != nil {
+		t.Fatalf("status: %+v", ferr)
+	}
+	items := res.(map[string]any)["items"].([]pluginDepsStatusItem)
+	if len(items) != 0 {
+		t.Errorf("items should be empty when no chain sources have content: %+v", items)
+	}
+}
+
+// TestPluginDepsStatus_LookupChainMergesSources verifies the chain
+// behavior: talon overlay wins over openclaw layer, both win over
+// the bundle.
+func TestPluginDepsStatus_LookupChainMergesSources(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	talonExt := filepath.Join(paths.Talon.Dir, "extensions")
+	openclawExt := filepath.Join(paths.Openclaw.Dir, "extensions")
+	bundleExt := filepath.Join(paths.Talon.Dir, "fake-bundle")
+	for _, d := range []string{talonExt, openclawExt, bundleExt} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cfg := fmt.Sprintf(`{"plugins":{"bundled":{"path":%q}}}`, bundleExt)
+	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// "shared" exists in all three layers — talon wins.
+	writeExtension(t, talonExt, "shared", nil, false)
+	writeExtension(t, openclawExt, "shared", map[string]string{"a": "1"}, true)
+	writeExtension(t, bundleExt, "shared", map[string]string{"b": "1"}, true)
+	// "user-only" exists only at the openclaw layer.
+	writeExtension(t, openclawExt, "user-only", nil, false)
+	// "bundled-only" exists only at the bundle layer.
+	writeExtension(t, bundleExt, "bundled-only", nil, false)
+
 	h := NewPluginDepsHandler(paths)
 	res, ferr := h.handleStatus(t.Context(), HandlerCtx{}, nil)
 	if ferr != nil {
 		t.Fatalf("status: %+v", ferr)
 	}
-	envelope := res.(map[string]any)
-	if envelope["bundledPath"] != "" {
-		t.Skipf("test env has a real /opt/extensions: %v", envelope["bundledPath"])
+	items := res.(map[string]any)["items"].([]pluginDepsStatusItem)
+	bySource := map[string]string{}
+	for _, it := range items {
+		bySource[it.Name] = it.Source
 	}
-	items := envelope["items"].([]pluginDepsStatusItem)
-	if len(items) != 0 {
-		t.Errorf("items should be empty when no bundledPath: %+v", items)
+	if bySource["shared"] != "talon" {
+		t.Errorf("shared should resolve to talon, got %q (full=%+v)", bySource["shared"], items)
+	}
+	if bySource["user-only"] != "openclaw" {
+		t.Errorf("user-only should resolve to openclaw, got %q", bySource["user-only"])
+	}
+	if bySource["bundled-only"] != "bundled" {
+		t.Errorf("bundled-only should resolve to bundled, got %q", bySource["bundled-only"])
 	}
 }
 
@@ -195,6 +246,54 @@ func TestPluginDepsInstall_NoPackageJSONIsNoOp(t *testing.T) {
 	envelope := res.(map[string]any)
 	if envelope["ok"] != true || envelope["skipped"] != "no package.json" {
 		t.Errorf("expected skipped no-op, got %+v", envelope)
+	}
+}
+
+// TestPluginDepsInstall_CopiesFromBundleBeforeInstall verifies the
+// promotion path: when an extension lives only in the read-only
+// bundle, install copies it into the talon overlay first so npm
+// install lands somewhere persistent.
+func TestPluginDepsInstall_CopiesFromBundleBeforeInstall(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	bundleExt := filepath.Join(paths.Talon.Dir, "fake-bundle")
+	talonExt := filepath.Join(paths.Talon.Dir, "extensions")
+	if err := os.MkdirAll(bundleExt, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := fmt.Sprintf(`{"plugins":{"bundled":{"path":%q}}}`, bundleExt)
+	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeExtension(t, bundleExt, "needs-deps", map[string]string{"left-pad": "^1.0.0"}, false)
+
+	var npmDir string
+	h := NewPluginDepsHandler(paths)
+	h.WithNpmCmd(func(ctx context.Context, dir string) *exec.Cmd {
+		npmDir = dir
+		return exec.CommandContext(ctx, "sh", "-c",
+			"mkdir -p \""+dir+"/node_modules\" && echo 'fake npm: added 1 package'")
+	})
+
+	res, ferr := h.handleInstall(t.Context(), HandlerCtx{}, []byte(`{"name":"needs-deps"}`))
+	if ferr != nil {
+		t.Fatalf("install: %+v", ferr)
+	}
+	envelope := res.(map[string]any)
+	if envelope["ok"] != true {
+		t.Fatalf("install not ok: %+v", envelope)
+	}
+	expectedDir := filepath.Join(talonExt, "needs-deps")
+	if npmDir != expectedDir {
+		t.Errorf("npm should run in talon overlay copy %q, got %q", expectedDir, npmDir)
+	}
+	if _, err := os.Stat(filepath.Join(expectedDir, "package.json")); err != nil {
+		t.Errorf("package.json should have been copied to talon overlay: %v", err)
+	}
+	// Source label on the post-install status should report "talon"
+	// since the live copy now lives there.
+	status := envelope["status"].(pluginDepsStatusItem)
+	if status.Source != "talon" {
+		t.Errorf("post-install source should be talon, got %q", status.Source)
 	}
 }
 
