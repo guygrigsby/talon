@@ -8,6 +8,25 @@
       "title": "Load Checkpoint"
     }
   },
+  "8": {
+    "inputs": {
+      "lora_name": "3d.safetensors",
+      "strength_model": 0.8,
+      "strength_clip": 0.8,
+      "model": [
+        "1",
+        0
+      ],
+      "clip": [
+        "1",
+        1
+      ]
+    },
+    "class_type": "LoraLoader",
+    "_meta": {
+      "title": "LoRA: 3d (small)"
+    }
+  },
   "2": {
     "inputs": {
       "text": "%prompt%",
@@ -48,9 +67,9 @@
   "5": {
     "inputs": {
       "seed": "%seed%",
-      "steps": 8,
-      "cfg": 1,
-      "sampler_name": "euler",
+      "steps": 30,
+      "cfg": 6,
+      "sampler_name": "deis",
       "scheduler": "sgm_uniform",
       "denoise": 1,
       "model": [
@@ -77,7 +96,7 @@
   },
   "12": {
     "inputs": {
-      "text": "(blush:1.2)",
+      "text": "(blush:1.3)",
       "clip": [
         "8",
         1
@@ -120,35 +139,17 @@
       "title": "VAE Decode"
     }
   },
-  "8": {
+  "7": {
     "inputs": {
-      "lora_name": "Hyper-SDXL-8steps-lora.safetensors",
-      "strength_model": 1,
-      "strength_clip": 1,
-      "model": [
-        "1",
-        0
-      ],
-      "clip": [
-        "1",
-        1
-      ]
-    },
-    "class_type": "LoraLoader",
-    "_meta": {
-      "title": "Hyper-SDXL 8-step"
-    }
-  },
-  "11": {
-    "inputs": {
+      "filename_prefix": "dixar_lora_3d/ComfyUI",
       "images": [
         "6",
         0
       ]
     },
-    "class_type": "PreviewImage",
+    "class_type": "SaveImage",
     "_meta": {
-      "title": "Preview Image"
+      "title": "Save Image"
     }
   }
 }

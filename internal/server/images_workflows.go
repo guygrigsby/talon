@@ -68,6 +68,24 @@ var builtinWorkflows = []builtinWorkflow{
 		SeedNodeID:           "5",
 		Description:          "dixar_4DixGalore + Hyper-SDXL 8-step LoRA. ~4x faster, slightly lower fidelity.",
 	},
+	{
+		ID:                   "dixar-3d",
+		Label:                "Dixar 3D LoRA (30 steps)",
+		Filename:             "dixar_3d.json",
+		PromptNodeID:         "2",
+		NegativePromptNodeID: "3",
+		SeedNodeID:           "5",
+		Description:          "dixar_4DixGalore + 3d.safetensors style LoRA, deis sampler, 30 steps. Stylized 3D look.",
+	},
+	{
+		ID:                   "dixar-3d-hyper8",
+		Label:                "Dixar 3D LoRA — Hyper-8 (fast)",
+		Filename:             "dixar_3d_hyper8.json",
+		PromptNodeID:         "2",
+		NegativePromptNodeID: "3",
+		SeedNodeID:           "5",
+		Description:          "dixar_4DixGalore + 3d LoRA + Hyper-SDXL 8-step LoRA. Stylized 3D, ~4x faster.",
+	},
 }
 
 // findBuiltinWorkflow returns the entry by id, or nil when id is

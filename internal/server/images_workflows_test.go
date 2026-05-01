@@ -31,8 +31,10 @@ func TestImagesWorkflowsList_ListsBuiltins(t *testing.T) {
 	}
 	// Both shipped builtins surface, with stable ids the UI sends back.
 	want := map[string]bool{
-		"dixar-character":         false,
-		"dixar-character-hyper8":  false,
+		"dixar-character":        false,
+		"dixar-character-hyper8": false,
+		"dixar-3d":               false,
+		"dixar-3d-hyper8":        false,
 	}
 	for _, w := range wfs {
 		if _, named := want[w.ID]; named {
@@ -149,6 +151,65 @@ func TestLoadComfyUIConfig_UnknownBuiltinErrors(t *testing.T) {
 	}
 	if !strings.Contains(ferr.Message, "not-a-real-id") {
 		t.Errorf("error should name the bad id: %s", ferr.Message)
+	}
+}
+
+func TestLoadComfyUIConfig_3DBuiltinsLoadCorrectly(t *testing.T) {
+	// The 3D-LoRA variants share the same prompt/negative/seed pins
+	// as the character workflows but add a LoRA stack on top. Verify
+	// the embedded JSON for each loads, the pins resolve, and the
+	// 3d LoRA reference survives — the latter catching any wrong-file
+	// mix-up between the two 3D variants and the character ones.
+	paths := readFixture(t, "{}")
+	h := NewImagesHandler(paths)
+
+	cases := []struct {
+		id          string
+		wantSubstr  string
+		description string
+	}{
+		{"dixar-3d", "3d.safetensors", "30-step 3D"},
+		{"dixar-3d-hyper8", "Hyper-SDXL-8steps-lora.safetensors", "Hyper-8 3D"},
+	}
+	for _, c := range cases {
+		t.Run(c.id, func(t *testing.T) {
+			cfg, ferr := h.loadComfyUIConfig(c.id)
+			if ferr != nil {
+				t.Fatalf("%s: %+v", c.description, ferr)
+			}
+			if len(cfg.WorkflowJSON) == 0 {
+				t.Fatalf("%s: WorkflowJSON empty", c.description)
+			}
+			if cfg.PromptNodeID != "2" || cfg.NegativePromptNodeID != "3" || cfg.SeedNodeID != "5" {
+				t.Errorf("%s: pin mismatch: %+v", c.description, cfg)
+			}
+			if !strings.Contains(string(cfg.WorkflowJSON), c.wantSubstr) {
+				t.Errorf("%s: workflow JSON missing %q", c.description, c.wantSubstr)
+			}
+			// Patch end-to-end so a structural change in the JSON
+			// (e.g. a renamed node) trips this assertion before
+			// shipping.
+			seed := int64(7)
+			out, ferr := readAndPatchWorkflow(cfg, imagesGenerateParams{Prompt: "p", NegativePrompt: "n", Seed: &seed})
+			if ferr != nil {
+				t.Fatalf("%s: patch: %+v", c.description, ferr)
+			}
+			var parsed map[string]struct {
+				Inputs map[string]any `json:"inputs"`
+			}
+			if err := json.Unmarshal(out, &parsed); err != nil {
+				t.Fatal(err)
+			}
+			if parsed["2"].Inputs["text"] != "p" {
+				t.Errorf("%s: positive not patched", c.description)
+			}
+			if parsed["3"].Inputs["text"] != "n" {
+				t.Errorf("%s: negative not patched", c.description)
+			}
+			if int64(parsed["5"].Inputs["seed"].(float64)) != 7 {
+				t.Errorf("%s: seed not patched", c.description)
+			}
+		})
 	}
 }
 
