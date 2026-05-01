@@ -24,7 +24,7 @@ func TestLoadComfyUIConfig_DefaultsAndOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	h := NewImagesHandler(paths)
-	cfg, ferr := h.loadComfyUIConfig()
+	cfg, ferr := h.loadComfyUIConfig("")
 	if ferr != nil {
 		t.Fatalf("loadComfyUIConfig: %+v", ferr)
 	}
@@ -39,12 +39,17 @@ func TestLoadComfyUIConfig_DefaultsAndOverrides(t *testing.T) {
 	}
 }
 
-func TestLoadComfyUIConfig_RequiresPromptNodeID(t *testing.T) {
-	paths := readFixture(t, `{}`)
-	if err := os.WriteFile(paths.Talon.Config, []byte(`{}`), 0o600); err != nil {
+func TestReadAndPatchWorkflow_RequiresPromptNodeID(t *testing.T) {
+	// Validation moved from loadComfyUIConfig to readAndPatchWorkflow
+	// so list/fetch handlers (which only need BaseURL) work for users
+	// who haven't exported a workflow yet. Generate still bails when
+	// PromptNodeID is missing — verify here.
+	dir := t.TempDir()
+	wfPath := filepath.Join(dir, "wf.json")
+	if err := os.WriteFile(wfPath, []byte(`{}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	_, ferr := NewImagesHandler(paths).loadComfyUIConfig()
+	_, ferr := readAndPatchWorkflow(comfyUIConfig{WorkflowPath: wfPath}, imagesGenerateParams{Prompt: "x"})
 	if ferr == nil || !strings.Contains(ferr.Message, "promptNodeId") {
 		t.Fatalf("expected promptNodeId requirement error, got %+v", ferr)
 	}

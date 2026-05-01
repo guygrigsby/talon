@@ -103,6 +103,7 @@ func (h *ImagesHandler) Register(r *Registry) {
 	r.Register("images.fetch", h.handleFetch)
 	r.Register("images.list", h.handleList)
 	r.Register("images.delete", h.handleDelete)
+	r.Register("images.workflows.list", h.handleWorkflowsList)
 }
 
 // --- images.generate -------------------------------------------------------
@@ -113,6 +114,10 @@ type imagesGenerateParams struct {
 	NegativePrompt string `json:"negativePrompt"`
 	Seed           *int64 `json:"seed,omitempty"`
 	IdempotencyKey string `json:"idempotencyKey"`
+	// WorkflowID picks one of the builtin workflows (e.g.
+	// "dixar-character"). Empty falls back to the user's
+	// config-driven workflow at images.providers.comfyui.workflow.path.
+	WorkflowID string `json:"workflowId,omitempty"`
 }
 
 func (h *ImagesHandler) handleGenerate(_ context.Context, hc HandlerCtx, params json.RawMessage) (any, *FrameError) {
@@ -124,7 +129,7 @@ func (h *ImagesHandler) handleGenerate(_ context.Context, hc HandlerCtx, params 
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.generate: sessionKey and prompt are required"}
 	}
 
-	cfg, ferr := h.loadComfyUIConfig()
+	cfg, ferr := h.loadComfyUIConfig(p.WorkflowID)
 	if ferr != nil {
 		return nil, ferr
 	}
@@ -383,7 +388,8 @@ func (h *ImagesHandler) handleFetch(_ context.Context, _ HandlerCtx, params json
 	if p.Filename == "" {
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.fetch: filename is required"}
 	}
-	cfg, ferr := h.loadComfyUIConfig()
+	// images.fetch only needs the base URL; pass "" for workflowID.
+	cfg, ferr := h.loadComfyUIConfig("")
 	if ferr != nil {
 		return nil, ferr
 	}
@@ -514,7 +520,8 @@ func (h *ImagesHandler) handleList(_ context.Context, _ HandlerCtx, params json.
 		// huge payloads even if the UI immediately discards excess.
 		p.Limit = 50
 	}
-	cfg, ferr := h.loadComfyUIConfig()
+	// images.list only needs the base URL; pass "" for workflowID.
+	cfg, ferr := h.loadComfyUIConfig("")
 	if ferr != nil {
 		return nil, ferr
 	}
@@ -638,7 +645,13 @@ func (h *ImagesHandler) handleDelete(_ context.Context, _ HandlerCtx, params jso
 // --- config + workflow loading --------------------------------------------
 
 type comfyUIConfig struct {
-	BaseURL              string
+	BaseURL string
+	// Workflow source: exactly one of WorkflowJSON / WorkflowPath
+	// drives readAndPatchWorkflow. WorkflowJSON is pre-loaded bytes
+	// (used by builtin workflows shipped via embed); WorkflowPath
+	// is read from disk lazily (used by the user's exported
+	// workflow). Both empty is invalid.
+	WorkflowJSON         []byte
 	WorkflowPath         string
 	PromptNodeID         string
 	NegativePromptNodeID string
@@ -654,22 +667,51 @@ const (
 // config, applying defaults for the base URL and workflow path. The
 // loopback rewrite mirrors the LM Studio integration so a config of
 // "localhost:8188" Just Works whether talon is local or in Docker.
-func (h *ImagesHandler) loadComfyUIConfig() (comfyUIConfig, *FrameError) {
+//
+// workflowID picks one of the shipped builtin workflows when set; an
+// empty string falls back to the user's config-driven workflow. For
+// builtins, the prompt/negative/seed node ids are taken from the
+// builtin entry rather than config — they're pinned to match the
+// shipped JSON so users don't have to discover/configure them.
+func (h *ImagesHandler) loadComfyUIConfig(workflowID string) (comfyUIConfig, *FrameError) {
 	merged, err := config.MergedBytes(h.paths)
 	if err != nil {
 		return comfyUIConfig{}, &FrameError{Code: ErrCodeInternal, Message: "images: read config: " + err.Error()}
 	}
 	cfg := comfyUIConfig{
-		BaseURL:              defaultComfyUIBaseURL,
-		WorkflowPath:         filepath.Join(h.paths.Talon.Dir, defaultWorkflowRelPath),
-		PromptNodeID:         "",
-		NegativePromptNodeID: "",
-		SeedNodeID:           "",
+		BaseURL: defaultComfyUIBaseURL,
 	}
 	if v := gjson.GetBytes(merged, "images.providers.comfyui.baseUrl"); v.Exists() && v.Str != "" {
 		cfg.BaseURL = v.Str
 	}
 	cfg.BaseURL = netutil.RewriteLoopbackForContainer(cfg.BaseURL)
+
+	// Builtin path: look up the entry, load its embedded JSON into
+	// cfg.WorkflowJSON, copy the pinned node ids. WorkflowPath stays
+	// empty so readAndPatchWorkflow uses the in-memory bytes.
+	if entry := findBuiltinWorkflow(workflowID); entry != nil {
+		raw, err := loadBuiltinWorkflowJSON(entry)
+		if err != nil {
+			return comfyUIConfig{}, &FrameError{Code: ErrCodeInternal, Message: "images: " + err.Error()}
+		}
+		cfg.WorkflowJSON = raw
+		cfg.PromptNodeID = entry.PromptNodeID
+		cfg.NegativePromptNodeID = entry.NegativePromptNodeID
+		cfg.SeedNodeID = entry.SeedNodeID
+		return cfg, nil
+	}
+	// Reject an unknown workflowId rather than silently falling back —
+	// the UI should only ever send ids it got from
+	// images.workflows.list, so a typo there is a real bug.
+	if strings.TrimSpace(workflowID) != "" {
+		return comfyUIConfig{}, &FrameError{
+			Code:    ErrCodeBadRequest,
+			Message: fmt.Sprintf("images: unknown workflowId %q (call images.workflows.list for valid ids)", workflowID),
+		}
+	}
+
+	// User's config-driven workflow.
+	cfg.WorkflowPath = filepath.Join(h.paths.Talon.Dir, defaultWorkflowRelPath)
 	if v := gjson.GetBytes(merged, "images.providers.comfyui.workflow.path"); v.Exists() && v.Str != "" {
 		cfg.WorkflowPath = expandHomePath(v.Str)
 	}
@@ -685,31 +727,54 @@ func (h *ImagesHandler) loadComfyUIConfig() (comfyUIConfig, *FrameError) {
 	if v := gjson.GetBytes(merged, "images.providers.comfyui.workflow.seedNodeId"); v.Exists() {
 		cfg.SeedNodeID = v.String()
 	}
-	if cfg.PromptNodeID == "" {
-		return comfyUIConfig{}, &FrameError{
-			Code:    ErrCodeBadRequest,
-			Message: "images: images.providers.comfyui.workflow.promptNodeId is not configured (set the node id of the positive-prompt CLIPTextEncode in your exported workflow)",
-		}
-	}
+	// PromptNodeID validation moved to readAndPatchWorkflow — list/
+	// fetch handlers only need BaseURL, so requiring a configured
+	// node id at config-load time would lock them out for users
+	// who haven't exported a workflow yet.
 	return cfg, nil
 }
 
-// readAndPatchWorkflow loads the workflow JSON from disk and overrides
-// the user-controlled fields: positive prompt text, optional negative
+// fileExists reports whether p resolves to an existing file. Used by
+// images.workflows.list to skip the user-default row when the file
+// isn't on disk yet (avoids a misleading "Default" entry that would
+// fail on submit).
+func fileExists(p string) bool {
+	if p == "" {
+		return false
+	}
+	st, err := os.Stat(p)
+	return err == nil && !st.IsDir()
+}
+
+// readAndPatchWorkflow loads the workflow JSON (from cfg.WorkflowJSON
+// when populated, otherwise cfg.WorkflowPath) and overrides the
+// user-controlled fields: positive prompt text, optional negative
 // prompt, optional seed (random when not supplied so successive runs
 // don't collapse to identical outputs). The workflow is otherwise
 // passed through verbatim — the user's checkpoint, sampler, dims, etc.
 // stay in their hands.
 func readAndPatchWorkflow(cfg comfyUIConfig, p imagesGenerateParams) (json.RawMessage, *FrameError) {
-	raw, err := os.ReadFile(cfg.WorkflowPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, &FrameError{
-				Code:    ErrCodeBadRequest,
-				Message: "images: workflow file not found at " + cfg.WorkflowPath + " — export an API-format workflow from ComfyUI and save it there (or set images.providers.comfyui.workflow.path)",
-			}
+	if cfg.PromptNodeID == "" {
+		return nil, &FrameError{
+			Code:    ErrCodeBadRequest,
+			Message: "images: images.providers.comfyui.workflow.promptNodeId is not configured (set the node id of the positive-prompt CLIPTextEncode in your exported workflow, or pick a builtin via workflowId)",
 		}
-		return nil, &FrameError{Code: ErrCodeInternal, Message: "images: read workflow: " + err.Error()}
+	}
+	var raw []byte
+	if len(cfg.WorkflowJSON) > 0 {
+		raw = cfg.WorkflowJSON
+	} else {
+		var err error
+		raw, err = os.ReadFile(cfg.WorkflowPath)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, &FrameError{
+					Code:    ErrCodeBadRequest,
+					Message: "images: workflow file not found at " + cfg.WorkflowPath + " — export an API-format workflow from ComfyUI and save it there (or set images.providers.comfyui.workflow.path)",
+				}
+			}
+			return nil, &FrameError{Code: ErrCodeInternal, Message: "images: read workflow: " + err.Error()}
+		}
 	}
 	var workflow map[string]any
 	if err := json.Unmarshal(raw, &workflow); err != nil {
