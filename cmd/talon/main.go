@@ -52,6 +52,7 @@ func main() {
 	root.AddCommand(healthCmd())
 	root.AddCommand(gatewayCmd())
 	root.AddCommand(configCmd())
+	root.AddCommand(configureCmd())
 	root.AddCommand(modelsCmd())
 	root.AddCommand(agentsCmd())
 	root.AddCommand(chatCmd())

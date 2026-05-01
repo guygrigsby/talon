@@ -37,6 +37,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -86,8 +87,15 @@ func (s *telegramPlugin) Initialize(_ context.Context, _ *pb.InitializeRequest) 
 // StartChannelRequest.channel_config. Mirrors the
 // channels.telegram.* sub-tree of openclaw's config schema; we only
 // pull the fields we use today.
+//
+// AllowFrom is the openclaw-style allowlist of numeric sender IDs.
+// When set, the plugin drops inbound messages whose from.id isn't on
+// the list. Empty list = accept-all (matches openclaw's "open"
+// dmPolicy). Configured by the configure-wizard during setup.
 type channelConfig struct {
-	BotToken string `json:"botToken"`
+	BotToken  string   `json:"botToken"`
+	AllowFrom []string `json:"allowFrom"`
+	DMPolicy  string   `json:"dmPolicy"` // "allowlist" or "" (open)
 }
 
 // StartChannel honors the "first start wins" assumption — the
@@ -110,6 +118,13 @@ func (s *telegramPlugin) StartChannel(req *pb.StartChannelRequest, stream pb.Plu
 	// Cache the token for SendChannelMessage; it runs outside this
 	// RPC and needs the same auth.
 	setSendToken(cfg.BotToken)
+	// Build the allowlist set once. Empty = accept-all.
+	allow := map[string]struct{}{}
+	if cfg.DMPolicy == "allowlist" {
+		for _, id := range cfg.AllowFrom {
+			allow[strings.TrimSpace(id)] = struct{}{}
+		}
+	}
 
 	// Mailbox between the poll goroutine and this RPC handler.
 	// Buffered so a slow stream.Send doesn't backpressure the poll
@@ -124,7 +139,7 @@ func (s *telegramPlugin) StartChannel(req *pb.StartChannelRequest, stream pb.Plu
 	defer cancel()
 
 	go func() {
-		err := s.pollLoop(pollCtx, cfg.BotToken, msgs)
+		err := s.pollLoop(pollCtx, cfg.BotToken, allow, msgs)
 		// Best-effort signal; the only consumer is the select below.
 		select {
 		case pollErr <- err:
@@ -231,10 +246,11 @@ type getUpdatesResp struct {
 
 // pollLoop runs Telegram long-polling until ctx is canceled. Each
 // inbound message becomes one IncomingChannelMessage on the channel.
-// Errors from a single getUpdates call are logged to stderr and
-// retried with a small backoff — transient network blips shouldn't
-// take down the channel.
-func (s *telegramPlugin) pollLoop(ctx context.Context, token string, out chan<- *pb.IncomingChannelMessage) error {
+// allow is the optional sender-id allowlist; empty = accept-all
+// (openclaw's "open" dmPolicy). Errors from a single getUpdates call
+// are logged to stderr and retried with a small backoff — transient
+// network blips shouldn't take down the channel.
+func (s *telegramPlugin) pollLoop(ctx context.Context, token string, allow map[string]struct{}, out chan<- *pb.IncomingChannelMessage) error {
 	var offset int64
 	backoff := time.Second
 	for {
@@ -265,6 +281,12 @@ func (s *telegramPlugin) pollLoop(ctx context.Context, token string, out chan<- 
 			msg := convertUpdate(u)
 			if msg == nil {
 				continue
+			}
+			if len(allow) > 0 {
+				if _, ok := allow[msg.GetSenderId()]; !ok {
+					fmt.Fprintf(os.Stderr, "talon-telegram-plugin: dropping message from sender %q (not in allowFrom)\n", msg.GetSenderId())
+					continue
+				}
 			}
 			select {
 			case out <- msg:
