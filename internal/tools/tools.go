@@ -94,6 +94,7 @@ func NewWithSubagentAndPaths(workspace string, runner SubagentRunner, paths open
 	return r
 }
 
+
 // Register adds t to the registry, replacing any prior entry with the same
 // name.
 func (r *Registry) Register(t Tool) {

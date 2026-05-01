@@ -74,13 +74,84 @@ func (s *telegramPlugin) Initialize(_ context.Context, _ *pb.InitializeRequest) 
 			Version:        "0.1.0",
 			Description:    "Telegram bot channel (Go plugin)",
 			OffersChannels: []string{"telegram"},
-			// No host-side capability needs: the bot token arrives
-			// in the StartChannel request, and outbound messages
-			// flow back through SendChannelMessage which the host
-			// invokes when the agent produces a reply. No
-			// host-config callbacks today.
+			// telegram_send lets the model proactively message a
+			// known chat — opposite direction from the dispatcher's
+			// reply-to-sender flow. The plugin owns this tool: native
+			// code stays out of channel-specific surfaces.
+			OffersTools: []*pb.ToolSpec{{
+				Name:        "telegram_send",
+				Description: "Send a Telegram message to a known chat. Use this to proactively reach the user (opposite of dispatcher replies). chat_id is the numeric Telegram chat or sender id captured during channel setup.",
+				ParametersSchema: []byte(`{
+					"type": "object",
+					"properties": {
+						"chat_id": {"type": "string", "description": "Numeric Telegram chat id (or sender id for DMs). For your own DMs, this matches the sender id stored in channels.telegram.allowFrom."},
+						"text":    {"type": "string", "description": "Message body. Markdown supported."}
+					},
+					"required": ["chat_id", "text"],
+					"additionalProperties": false
+				}`),
+			}},
 		},
 	}, nil
+}
+
+// RunTool dispatches plugin-offered tools. Today only telegram_send;
+// uses the same token cached at StartChannel so calls fail clearly
+// when the channel isn't configured (the model sees a "not started"
+// message instead of a silent no-op).
+func (s *telegramPlugin) RunTool(ctx context.Context, req *pb.RunToolRequest) (*pb.RunToolResponse, error) {
+	switch req.GetToolName() {
+	case "telegram_send":
+		return s.runTelegramSend(ctx, req)
+	default:
+		return &pb.RunToolResponse{
+			Output:  fmt.Sprintf("telegram plugin: unknown tool %q", req.GetToolName()),
+			IsError: true,
+		}, nil
+	}
+}
+
+func (s *telegramPlugin) runTelegramSend(ctx context.Context, req *pb.RunToolRequest) (*pb.RunToolResponse, error) {
+	var args struct {
+		ChatID string `json:"chat_id"`
+		Text   string `json:"text"`
+	}
+	if err := json.Unmarshal([]byte(req.GetArgumentsJson()), &args); err != nil {
+		return &pb.RunToolResponse{Output: "telegram_send: invalid arguments JSON: " + err.Error(), IsError: true}, nil
+	}
+	if strings.TrimSpace(args.ChatID) == "" || strings.TrimSpace(args.Text) == "" {
+		return &pb.RunToolResponse{Output: "telegram_send: chat_id and text are required", IsError: true}, nil
+	}
+	token, err := tokenForSendFromEnv()
+	if err != nil {
+		return &pb.RunToolResponse{
+			Output:  "telegram_send: channel not started yet — enable channels.telegram and restart the gateway",
+			IsError: true,
+		}, nil
+	}
+	body := url.Values{}
+	body.Set("chat_id", args.ChatID)
+	body.Set("text", args.Text)
+	body.Set("parse_mode", "Markdown")
+	endpoint := fmt.Sprintf("%s/bot%s/sendMessage", telegramAPIBase, token)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
+	if err != nil {
+		return &pb.RunToolResponse{Output: "telegram_send: " + err.Error(), IsError: true}, nil
+	}
+	httpReq.URL.RawQuery = body.Encode()
+	resp, err := s.http.Do(httpReq)
+	if err != nil {
+		return &pb.RunToolResponse{Output: "telegram_send: " + err.Error(), IsError: true}, nil
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		raw, _ := io.ReadAll(resp.Body)
+		return &pb.RunToolResponse{
+			Output:  fmt.Sprintf("telegram_send: sendMessage http %d: %s", resp.StatusCode, truncate(string(raw), 256)),
+			IsError: true,
+		}, nil
+	}
+	return &pb.RunToolResponse{Output: fmt.Sprintf("sent to chat %s", args.ChatID)}, nil
 }
 
 // channelConfig is the per-channel JSON the host passes in
