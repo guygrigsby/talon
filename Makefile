@@ -37,12 +37,11 @@ gateway-run-with-ui: build web-build
 test:
 	@TALON_BENCH=1 $(GO) test -p=1 ./...
 
-# test-fast skips the benchmark regression gate (see internal/benchcheck).
-# Use during tight iteration loops where the ~25s bench step bites.
-# Plain `go test ./...` also skips the gate because parallel package
-# execution under default GOMAXPROCS makes timings flaky — only
-# explicit `make test` (which serializes with -p=1 and sets
-# TALON_BENCH=1) trips the gate.
+# test-fast skips the benchmark regression gate. The gate (3% average
+# threshold) requires serialized package execution to be precise;
+# plain `go test ./...` skips it automatically because parallel-bench
+# contention spikes timings 50%+. Use test-fast for tight iteration
+# loops where you don't need the gate.
 test-fast:
 	$(GO) test -short ./...
 

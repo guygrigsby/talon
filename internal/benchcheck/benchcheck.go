@@ -97,10 +97,11 @@ func AssertNotRegressed(t *testing.T, results []NamedResult) {
 		t.Skip("benchcheck: TALON_BENCH_SKIP=1")
 	}
 	// Default off when invoked as part of `go test ./...` because
-	// parallel package execution hammers the same cores the bench is
-	// timing — false-positive city. `make test` sets TALON_BENCH=1
-	// and serializes packages with -p=1; CI does the same when it
-	// wants the gate.
+	// parallel package execution under default GOMAXPROCS hammers the
+	// same cores the bench is timing — observed individual-bench
+	// spikes up to 70% even with median-of-5 sampling. `make test`
+	// sets TALON_BENCH=1 and serializes packages with -p=1; that's
+	// the path the gate is meant for.
 	if os.Getenv("TALON_BENCH") != "1" {
 		t.Skip("benchcheck: set TALON_BENCH=1 to enable (or run `make test`)")
 	}
