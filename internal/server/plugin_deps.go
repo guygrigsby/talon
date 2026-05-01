@@ -391,6 +391,14 @@ var builtinPlugins = []builtinPlugin{
 		Kind:        "provider",
 		Label:       "DeepSeek",
 	},
+	{
+		EntryName:   "telegram",
+		BinaryPath:  "/usr/local/bin/talon-telegram-plugin",
+		Description: "Telegram bot channel — long-poll + sendMessage",
+		Version:     "0.1.0",
+		Kind:        "channel",
+		Label:       "Telegram",
+	},
 }
 
 // extensionSource pairs a directory with a label for the lookup-chain
