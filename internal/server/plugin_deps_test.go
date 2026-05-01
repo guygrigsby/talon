@@ -297,6 +297,130 @@ func TestPluginDepsInstall_CopiesFromBundleBeforeInstall(t *testing.T) {
 	}
 }
 
+// TestPluginDepsUninstall_RemovesTalonOverlayCopy verifies the
+// uninstall path: when the extension lives in the talon overlay,
+// remove it; the lookup chain may resurface a bundled copy.
+func TestPluginDepsUninstall_RemovesTalonOverlayCopy(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	talonExt := filepath.Join(paths.Talon.Dir, "extensions")
+	bundleExt := filepath.Join(paths.Talon.Dir, "fake-bundle")
+	if err := os.MkdirAll(talonExt, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(bundleExt, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := fmt.Sprintf(`{"plugins":{"bundled":{"path":%q}}}`, bundleExt)
+	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// "anthropic" exists in BOTH talon overlay and bundle. After
+	// uninstall we expect to fall back to the bundle copy.
+	writeExtension(t, talonExt, "anthropic", map[string]string{"x": "1"}, true)
+	writeExtension(t, bundleExt, "anthropic", map[string]string{"x": "1"}, false)
+
+	h := NewPluginDepsHandler(paths)
+	res, ferr := h.handleUninstall(t.Context(), HandlerCtx{}, []byte(`{"name":"anthropic"}`))
+	if ferr != nil {
+		t.Fatalf("uninstall: %+v", ferr)
+	}
+	if res.(map[string]any)["ok"] != true {
+		t.Fatalf("ok flag missing: %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(talonExt, "anthropic")); !os.IsNotExist(err) {
+		t.Errorf("talon-overlay copy should be gone, stat=%v", err)
+	}
+	status := res.(map[string]any)["status"].(pluginDepsStatusItem)
+	if status.Source != "bundled" {
+		t.Errorf("post-uninstall source should resurface as bundled, got %q", status.Source)
+	}
+}
+
+func TestPluginDepsUninstall_RejectsNonTalonSource(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	bundleExt := filepath.Join(paths.Talon.Dir, "fake-bundle")
+	if err := os.MkdirAll(bundleExt, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cfg := fmt.Sprintf(`{"plugins":{"bundled":{"path":%q}}}`, bundleExt)
+	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeExtension(t, bundleExt, "anthropic", nil, false)
+
+	h := NewPluginDepsHandler(paths)
+	res, ferr := h.handleUninstall(t.Context(), HandlerCtx{}, []byte(`{"name":"anthropic"}`))
+	if ferr != nil {
+		t.Fatalf("uninstall: %+v", ferr)
+	}
+	envelope := res.(map[string]any)
+	if envelope["ok"] != true {
+		t.Errorf("expected ok=true on no-op uninstall, got %+v", envelope)
+	}
+	if envelope["skipped"] != "not present in talon overlay" {
+		t.Errorf("expected skipped reason, got %+v", envelope)
+	}
+}
+
+func TestPluginDepsStatus_FlagsInUseFromConfig(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	talonExt := filepath.Join(paths.Talon.Dir, "extensions")
+	if err := os.MkdirAll(talonExt, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// brave is enabled directly; telegram is configured as a
+	// channel (channels.telegram exists) — both should report
+	// inUse=true via the two distinct signal paths the helper
+	// recognizes.
+	cfg := fmt.Sprintf(`{
+		"plugins": {
+			"bundled": {"path": %q},
+			"entries": {"brave": {"enabled": true}}
+		},
+		"channels": {"telegram": {"agentId": "main"}}
+	}`, talonExt)
+	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeExtension(t, talonExt, "brave", nil, false)
+	writeExtension(t, talonExt, "telegram", map[string]string{"grammy": "^1.0.0"}, true)
+	// Telegram needs an openclaw.channel.id in its package.json
+	// for the channels.* signal to match. Re-write its package.json
+	// (writeExtension's helper doesn't include the openclaw block).
+	pkgWithChannel := `{"name":"@openclaw/telegram","openclaw":{"channel":{"id":"telegram","label":"Telegram"}},"dependencies":{"grammy":"^1.0.0"}}`
+	if err := os.WriteFile(filepath.Join(talonExt, "telegram", "package.json"), []byte(pkgWithChannel), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// idle: an extension that isn't referenced anywhere.
+	writeExtension(t, talonExt, "idle", nil, false)
+
+	h := NewPluginDepsHandler(paths)
+	res, ferr := h.handleStatus(t.Context(), HandlerCtx{}, nil)
+	if ferr != nil {
+		t.Fatalf("status: %+v", ferr)
+	}
+	items := res.(map[string]any)["items"].([]pluginDepsStatusItem)
+	byName := map[string]pluginDepsStatusItem{}
+	for _, it := range items {
+		byName[it.Name] = it
+	}
+	if !byName["brave"].InUse {
+		t.Errorf("brave should be inUse via plugins.entries: %+v", byName["brave"])
+	}
+	if !byName["telegram"].InUse {
+		t.Errorf("telegram should be inUse via channels.telegram: %+v", byName["telegram"])
+	}
+	if byName["idle"].InUse {
+		t.Errorf("idle has no config references; should not be inUse")
+	}
+	// All three live in the talon overlay → uninstallable.
+	for _, name := range []string{"brave", "telegram", "idle"} {
+		if !byName[name].Uninstallable {
+			t.Errorf("%s should be uninstallable (it's in the talon overlay)", name)
+		}
+	}
+}
+
 func mustMarshal(t *testing.T, v any) []byte {
 	t.Helper()
 	b, err := json.Marshal(v)

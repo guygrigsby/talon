@@ -67,7 +67,132 @@ func (h *PluginDepsHandler) WithNpmCmd(f func(ctx context.Context, dir string) *
 func (h *PluginDepsHandler) Register(r *Registry) {
 	r.Register("plugins.deps.status", h.handleStatus)
 	r.Register("plugins.deps.install", h.handleInstall)
+	r.Register("plugins.deps.uninstall", h.handleUninstall)
 	r.Register("plugins.deps.detail", h.handleDetail)
+}
+
+// --- plugins.deps.uninstall ------------------------------------------------
+
+type pluginDepsUninstallParams struct {
+	Name string `json:"name"`
+}
+
+// handleUninstall removes the extension's talon-overlay copy. The
+// bundle (or openclaw layer) stays intact, so a subsequent install
+// or status call falls back through the lookup chain. We refuse to
+// touch anything outside the talon overlay — that's the only
+// writable layer in talon's contract.
+func (h *PluginDepsHandler) handleUninstall(_ context.Context, _ HandlerCtx, params json.RawMessage) (any, *FrameError) {
+	var p pluginDepsUninstallParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.uninstall: " + err.Error()}
+	}
+	if p.Name == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.uninstall: name is required"}
+	}
+	if strings.ContainsAny(p.Name, `/\`) || p.Name == "." || p.Name == ".." {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.uninstall: invalid name"}
+	}
+	talonRoot := h.talonExtensionsRoot()
+	if talonRoot == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.uninstall: no writable talon overlay configured"}
+	}
+	target := filepath.Join(talonRoot, p.Name)
+	if _, err := os.Stat(target); err != nil {
+		// Not in the overlay — nothing for us to remove. Surface
+		// this as ok with a no-op note rather than an RPC error so
+		// the UI can render an informative message inline.
+		return map[string]any{
+			"ok":      true,
+			"name":    p.Name,
+			"skipped": "not present in talon overlay",
+		}, nil
+	}
+	if err := os.RemoveAll(target); err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "plugins.deps.uninstall: " + err.Error()}
+	}
+	// After uninstall, the lookup chain may resurface a bundled or
+	// openclaw-layer copy; re-stat to report the post-uninstall
+	// state so the UI swaps the row in place.
+	dir, label := h.locateExtension(p.Name)
+	if dir == "" {
+		return map[string]any{
+			"ok":   true,
+			"name": p.Name,
+			// No status block — the extension is gone from every layer.
+		}, nil
+	}
+	status := statusForExtension(dir, p.Name)
+	status.Source = label
+	merged, _ := config.MergedBytes(h.paths)
+	enrichInUse(merged, &status)
+	enrichUninstallable(talonRoot, &status)
+	return map[string]any{
+		"ok":     true,
+		"name":   p.Name,
+		"status": status,
+	}, nil
+}
+
+// enrichInUse sets InUse=true when the merged config references this
+// extension through any of three signals:
+//   - plugins.entries.<name>.enabled: explicit per-name entry on
+//   - plugins.entries.*.bundled == name: indirect reference by entry
+//   - channels.<channelId> exists when the extension declares
+//     openclaw.channel.id == channelId: live channel binding
+//
+// Cheap to compute; the UI uses it to surface a "Required (in use)"
+// badge so uninstalling a live integration is at least flagged.
+func enrichInUse(merged []byte, item *pluginDepsStatusItem) {
+	if v := gjson.GetBytes(merged, "plugins.entries."+item.Name+".enabled"); v.Bool() {
+		item.InUse = true
+		return
+	}
+	gjson.GetBytes(merged, "plugins.entries").ForEach(func(_, entry gjson.Result) bool {
+		if entry.Get("bundled").Str == item.Name && entry.Get("enabled").Bool() {
+			item.InUse = true
+			return false
+		}
+		return true
+	})
+	if item.InUse {
+		return
+	}
+	// Channel-binding signal: load the package.json's channel.id
+	// and check if it's keyed under channels.*.
+	if item.Path == "" {
+		return
+	}
+	raw, err := os.ReadFile(filepath.Join(item.Path, "package.json"))
+	if err != nil {
+		return
+	}
+	channelID := gjson.GetBytes(raw, "openclaw.channel.id").Str
+	if channelID == "" {
+		return
+	}
+	if v := gjson.GetBytes(merged, "channels."+channelID); v.Exists() {
+		item.InUse = true
+	}
+}
+
+// enrichUninstallable marks the row as uninstallable when its on-disk
+// path lives under the talon overlay (the only layer talon will
+// write to). Bundled/openclaw entries stay false; the UI omits the
+// uninstall button for those.
+func enrichUninstallable(talonRoot string, item *pluginDepsStatusItem) {
+	if talonRoot == "" || item.Path == "" {
+		return
+	}
+	clean := filepath.Clean(talonRoot)
+	itemPath := filepath.Clean(item.Path)
+	rel, err := filepath.Rel(clean, itemPath)
+	if err != nil {
+		return
+	}
+	if rel == "." || (!strings.HasPrefix(rel, "..") && !filepath.IsAbs(rel)) {
+		item.Uninstallable = true
+	}
 }
 
 // --- plugins.deps.detail ---------------------------------------------------
@@ -107,6 +232,9 @@ func (h *PluginDepsHandler) handleDetail(_ context.Context, _ HandlerCtx, params
 	}
 	out := pluginDepsDetail{pluginDepsStatusItem: statusForExtension(dir, p.Name)}
 	out.Source = label
+	merged, _ := config.MergedBytes(h.paths)
+	enrichInUse(merged, &out.pluginDepsStatusItem)
+	enrichUninstallable(h.talonExtensionsRoot(), &out.pluginDepsStatusItem)
 
 	pkgPath := filepath.Join(dir, "package.json")
 	raw, err := os.ReadFile(pkgPath)
@@ -164,7 +292,18 @@ type pluginDepsStatusItem struct {
 	DepCount          int    `json:"depCount"`
 	Installed         bool   `json:"installed"`
 	NodeModulesExists bool   `json:"nodeModulesExists"`
-	Error             string `json:"error,omitempty"`
+	// InUse=true when the merged config references this extension —
+	// either via plugins.entries.<name>.enabled or as a configured
+	// channel keyed by openclaw.channel.id. The UI surfaces a
+	// "Required" / "In use" badge for these so users know
+	// uninstalling will break a live integration.
+	InUse bool `json:"inUse"`
+	// Uninstallable=true when the extension exists in the talon
+	// overlay (the only writable layer); otherwise removing it would
+	// require touching ~/.openclaw or the image bundle, both of
+	// which talon refuses to write.
+	Uninstallable bool   `json:"uninstallable"`
+	Error         string `json:"error,omitempty"`
 }
 
 // extensionSource pairs a directory with a label for the lookup-chain
@@ -184,6 +323,8 @@ func (h *PluginDepsHandler) handleStatus(_ context.Context, _ HandlerCtx, _ json
 		}, nil
 	}
 
+	merged, _ := config.MergedBytes(h.paths)
+	talonRoot := h.talonExtensionsRoot()
 	seen := map[string]bool{}
 	items := make([]pluginDepsStatusItem, 0)
 	for _, src := range sources {
@@ -211,6 +352,8 @@ func (h *PluginDepsHandler) handleStatus(_ context.Context, _ HandlerCtx, _ json
 			seen[name] = true
 			item := statusForExtension(filepath.Join(src.root, name), name)
 			item.Source = src.label
+			enrichInUse(merged, &item)
+			enrichUninstallable(talonRoot, &item)
 			items = append(items, item)
 		}
 	}
@@ -230,6 +373,12 @@ func (h *PluginDepsHandler) handleStatus(_ context.Context, _ HandlerCtx, _ json
 // with declared deps and whether node_modules is present. We treat
 // "no deps declared" as installed=true so the UI doesn't nag the user
 // to install nothing.
+//
+// Note: inUse + uninstallable are NOT computed here — the function's
+// signature stays terse for the many call sites that only need
+// installation state. handleStatus/handleDetail compute those after
+// statusForExtension returns, since they require the merged config
+// and the talon-root path.
 func statusForExtension(dir, name string) pluginDepsStatusItem {
 	out := pluginDepsStatusItem{Name: name, Path: dir}
 	pkgPath := filepath.Join(dir, "package.json")
@@ -354,6 +503,9 @@ func (h *PluginDepsHandler) handleInstall(_ context.Context, _ HandlerCtx, param
 	} else {
 		status.Source = srcLabel
 	}
+	merged, _ := config.MergedBytes(h.paths)
+	enrichInUse(merged, &status)
+	enrichUninstallable(talonRoot, &status)
 	return map[string]any{
 		"ok":     true,
 		"name":   p.Name,
