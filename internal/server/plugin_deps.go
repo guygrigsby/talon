@@ -15,7 +15,6 @@ import (
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/guygrigsby/talon/internal/plugin"
-	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 	"github.com/tidwall/gjson"
 )
 
@@ -243,6 +242,38 @@ func (h *PluginDepsHandler) handleDetail(_ context.Context, _ HandlerCtx, params
 	if strings.ContainsAny(p.Name, `/\`) || p.Name == "." || p.Name == ".." {
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.detail: invalid name"}
 	}
+
+	// Native plugins win over any same-named bundled extension.
+	// Without this check, plugins.deps.detail would fall through to
+	// the openclaw extension dir lookup and surface the WRONG
+	// metadata (npm package, channel blurb, full TS-side dep list)
+	// for a name the user thinks of as the native binary.
+	for _, b := range builtinPlugins {
+		if b.EntryName == p.Name {
+			out := pluginDepsDetail{pluginDepsStatusItem: pluginDepsStatusItem{
+				Name:        b.EntryName,
+				Path:        b.BinaryPath,
+				Source:      "builtin",
+				Description: b.Description,
+				Version:     b.Version,
+				Kind:        b.Kind,
+				Label:       b.Label,
+				Installed:   true,
+			}}
+			merged, _ := config.MergedBytes(h.paths)
+			enrichInUse(merged, &out.pluginDepsStatusItem)
+			if h.host != nil {
+				for _, name := range h.host.List() {
+					if name == b.EntryName {
+						out.Loaded = true
+						break
+					}
+				}
+			}
+			return out, nil
+		}
+	}
+
 	dir, label := h.locateExtension(p.Name)
 	if dir == "" {
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.detail: extension not found: " + p.Name}
@@ -441,7 +472,17 @@ func (h *PluginDepsHandler) handleStatus(_ context.Context, _ HandlerCtx, _ json
 			items = append(items, item)
 		}
 	}
-	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
+	// Native plugins come first, then alphabetical within each
+	// group. Users opened with the builtin set on top because that's
+	// the always-loaded surface; demoting them under "deepseek..."
+	// alphabetic position is what people noticed.
+	sort.SliceStable(items, func(i, j int) bool {
+		ni, nj := items[i].Source == "builtin", items[j].Source == "builtin"
+		if ni != nj {
+			return ni
+		}
+		return items[i].Name < items[j].Name
+	})
 	srcRows := make([]map[string]string, 0, len(sources))
 	for _, s := range sources {
 		srcRows = append(srcRows, map[string]string{"label": s.label, "path": s.root})
@@ -610,24 +651,6 @@ func (h *PluginDepsHandler) loadedPluginNames() map[string]bool {
 		out[name] = true
 	}
 	return out
-}
-
-// pluginManifestKindLabel returns a coarse "channel" / "provider" /
-// "plugin" label from a runtime manifest. Used when the UI wants to
-// describe a loaded plugin without spawning a fresh discovery call.
-// Today: surfaced via the builtin registry; here for symmetry +
-// future use as we let plugins come from outside the registry.
-func pluginManifestKindLabel(m *pb.Manifest) string {
-	if m == nil {
-		return "plugin"
-	}
-	if len(m.GetOffersChannels()) > 0 {
-		return "channel"
-	}
-	if len(m.GetOffersProviders()) > 0 {
-		return "provider"
-	}
-	return "plugin"
 }
 
 // extensionSources returns the lookup chain talon walks to find
