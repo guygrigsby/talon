@@ -141,6 +141,7 @@ func New(cfg Config) *Server {
 		NewChannelsSetupHandler(cfg.Paths).Register(s.registry)
 	}
 	NewSessionsHandler(sessionStore, chatStore).Register(s.registry)
+	NewNodesHandler().Register(s.registry)
 	s.routes()
 	return s
 }
