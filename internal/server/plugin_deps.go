@@ -67,18 +67,99 @@ func (h *PluginDepsHandler) WithNpmCmd(f func(ctx context.Context, dir string) *
 func (h *PluginDepsHandler) Register(r *Registry) {
 	r.Register("plugins.deps.status", h.handleStatus)
 	r.Register("plugins.deps.install", h.handleInstall)
+	r.Register("plugins.deps.detail", h.handleDetail)
+}
+
+// --- plugins.deps.detail ---------------------------------------------------
+
+type pluginDepsDetailParams struct {
+	Name string `json:"name"`
+}
+
+type pluginDepsDetail struct {
+	pluginDepsStatusItem
+	Dependencies map[string]string `json:"dependencies,omitempty"`
+	Blurb        string            `json:"blurb,omitempty"`
+	DocsPath     string            `json:"docsPath,omitempty"`
+	ChannelID    string            `json:"channelId,omitempty"`
+	PackageName  string            `json:"packageName,omitempty"`
+}
+
+// handleDetail returns the rich per-extension payload the UI's
+// drill-down panel wants: full dependency map (name → semver),
+// channel/provider blurb, docs link, and the underlying npm package
+// name. Status-shape fields are embedded so a detail call alone is
+// enough to render — the UI doesn't have to combine two responses.
+func (h *PluginDepsHandler) handleDetail(_ context.Context, _ HandlerCtx, params json.RawMessage) (any, *FrameError) {
+	var p pluginDepsDetailParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.detail: " + err.Error()}
+	}
+	if p.Name == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.detail: name is required"}
+	}
+	if strings.ContainsAny(p.Name, `/\`) || p.Name == "." || p.Name == ".." {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.detail: invalid name"}
+	}
+	dir, label := h.locateExtension(p.Name)
+	if dir == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.detail: extension not found: " + p.Name}
+	}
+	out := pluginDepsDetail{pluginDepsStatusItem: statusForExtension(dir, p.Name)}
+	out.Source = label
+
+	pkgPath := filepath.Join(dir, "package.json")
+	raw, err := os.ReadFile(pkgPath)
+	if err != nil {
+		// status already covers package.json absence; pass through.
+		return out, nil
+	}
+	out.PackageName = gjson.GetBytes(raw, "name").Str
+	deps := map[string]string{}
+	gjson.GetBytes(raw, "dependencies").ForEach(func(k, v gjson.Result) bool {
+		if k.Str != "" {
+			deps[k.Str] = v.Str
+		}
+		return true
+	})
+	if len(deps) > 0 {
+		out.Dependencies = deps
+	}
+	// Channel-side metadata: blurb, docsPath, id (used by config).
+	if v := gjson.GetBytes(raw, "openclaw.channel.blurb"); v.Exists() && v.Str != "" {
+		out.Blurb = v.Str
+	}
+	if v := gjson.GetBytes(raw, "openclaw.channel.docsPath"); v.Exists() && v.Str != "" {
+		out.DocsPath = v.Str
+	}
+	if v := gjson.GetBytes(raw, "openclaw.channel.id"); v.Exists() && v.Str != "" {
+		out.ChannelID = v.Str
+	}
+	return out, nil
 }
 
 // --- plugins.deps.status ---------------------------------------------------
 
 type pluginDepsStatusItem struct {
-	Name              string `json:"name"`
-	Path              string `json:"path"`
+	Name string `json:"name"`
+	Path string `json:"path"`
 	// Source identifies which dir in the lookup chain this extension
 	// came from: "talon" / "openclaw" / "bundled". The UI surfaces
 	// it so users can see whether they're looking at their own
 	// installs or the shipped defaults.
-	Source            string `json:"source"`
+	Source string `json:"source"`
+	// Description / Version are the package.json fields openclaw uses
+	// in its bundle metadata. Populated whenever a package.json exists.
+	Description string `json:"description,omitempty"`
+	Version     string `json:"version,omitempty"`
+	// Kind classifies the extension surface from the openclaw block:
+	// "channel" / "provider" / "plugin". Useful for filtering and
+	// for badges in the UI.
+	Kind string `json:"kind,omitempty"`
+	// Label is the user-facing display name for channel/provider
+	// extensions (openclaw.channel.label or openclaw.provider.label).
+	// Falls back to "" — UI shows Name in that case.
+	Label             string `json:"label,omitempty"`
 	HasPackageJSON    bool   `json:"hasPackageJson"`
 	DepCount          int    `json:"depCount"`
 	Installed         bool   `json:"installed"`
@@ -164,6 +245,36 @@ func statusForExtension(dir, name string) pluginDepsStatusItem {
 		return out
 	}
 	out.HasPackageJSON = true
+	out.Description = gjson.GetBytes(raw, "description").Str
+	out.Version = gjson.GetBytes(raw, "version").Str
+	// Classify by the richest openclaw metadata available. channel
+	// wins over provider when both are present (rare in practice;
+	// channel is the load-bearing role).
+	if v := gjson.GetBytes(raw, "openclaw.channel.label"); v.Exists() && v.Str != "" {
+		out.Kind = "channel"
+		out.Label = v.Str
+	} else if v := gjson.GetBytes(raw, "openclaw.provider.label"); v.Exists() && v.Str != "" {
+		out.Kind = "provider"
+		out.Label = v.Str
+	} else if v := gjson.GetBytes(raw, "openclaw.channel"); v.Exists() {
+		// Some packages ship a stripped openclaw block where channel
+		// is just a bare label string ("Slack"). Detect that shape.
+		if v.Type == gjson.String && v.Str != "" {
+			out.Kind = "channel"
+			out.Label = v.Str
+		}
+	} else if v := gjson.GetBytes(raw, "openclaw.provider"); v.Exists() {
+		if v.Type == gjson.String && v.Str != "" {
+			out.Kind = "provider"
+			out.Label = v.Str
+		}
+	}
+	if out.Kind == "" {
+		// Default to "plugin" — generic role. Tracker still fires
+		// captured-but-ignored register* warnings via the shim, so
+		// "plugin" doesn't promise functionality, just packaging.
+		out.Kind = "plugin"
+	}
 	deps := gjson.GetBytes(raw, "dependencies")
 	deps.ForEach(func(_, _ gjson.Result) bool {
 		out.DepCount++
