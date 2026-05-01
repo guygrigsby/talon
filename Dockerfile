@@ -21,6 +21,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /out/talon \
     ./cmd/talon
 
+# Sibling Go-plugin binaries shipped alongside the gateway. Each one
+# implements a self-contained gRPC plugin (see internal/plugin) so
+# users can enable them per-config without a separate install step.
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w" \
+    -o /out/talon-deepseek-plugin \
+    ./apps/talon-deepseek-plugin
+
 # ---- shim install (Node) -------------------------------------------------
 # openclaw-plugin-host is the Node subprocess that loads vendored
 # openclaw extensions and bridges them to talon's gRPC plugin protocol.
@@ -50,6 +58,7 @@ RUN apk add --no-cache \
     npm
 
 COPY --from=builder /out/talon /usr/local/bin/talon
+COPY --from=builder /out/talon-deepseek-plugin /usr/local/bin/talon-deepseek-plugin
 COPY --from=shim-install /shim /opt/openclaw-plugin-host
 # Stable wrapper so plugins.bundled.shimCmd defaults can be a single
 # string ("openclaw-plugin-host") that resolves via PATH.

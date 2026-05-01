@@ -402,6 +402,16 @@ func (f *agentProviderFactory) authProfilePath(agentID string) string {
 }
 
 func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provider, error) {
+	// Loaded plugins win over the in-tree native paths so a user
+	// installing talon-deepseek-plugin (or any other gRPC provider
+	// plugin) takes effect immediately. Native fallbacks remain so
+	// removing the plugin reverts to the built-in implementation
+	// without needing a config change.
+	if f.host != nil {
+		if inst := f.host.ProviderByName(providerName); inst != nil {
+			return plugin.NewPluginProvider(providerName, inst.Client), nil
+		}
+	}
 	authPath := f.authProfilePath(agentID)
 	switch providerName {
 	case "openai":
@@ -454,12 +464,6 @@ func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provi
 			Name:        "lmstudio",
 			ProviderKey: "lmstudio",
 		}), nil
-	}
-	// No native match — try a plugin offering this provider.
-	if f.host != nil {
-		if inst := f.host.ProviderByName(providerName); inst != nil {
-			return plugin.NewPluginProvider(providerName, inst.Client), nil
-		}
 	}
 	return nil, fmt.Errorf("%w: %q (implemented natively: openai, deepseek, lmstudio; no loaded plugin offers it)",
 		server.ErrProviderUnavailable, providerName)
