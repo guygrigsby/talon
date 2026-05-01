@@ -12,6 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/plugin"
 )
 
 const serverVersion = "0.1.0-dev"
@@ -41,6 +42,11 @@ type Config struct {
 	// tools.NewWithSubagent (or equivalent) so the model can delegate to
 	// other agents.
 	ToolRunnerFor func(workspace string, sub SubagentRunner) ToolRunner
+	// PluginHost, when set, lets read-only RPCs surface the loaded
+	// plugin set (plugins.list). Optional — leaving it nil keeps the
+	// /plugins UI's "Loaded plugins" section empty without breaking
+	// anything else.
+	PluginHost *plugin.Host
 }
 
 // SubagentRunner is the indirection the tool registry uses to dispatch
@@ -131,7 +137,7 @@ func New(cfg Config) *Server {
 		s.reads = NewReadHandler(cfg.Paths)
 		s.reads.Register(s.registry)
 		NewImagesHandler(cfg.Paths).Register(s.registry)
-		NewPluginDepsHandler(cfg.Paths).Register(s.registry)
+		NewPluginDepsHandler(cfg.Paths).WithHost(cfg.PluginHost).Register(s.registry)
 	}
 	NewSessionsHandler(sessionStore, chatStore).Register(s.registry)
 	s.routes()

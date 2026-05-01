@@ -14,6 +14,8 @@ import (
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/plugin"
+	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 	"github.com/tidwall/gjson"
 )
 
@@ -37,6 +39,12 @@ import (
 type PluginDepsHandler struct {
 	paths openclaw.Paths
 
+	// host, when non-nil, lets the handler report whether each
+	// extension is currently loaded by the gateway's plugin runtime.
+	// Set via WithHost from cmd/talon (same plugin.Host that owns
+	// every spawned subprocess plugin).
+	host *plugin.Host
+
 	// npmCmd is the npm invocation. Replaceable so tests can stub it
 	// without spawning real npm subprocesses. Default builds the
 	// argv at call time so a test override fully short-circuits.
@@ -46,6 +54,15 @@ type PluginDepsHandler struct {
 	// failures; we'd rather report a clear timeout than hold the WS
 	// open indefinitely.
 	installTimeout time.Duration
+}
+
+// WithHost wires the plugin host the gateway uses to track loaded
+// subprocess plugins. Required for the "Loaded" status surface in
+// the /plugins UI; safe to leave nil (plugins still appear, just
+// without the loaded marker).
+func (h *PluginDepsHandler) WithHost(host *plugin.Host) *PluginDepsHandler {
+	h.host = host
+	return h
 }
 
 func NewPluginDepsHandler(paths openclaw.Paths) *PluginDepsHandler {
@@ -302,8 +319,47 @@ type pluginDepsStatusItem struct {
 	// overlay (the only writable layer); otherwise removing it would
 	// require touching ~/.openclaw or the image bundle, both of
 	// which talon refuses to write.
-	Uninstallable bool   `json:"uninstallable"`
-	Error         string `json:"error,omitempty"`
+	Uninstallable bool `json:"uninstallable"`
+	// Loaded=true when the gateway's plugin runtime currently has
+	// this extension as a live subprocess. UI surfaces it as a
+	// "Loaded" badge so users can tell active integrations from
+	// merely-available ones.
+	Loaded bool   `json:"loaded"`
+	Error  string `json:"error,omitempty"`
+}
+
+// builtinPlugin describes a Go-implemented plugin shipped in the
+// talon binary tree (binary already on PATH after install). They
+// surface in the same plugins list as the openclaw-bundled
+// extensions — users don't need to care about implementation
+// language; the UI shows them as ordinary plugins.
+type builtinPlugin struct {
+	// EntryName is the canonical name used as the
+	// plugins.entries.<name> key when the user enables this plugin.
+	EntryName string
+	// BinaryPath is the spawn target — wired into the cmd array
+	// when the user enables the plugin.
+	BinaryPath string
+	// Manifest fields surfaced in the listing without spawning the
+	// binary first. Once loaded, the live manifest takes over.
+	Description string
+	Version     string
+	Kind        string // "channel" | "provider" | "plugin"
+	Label       string // user-facing display name
+}
+
+// builtinPlugins is the registry of bundled Go plugins. New entries
+// land here when their binary is added to the Dockerfile build.
+// Single source of truth for the /plugins UI's pre-spawn metadata.
+var builtinPlugins = []builtinPlugin{
+	{
+		EntryName:   "deepseek",
+		BinaryPath:  "/usr/local/bin/talon-deepseek-plugin",
+		Description: "DeepSeek chat-completions provider",
+		Version:     "0.1.0",
+		Kind:        "provider",
+		Label:       "DeepSeek",
+	},
 }
 
 // extensionSource pairs a directory with a label for the lookup-chain
@@ -325,8 +381,33 @@ func (h *PluginDepsHandler) handleStatus(_ context.Context, _ HandlerCtx, _ json
 
 	merged, _ := config.MergedBytes(h.paths)
 	talonRoot := h.talonExtensionsRoot()
+	loadedNames := h.loadedPluginNames()
 	seen := map[string]bool{}
 	items := make([]pluginDepsStatusItem, 0)
+
+	// Built-in plugins (Go binaries shipped with talon) appear first
+	// in the merged list so the UI sees them on top. They have no
+	// package.json / node_modules state — installation is just
+	// "enabled in plugins.entries.<name>".
+	for _, b := range builtinPlugins {
+		seen[b.EntryName] = true
+		item := pluginDepsStatusItem{
+			Name:        b.EntryName,
+			Path:        b.BinaryPath,
+			Source:      "builtin",
+			Description: b.Description,
+			Version:     b.Version,
+			Kind:        b.Kind,
+			Label:       b.Label,
+			Installed:   true,
+		}
+		enrichInUse(merged, &item)
+		if loadedNames[b.EntryName] {
+			item.Loaded = true
+		}
+		items = append(items, item)
+	}
+
 	for _, src := range sources {
 		entries, err := os.ReadDir(src.root)
 		if err != nil {
@@ -354,6 +435,9 @@ func (h *PluginDepsHandler) handleStatus(_ context.Context, _ HandlerCtx, _ json
 			item.Source = src.label
 			enrichInUse(merged, &item)
 			enrichUninstallable(talonRoot, &item)
+			if loadedNames[name] {
+				item.Loaded = true
+			}
 			items = append(items, item)
 		}
 	}
@@ -512,6 +596,38 @@ func (h *PluginDepsHandler) handleInstall(_ context.Context, _ HandlerCtx, param
 		"status": status,
 		"output": tail,
 	}, nil
+}
+
+// loadedPluginNames returns the set of plugin names the gateway's
+// runtime currently has spawned. Built from host.List(); empty when
+// the host wasn't wired in (tests, paths.Talon.Dir == "").
+func (h *PluginDepsHandler) loadedPluginNames() map[string]bool {
+	if h.host == nil {
+		return map[string]bool{}
+	}
+	out := map[string]bool{}
+	for _, name := range h.host.List() {
+		out[name] = true
+	}
+	return out
+}
+
+// pluginManifestKindLabel returns a coarse "channel" / "provider" /
+// "plugin" label from a runtime manifest. Used when the UI wants to
+// describe a loaded plugin without spawning a fresh discovery call.
+// Today: surfaced via the builtin registry; here for symmetry +
+// future use as we let plugins come from outside the registry.
+func pluginManifestKindLabel(m *pb.Manifest) string {
+	if m == nil {
+		return "plugin"
+	}
+	if len(m.GetOffersChannels()) > 0 {
+		return "channel"
+	}
+	if len(m.GetOffersProviders()) > 0 {
+		return "provider"
+	}
+	return "plugin"
 }
 
 // extensionSources returns the lookup chain talon walks to find

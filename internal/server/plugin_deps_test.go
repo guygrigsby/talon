@@ -117,8 +117,17 @@ func TestPluginDepsStatus_EmptyWhenNoSources(t *testing.T) {
 		t.Fatalf("status: %+v", ferr)
 	}
 	items := res.(map[string]any)["items"].([]pluginDepsStatusItem)
-	if len(items) != 0 {
-		t.Errorf("items should be empty when no chain sources have content: %+v", items)
+	// Built-in plugins always surface even when the openclaw lookup
+	// chain is empty — that's the point of the registry. Filter
+	// them out for this test, which is about chain emptiness.
+	openclawOnly := make([]pluginDepsStatusItem, 0)
+	for _, it := range items {
+		if it.Source != "builtin" {
+			openclawOnly = append(openclawOnly, it)
+		}
+	}
+	if len(openclawOnly) != 0 {
+		t.Errorf("openclaw items should be empty when no chain sources have content: %+v", openclawOnly)
 	}
 }
 

@@ -154,6 +154,7 @@ func gatewayRunCmd() *cobra.Command {
 				WorkspaceResolver: resolver,
 				ToolRunnerFor:     newToolRunnerFactory(pluginHost, paths),
 				Paths:             paths,
+				PluginHost:        pluginHost,
 			})
 
 			// Now that the WS server has built its handlers, wire the
