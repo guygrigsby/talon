@@ -80,14 +80,14 @@ func (s *telegramPlugin) Initialize(_ context.Context, _ *pb.InitializeRequest) 
 			// code stays out of channel-specific surfaces.
 			OffersTools: []*pb.ToolSpec{{
 				Name:        "telegram_send",
-				Description: "Send a Telegram message to a known chat. Use this to proactively reach the user (opposite of dispatcher replies). chat_id is the numeric Telegram chat or sender id captured during channel setup.",
+				Description: "Send a Telegram message to the user. chat_id is optional — when omitted, the message goes to the configured default chat (channels.telegram.allowFrom[0]), which is the user who set up the channel. Pass an explicit chat_id only when you've captured a different chat id during this conversation.",
 				ParametersSchema: []byte(`{
 					"type": "object",
 					"properties": {
-						"chat_id": {"type": "string", "description": "Numeric Telegram chat id (or sender id for DMs). For your own DMs, this matches the sender id stored in channels.telegram.allowFrom."},
+						"chat_id": {"type": "string", "description": "Optional. Numeric Telegram chat id (or sender id for DMs). Omit to send to the default chat configured during setup."},
 						"text":    {"type": "string", "description": "Message body. Markdown supported."}
 					},
-					"required": ["chat_id", "text"],
+					"required": ["text"],
 					"additionalProperties": false
 				}`),
 			}},
@@ -119,8 +119,20 @@ func (s *telegramPlugin) runTelegramSend(ctx context.Context, req *pb.RunToolReq
 	if err := json.Unmarshal([]byte(req.GetArgumentsJson()), &args); err != nil {
 		return &pb.RunToolResponse{Output: "telegram_send: invalid arguments JSON: " + err.Error(), IsError: true}, nil
 	}
-	if strings.TrimSpace(args.ChatID) == "" || strings.TrimSpace(args.Text) == "" {
-		return &pb.RunToolResponse{Output: "telegram_send: chat_id and text are required", IsError: true}, nil
+	if strings.TrimSpace(args.Text) == "" {
+		return &pb.RunToolResponse{Output: "telegram_send: text is required", IsError: true}, nil
+	}
+	// chat_id is optional: when omitted, fall back to the cached
+	// default (channels.telegram.allowFrom[0] from setup). Lets the
+	// agent reply to "the user" without remembering numeric ids.
+	if strings.TrimSpace(args.ChatID) == "" {
+		args.ChatID = defaultChatIDFromCache()
+		if args.ChatID == "" {
+			return &pb.RunToolResponse{
+				Output:  "telegram_send: chat_id is required (no default configured — set channels.telegram.allowFrom)",
+				IsError: true,
+			}, nil
+		}
 	}
 	token, err := tokenForSendFromEnv()
 	if err != nil {
@@ -189,6 +201,13 @@ func (s *telegramPlugin) StartChannel(req *pb.StartChannelRequest, stream pb.Plu
 	// Cache the token for SendChannelMessage; it runs outside this
 	// RPC and needs the same auth.
 	setSendToken(cfg.BotToken)
+	// Cache allowFrom[0] as the default chat for telegram_send when
+	// the agent omits chat_id. In the 1:1 DM the wizard sets up,
+	// chat.id == from.id, so the configured sender id doubles as a
+	// valid chat id.
+	if len(cfg.AllowFrom) > 0 {
+		setDefaultChatID(strings.TrimSpace(cfg.AllowFrom[0]))
+	}
 	// Build the allowlist set once. Empty = accept-all.
 	allow := map[string]struct{}{}
 	if cfg.DMPolicy == "allowlist" {
@@ -432,9 +451,16 @@ func convertUpdate(u telegramUpdate) *pb.IncomingChannelMessage {
 // token in process state at StartChannel time and read it back
 // here. Single-process plugin so a package-level var is fine; if
 // we ever fork-exec per-call this needs revisiting.
+//
+// defaultChatID is allowFrom[0] from the channel config — used as a
+// fallback when the agent invokes telegram_send without a chat_id.
+// In a 1:1 DM (the only scenario the wizard configures), chat.id ==
+// from.id, so the user's sender id is also a valid chat id. Empty
+// when allowFrom isn't configured (open dmPolicy).
 var (
-	sendTokenMu sync.RWMutex
-	sendToken   string
+	sendTokenMu   sync.RWMutex
+	sendToken     string
+	defaultChatID string
 )
 
 func tokenForSendFromEnv() (string, error) {
@@ -450,6 +476,22 @@ func tokenForSendFromEnv() (string, error) {
 func setSendToken(tok string) {
 	sendTokenMu.Lock()
 	sendToken = tok
+	sendTokenMu.Unlock()
+}
+
+// defaultChatIDFromCache returns the cached fallback chat id (set by
+// StartChannel from channels.telegram.allowFrom[0]). Empty string if
+// none was configured.
+func defaultChatIDFromCache() string {
+	sendTokenMu.RLock()
+	id := defaultChatID
+	sendTokenMu.RUnlock()
+	return id
+}
+
+func setDefaultChatID(id string) {
+	sendTokenMu.Lock()
+	defaultChatID = id
 	sendTokenMu.Unlock()
 }
 
