@@ -377,27 +377,31 @@ func TestPluginDepsStatus_FlagsInUseFromConfig(t *testing.T) {
 	if err := os.MkdirAll(talonExt, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// brave is enabled directly; telegram is configured as a
-	// channel (channels.telegram exists) — both should report
-	// inUse=true via the two distinct signal paths the helper
-	// recognizes.
+	// brave is enabled directly; discord is configured as a channel
+	// (channels.discord exists) — both should report inUse=true via
+	// the two distinct signal paths the helper recognizes for npm
+	// extensions. telegram exists too, but as a builtin — its
+	// channels.<name> signal goes through a separate code path.
 	cfg := fmt.Sprintf(`{
 		"plugins": {
 			"bundled": {"path": %q},
 			"entries": {"brave": {"enabled": true}}
 		},
-		"channels": {"telegram": {"agentId": "main"}}
+		"channels": {
+			"discord":  {"agentId": "main"},
+			"telegram": {"agentId": "main"}
+		}
 	}`, talonExt)
 	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	writeExtension(t, talonExt, "brave", nil, false)
-	writeExtension(t, talonExt, "telegram", map[string]string{"grammy": "^1.0.0"}, true)
-	// Telegram needs an openclaw.channel.id in its package.json
-	// for the channels.* signal to match. Re-write its package.json
+	writeExtension(t, talonExt, "discord", map[string]string{"discord.js": "^14.0.0"}, true)
+	// discord needs an openclaw.channel.id in its package.json for
+	// the channels.* signal to match. Re-write its package.json
 	// (writeExtension's helper doesn't include the openclaw block).
-	pkgWithChannel := `{"name":"@openclaw/telegram","openclaw":{"channel":{"id":"telegram","label":"Telegram"}},"dependencies":{"grammy":"^1.0.0"}}`
-	if err := os.WriteFile(filepath.Join(talonExt, "telegram", "package.json"), []byte(pkgWithChannel), 0o600); err != nil {
+	pkgWithChannel := `{"name":"@openclaw/discord","openclaw":{"channel":{"id":"discord","label":"Discord"}},"dependencies":{"discord.js":"^14.0.0"}}`
+	if err := os.WriteFile(filepath.Join(talonExt, "discord", "package.json"), []byte(pkgWithChannel), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	// idle: an extension that isn't referenced anywhere.
@@ -416,17 +420,28 @@ func TestPluginDepsStatus_FlagsInUseFromConfig(t *testing.T) {
 	if !byName["brave"].InUse {
 		t.Errorf("brave should be inUse via plugins.entries: %+v", byName["brave"])
 	}
+	if !byName["discord"].InUse {
+		t.Errorf("discord should be inUse via channels.discord (npm path): %+v", byName["discord"])
+	}
+	// Builtin telegram has channels.telegram set but no package.json —
+	// the inUse helper recognizes builtin channel plugins by their
+	// kind+name pair (separate code path from the npm extension above).
 	if !byName["telegram"].InUse {
-		t.Errorf("telegram should be inUse via channels.telegram: %+v", byName["telegram"])
+		t.Errorf("builtin telegram should be inUse via channels.telegram: %+v", byName["telegram"])
 	}
 	if byName["idle"].InUse {
 		t.Errorf("idle has no config references; should not be inUse")
 	}
-	// All three live in the talon overlay → uninstallable.
-	for _, name := range []string{"brave", "telegram", "idle"} {
+	// npm extensions live in the talon overlay → uninstallable.
+	// Builtin telegram is a shipped binary (not in the overlay), so
+	// the row is intentionally NOT uninstallable.
+	for _, name := range []string{"brave", "discord", "idle"} {
 		if !byName[name].Uninstallable {
 			t.Errorf("%s should be uninstallable (it's in the talon overlay)", name)
 		}
+	}
+	if byName["telegram"].Uninstallable {
+		t.Errorf("builtin telegram should not be uninstallable: %+v", byName["telegram"])
 	}
 }
 

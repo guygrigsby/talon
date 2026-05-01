@@ -16,26 +16,22 @@
 //        channels.telegram.dmPolicy   = "allowlist"
 //        plugins.entries.telegram     = {enabled, cmd}
 //   7. Tell the user to restart the gateway so the plugin spawns
-//
-// All HTTP is stdlib — no Bot API SDK dep, ~250 LOC.
 
 package main
 
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
+	"github.com/guygrigsby/talon/internal/telegram"
 	"github.com/spf13/cobra"
 )
 
@@ -106,7 +102,7 @@ func configureTelegram(in io.Reader, out io.Writer) error {
 	//    user can tell which @handle to message in step 3.
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	bot, err := telegramGetMe(ctx, token)
+	bot, err := telegram.GetMe(ctx, token)
 	if err != nil {
 		return fmt.Errorf("verify token via getMe: %w", err)
 	}
@@ -117,7 +113,7 @@ func configureTelegram(in io.Reader, out io.Writer) error {
 	// 3. Capture the user's chat. Drain any prior unread updates so
 	//    we don't pick up a stale message; then ask the user to
 	//    DM the bot now and long-poll for the new one.
-	startOffset, err := telegramDrainUpdates(ctx, token)
+	startOffset, err := telegram.DrainUpdates(ctx, token)
 	if err != nil {
 		return fmt.Errorf("drain prior updates: %w", err)
 	}
@@ -125,7 +121,9 @@ func configureTelegram(in io.Reader, out io.Writer) error {
 	fmt.Fprintln(out, "(Press Ctrl-C to abort.)")
 	fmt.Fprint(out, "Waiting for your message...")
 
-	chat, err := telegramWaitForMessage(ctx, token, startOffset, 90*time.Second)
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 95*time.Second)
+	defer waitCancel()
+	chat, err := telegram.WaitForMessage(waitCtx, token, startOffset, 90*time.Second)
 	if err != nil {
 		fmt.Fprintln(out)
 		return fmt.Errorf("wait for first message: %w", err)
@@ -137,7 +135,7 @@ func configureTelegram(in io.Reader, out io.Writer) error {
 	//    telegram" moment. Establishes that the round-trip works
 	//    AND closes the loop the user expects.
 	confirm := fmt.Sprintf("✓ talon configured for @%s.\nFuture replies in this chat are routed through your agent.", bot.Username)
-	if err := telegramSendMessage(ctx, token, chat.ChatID, confirm); err != nil {
+	if err := telegram.SendMessage(ctx, token, chat.ChatID, confirm); err != nil {
 		// Non-fatal — the config write is still valuable. Log and continue.
 		fmt.Fprintf(out, "warn: send confirmation: %v\n", err)
 	}
@@ -147,7 +145,6 @@ func configureTelegram(in io.Reader, out io.Writer) error {
 	//    plugin rather than running it without a token.
 	paths := resolvePaths()
 	senderIDStr := strconv.FormatInt(chat.SenderID, 10)
-	chatIDStr := strconv.FormatInt(chat.ChatID, 10)
 	writes := []struct {
 		path  []string
 		value any
@@ -166,206 +163,9 @@ func configureTelegram(in io.Reader, out io.Writer) error {
 			return fmt.Errorf("config set %s: %w", strings.Join(w.path, "."), err)
 		}
 	}
-	_ = chatIDStr // reserved for future per-chat config
 
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "✓ Configuration written. Restart the gateway so the plugin loads:")
 	fmt.Fprintln(out, "    make docker-stop && make docker-run")
 	return nil
-}
-
-// --- Telegram Bot API helpers ---------------------------------------------
-
-const telegramAPIBase = "https://api.telegram.org"
-
-type telegramBotInfo struct {
-	ID        int64  `json:"id"`
-	Username  string `json:"username"`
-	FirstName string `json:"first_name"`
-}
-
-type telegramSenderID struct {
-	ChatID      int64
-	SenderID    int64
-	DisplayName string
-}
-
-type tgUpdate struct {
-	UpdateID      int64    `json:"update_id"`
-	Message       *tgMsg   `json:"message"`
-	EditedMessage *tgMsg   `json:"edited_message"`
-}
-
-type tgMsg struct {
-	MessageID int64   `json:"message_id"`
-	Date      int64   `json:"date"`
-	Chat      tgChat  `json:"chat"`
-	From      *tgUser `json:"from"`
-	Text      string  `json:"text"`
-}
-
-type tgChat struct {
-	ID    int64  `json:"id"`
-	Type  string `json:"type"`
-	Title string `json:"title"`
-}
-
-type tgUser struct {
-	ID        int64  `json:"id"`
-	FirstName string `json:"first_name"`
-	Username  string `json:"username"`
-}
-
-type tgGetUpdatesResp struct {
-	OK     bool       `json:"ok"`
-	Result []tgUpdate `json:"result"`
-}
-
-type tgGetMeResp struct {
-	OK     bool             `json:"ok"`
-	Result *telegramBotInfo `json:"result"`
-}
-
-func telegramGetMe(ctx context.Context, token string) (*telegramBotInfo, error) {
-	endpoint := fmt.Sprintf("%s/bot%s/getMe", telegramAPIBase, token)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		raw, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("getMe http %d: %s", resp.StatusCode, truncateForErr(string(raw), 256))
-	}
-	var out tgGetMeResp
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("getMe decode: %w", err)
-	}
-	if !out.OK || out.Result == nil {
-		return nil, errors.New("getMe ok=false")
-	}
-	return out.Result, nil
-}
-
-// telegramDrainUpdates returns the next offset to use for getUpdates so
-// any pre-existing pending updates (from earlier unrelated chats) are
-// skipped. We pull once with timeout=0 (immediate return) and take
-// the highest update_id + 1.
-func telegramDrainUpdates(ctx context.Context, token string) (int64, error) {
-	updates, err := telegramGetUpdates(ctx, token, 0, 0)
-	if err != nil {
-		return 0, err
-	}
-	var maxID int64
-	for _, u := range updates {
-		if u.UpdateID > maxID {
-			maxID = u.UpdateID
-		}
-	}
-	if maxID == 0 {
-		return 0, nil
-	}
-	return maxID + 1, nil
-}
-
-// telegramWaitForMessage blocks until either a new (post-offset)
-// message arrives or deadline expires. Uses successive long-poll
-// calls with timeout=30s; deadline caps the total wait.
-func telegramWaitForMessage(ctx context.Context, token string, offset int64, deadline time.Duration) (telegramSenderID, error) {
-	end := time.Now().Add(deadline)
-	for {
-		if ctx.Err() != nil {
-			return telegramSenderID{}, ctx.Err()
-		}
-		if time.Now().After(end) {
-			return telegramSenderID{}, errors.New("timed out waiting for a Telegram message")
-		}
-		updates, err := telegramGetUpdates(ctx, token, offset, 30)
-		if err != nil {
-			return telegramSenderID{}, err
-		}
-		for _, u := range updates {
-			if u.UpdateID >= offset {
-				offset = u.UpdateID + 1
-			}
-			m := u.Message
-			if m == nil {
-				m = u.EditedMessage
-			}
-			if m == nil || m.From == nil {
-				continue
-			}
-			display := m.From.FirstName
-			if display == "" {
-				display = m.From.Username
-			}
-			return telegramSenderID{
-				ChatID:      m.Chat.ID,
-				SenderID:    m.From.ID,
-				DisplayName: display,
-			}, nil
-		}
-	}
-}
-
-func telegramGetUpdates(ctx context.Context, token string, offset int64, timeoutSec int) ([]tgUpdate, error) {
-	q := url.Values{}
-	q.Set("timeout", strconv.Itoa(timeoutSec))
-	if offset > 0 {
-		q.Set("offset", strconv.FormatInt(offset, 10))
-	}
-	endpoint := fmt.Sprintf("%s/bot%s/getUpdates?%s", telegramAPIBase, token, q.Encode())
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		raw, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("getUpdates http %d: %s", resp.StatusCode, truncateForErr(string(raw), 256))
-	}
-	var out tgGetUpdatesResp
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("getUpdates decode: %w", err)
-	}
-	if !out.OK {
-		return nil, errors.New("getUpdates ok=false")
-	}
-	return out.Result, nil
-}
-
-func telegramSendMessage(ctx context.Context, token string, chatID int64, text string) error {
-	q := url.Values{}
-	q.Set("chat_id", strconv.FormatInt(chatID, 10))
-	q.Set("text", text)
-	endpoint := fmt.Sprintf("%s/bot%s/sendMessage?%s", telegramAPIBase, token, q.Encode())
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode/100 != 2 {
-		raw, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("sendMessage http %d: %s", resp.StatusCode, truncateForErr(string(raw), 256))
-	}
-	return nil
-}
-
-func truncateForErr(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:n] + "…"
 }

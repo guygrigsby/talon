@@ -138,6 +138,7 @@ func New(cfg Config) *Server {
 		s.reads.Register(s.registry)
 		NewImagesHandler(cfg.Paths).Register(s.registry)
 		NewPluginDepsHandler(cfg.Paths).WithHost(cfg.PluginHost).Register(s.registry)
+		NewChannelsSetupHandler(cfg.Paths).Register(s.registry)
 	}
 	NewSessionsHandler(sessionStore, chatStore).Register(s.registry)
 	s.routes()

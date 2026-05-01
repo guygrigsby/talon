@@ -174,6 +174,15 @@ func enrichInUse(merged []byte, item *pluginDepsStatusItem) {
 	if item.InUse {
 		return
 	}
+	// Builtin channel plugins: name matches the channel id directly,
+	// no package.json to consult. Mirrors the openclaw-extension
+	// path below but skips the file read.
+	if item.Source == "builtin" && item.Kind == "channel" {
+		if v := gjson.GetBytes(merged, "channels."+item.Name); v.Exists() {
+			item.InUse = true
+		}
+		return
+	}
 	// Channel-binding signal: load the package.json's channel.id
 	// and check if it's keyed under channels.*.
 	if item.Path == "" {
