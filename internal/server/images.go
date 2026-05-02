@@ -284,8 +284,14 @@ func (h *ImagesHandler) dispatchEvent(emit func(state string, data map[string]an
 		_ = json.Unmarshal(ev.Data, &d)
 		return false, emit("progress", map[string]any{"value": d.Value, "max": d.Max})
 	case "execution_error":
+		// ComfyUI's execution_error event carries the actual failure
+		// detail — node id, node type (e.g. CheckpointLoaderSimple),
+		// and exception_message (the human-readable reason, like
+		// "ckpt_name 'foo.safetensors' not found in [...]"). Surface
+		// those in errorMessage so the user sees what's broken
+		// instead of the useless "comfyui execution_error" string.
 		emit("error", map[string]any{
-			"errorMessage": "comfyui execution_error",
+			"errorMessage": formatExecutionError(ev.Data),
 			"detail":       json.RawMessage(ev.Data),
 		})
 		return true, true
@@ -851,6 +857,63 @@ func nodeInputs(workflow map[string]any, nodeID string) (map[string]any, error) 
 		return nil, fmt.Errorf("workflow node %q has no inputs object", nodeID)
 	}
 	return inputs, nil
+}
+
+// formatExecutionError extracts the meaningful failure detail from a
+// ComfyUI execution_error event payload. ComfyUI sends node_id +
+// node_type + exception_type + exception_message; any subset may be
+// present in older / partial events. We compose them into a single
+// line that's safe to render verbatim in the UI's error banner.
+//
+//	"CheckpointLoaderSimple (node 1): ValueError: ckpt_name '...' not found"
+//	"comfyui execution_error" — fallback when nothing useful is in the payload
+func formatExecutionError(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return "comfyui execution_error"
+	}
+	var d struct {
+		NodeID           any    `json:"node_id"`
+		NodeType         string `json:"node_type"`
+		ExceptionType    string `json:"exception_type"`
+		ExceptionMessage string `json:"exception_message"`
+	}
+	if err := json.Unmarshal(raw, &d); err != nil {
+		return "comfyui execution_error"
+	}
+	parts := []string{}
+	switch v := d.NodeID.(type) {
+	case string:
+		if v != "" {
+			if d.NodeType != "" {
+				parts = append(parts, fmt.Sprintf("%s (node %s)", d.NodeType, v))
+			} else {
+				parts = append(parts, fmt.Sprintf("node %s", v))
+			}
+		} else if d.NodeType != "" {
+			parts = append(parts, d.NodeType)
+		}
+	case float64:
+		if d.NodeType != "" {
+			parts = append(parts, fmt.Sprintf("%s (node %d)", d.NodeType, int64(v)))
+		} else {
+			parts = append(parts, fmt.Sprintf("node %d", int64(v)))
+		}
+	default:
+		if d.NodeType != "" {
+			parts = append(parts, d.NodeType)
+		}
+	}
+	if d.ExceptionType != "" && d.ExceptionMessage != "" {
+		parts = append(parts, d.ExceptionType+": "+d.ExceptionMessage)
+	} else if d.ExceptionMessage != "" {
+		parts = append(parts, d.ExceptionMessage)
+	} else if d.ExceptionType != "" {
+		parts = append(parts, d.ExceptionType)
+	}
+	if len(parts) == 0 {
+		return "comfyui execution_error"
+	}
+	return "comfyui execution_error: " + strings.Join(parts, ": ")
 }
 
 // expandHomePath swaps a leading "~/" for the user's home dir; other

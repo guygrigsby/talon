@@ -104,6 +104,28 @@ var builtinWorkflows = []builtinWorkflow{
 		SeedNodeID:           "5",
 		Description:          "realPony_realAnimeNo04 checkpoint, dpmpp_2m_sde/karras, 28 steps. Vibrant anime aesthetic with the Pony score-tag system.",
 	},
+	{
+		// Illustrious uses different node ids than the dixar/pony
+		// set: prompt=6, negative=7, seed=3 (KSampler). VAE is
+		// externalized via VAELoader (sdxl_vae.safetensors) and
+		// decoding goes through VAEDecodeTiled at 1024x1024.
+		ID:                   "illustrious-char",
+		Label:                "SDXL Illustrious — Character (28 steps)",
+		Filename:             "illustrious_char.json",
+		PromptNodeID:         "6",
+		NegativePromptNodeID: "7",
+		SeedNodeID:           "3",
+		Description:          "illustriousXL10Improved_v30 + sdxl_vae external VAE, dpmpp_2m/karras, 28 steps, 1024x1024. Tiled decode.",
+	},
+	{
+		ID:                   "illustrious-hyper",
+		Label:                "SDXL Illustrious — Hyper-8 (fast)",
+		Filename:             "illustrious_hyper.json",
+		PromptNodeID:         "6",
+		NegativePromptNodeID: "7",
+		SeedNodeID:           "3",
+		Description:          "illustriousXL10Improved_v30 + Hyper-SDXL 8-step LoRA + sdxl_vae external VAE. ~4x faster, 1024x1024.",
+	},
 }
 
 // findBuiltinWorkflow returns the entry by id, or nil when id is

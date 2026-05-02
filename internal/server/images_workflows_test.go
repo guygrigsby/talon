@@ -37,6 +37,8 @@ func TestImagesWorkflowsList_ListsBuiltins(t *testing.T) {
 		"dixar-3d-hyper8":        false,
 		"pony-cyberrealistic":    false,
 		"pony-real-anime":        false,
+		"illustrious-char":       false,
+		"illustrious-hyper":      false,
 	}
 	for _, w := range wfs {
 		if _, named := want[w.ID]; named {
@@ -273,6 +275,73 @@ func TestLoadComfyUIConfig_PonyBuiltinsLoadCorrectly(t *testing.T) {
 			}
 			if parsed["13"].Inputs["conditioning_to"] == nil {
 				t.Errorf("%s: negative concat scaffold lost", c.description)
+			}
+		})
+	}
+}
+
+func TestLoadComfyUIConfig_IllustriousBuiltinsLoadCorrectly(t *testing.T) {
+	// Illustrious workflows use prompt=6/negative=7/seed=3 (vs.
+	// 2/3/5 for the dixar/pony set). A registry typo would land
+	// the patcher on the wrong nodes and swap prompt/negative
+	// silently — verify the right pins resolve and the right
+	// checkpoint is in the embedded JSON.
+	paths := readFixture(t, "{}")
+	h := NewImagesHandler(paths)
+
+	cases := []struct {
+		id          string
+		wantSubstr  string
+		description string
+	}{
+		{"illustrious-char", "illustriousXL10Improved_v30", "Illustrious Character"},
+		{"illustrious-hyper", "Hyper-SDXL-8steps-lora.safetensors", "Illustrious Hyper-8"},
+	}
+	for _, c := range cases {
+		t.Run(c.id, func(t *testing.T) {
+			cfg, ferr := h.loadComfyUIConfig(c.id)
+			if ferr != nil {
+				t.Fatalf("%s: %+v", c.description, ferr)
+			}
+			if cfg.PromptNodeID != "6" || cfg.NegativePromptNodeID != "7" || cfg.SeedNodeID != "3" {
+				t.Errorf("%s: pin mismatch (Illustrious uses 6/7/3): %+v", c.description, cfg)
+			}
+			if !strings.Contains(string(cfg.WorkflowJSON), c.wantSubstr) {
+				t.Errorf("%s: workflow JSON missing %q", c.description, c.wantSubstr)
+			}
+			seed := int64(7)
+			out, ferr := readAndPatchWorkflow(cfg, imagesGenerateParams{Prompt: "p", NegativePrompt: "n", Seed: &seed})
+			if ferr != nil {
+				t.Fatalf("%s: patch: %+v", c.description, ferr)
+			}
+			var parsed map[string]struct {
+				Inputs map[string]any `json:"inputs"`
+			}
+			if err := json.Unmarshal(out, &parsed); err != nil {
+				t.Fatal(err)
+			}
+			// Illustrious-hyper's positive node 6 has a baked-in
+			// "masterpiece, best quality, ..., %prompt%" prefix —
+			// patching replaces the whole string, so the prefix is
+			// expected to be gone after patch. We only assert that
+			// the user prompt landed.
+			if !strings.Contains(parsed["6"].Inputs["text"].(string), "p") {
+				t.Errorf("%s: positive not patched on node 6: %+v", c.description, parsed["6"].Inputs)
+			}
+			if parsed["7"].Inputs["text"] != "n" {
+				t.Errorf("%s: negative not patched on node 7", c.description)
+			}
+			if int64(parsed["3"].Inputs["seed"].(float64)) != 7 {
+				t.Errorf("%s: seed not patched on node 3", c.description)
+			}
+			// External VAELoader (node 10) and tiled decode (node 8)
+			// must survive — these distinguish Illustrious from the
+			// dixar/pony workflows.
+			if parsed["10"].Inputs["vae_name"] != "sdxl_vae.safetensors" {
+				t.Errorf("%s: VAELoader lost: %+v", c.description, parsed["10"].Inputs)
+			}
+			if _, ok := parsed["8"].Inputs["tile_size"]; !ok {
+				t.Errorf("%s: VAEDecodeTiled lost tile_size: %+v", c.description, parsed["8"].Inputs)
 			}
 		})
 	}
