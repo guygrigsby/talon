@@ -86,6 +86,24 @@ var builtinWorkflows = []builtinWorkflow{
 		SeedNodeID:           "5",
 		Description:          "dixar_4DixGalore + 3d LoRA + Hyper-SDXL 8-step LoRA. Stylized 3D, ~4x faster.",
 	},
+	{
+		ID:                   "pony-cyberrealistic",
+		Label:                "Pony — CyberRealistic (photoreal)",
+		Filename:             "pony_cyberrealistic.json",
+		PromptNodeID:         "2",
+		NegativePromptNodeID: "3",
+		SeedNodeID:           "5",
+		Description:          "cyberrealisticPony_v170 checkpoint, dpmpp_2m_sde/karras, 30 steps. Photoreal output with Pony score-tag anchors and anti-anime/cartoon negative.",
+	},
+	{
+		ID:                   "pony-real-anime",
+		Label:                "Pony — Real Anime",
+		Filename:             "pony_real_anime.json",
+		PromptNodeID:         "2",
+		NegativePromptNodeID: "3",
+		SeedNodeID:           "5",
+		Description:          "realPony_realAnimeNo04 checkpoint, dpmpp_2m_sde/karras, 28 steps. Vibrant anime aesthetic with the Pony score-tag system.",
+	},
 }
 
 // findBuiltinWorkflow returns the entry by id, or nil when id is

@@ -35,6 +35,8 @@ func TestImagesWorkflowsList_ListsBuiltins(t *testing.T) {
 		"dixar-character-hyper8": false,
 		"dixar-3d":               false,
 		"dixar-3d-hyper8":        false,
+		"pony-cyberrealistic":    false,
+		"pony-real-anime":        false,
 	}
 	for _, w := range wfs {
 		if _, named := want[w.ID]; named {
@@ -208,6 +210,69 @@ func TestLoadComfyUIConfig_3DBuiltinsLoadCorrectly(t *testing.T) {
 			}
 			if int64(parsed["5"].Inputs["seed"].(float64)) != 7 {
 				t.Errorf("%s: seed not patched", c.description)
+			}
+		})
+	}
+}
+
+func TestLoadComfyUIConfig_PonyBuiltinsLoadCorrectly(t *testing.T) {
+	// Pony variants use distinct checkpoints from the dixar set —
+	// verify each loads the right .safetensors so a registry/file
+	// mix-up surfaces here, not in production.
+	paths := readFixture(t, "{}")
+	h := NewImagesHandler(paths)
+
+	cases := []struct {
+		id          string
+		wantSubstr  string
+		description string
+	}{
+		{"pony-cyberrealistic", "cyberrealisticPony_v170.safetensors", "CyberRealistic Pony"},
+		{"pony-real-anime", "realPony_realAnimeNo04.safetensors", "Real Anime Pony"},
+	}
+	for _, c := range cases {
+		t.Run(c.id, func(t *testing.T) {
+			cfg, ferr := h.loadComfyUIConfig(c.id)
+			if ferr != nil {
+				t.Fatalf("%s: %+v", c.description, ferr)
+			}
+			if cfg.PromptNodeID != "2" || cfg.NegativePromptNodeID != "3" || cfg.SeedNodeID != "5" {
+				t.Errorf("%s: pin mismatch: %+v", c.description, cfg)
+			}
+			if !strings.Contains(string(cfg.WorkflowJSON), c.wantSubstr) {
+				t.Errorf("%s: workflow JSON missing checkpoint %q", c.description, c.wantSubstr)
+			}
+			// Patch end-to-end so a structural break (e.g. KSampler
+			// renamed off node 5) trips before shipping.
+			seed := int64(99)
+			out, ferr := readAndPatchWorkflow(cfg, imagesGenerateParams{Prompt: "a", NegativePrompt: "b", Seed: &seed})
+			if ferr != nil {
+				t.Fatalf("%s: patch: %+v", c.description, ferr)
+			}
+			var parsed map[string]struct {
+				Inputs map[string]any `json:"inputs"`
+			}
+			if err := json.Unmarshal(out, &parsed); err != nil {
+				t.Fatal(err)
+			}
+			if parsed["2"].Inputs["text"] != "a" {
+				t.Errorf("%s: positive not patched", c.description)
+			}
+			if parsed["3"].Inputs["text"] != "b" {
+				t.Errorf("%s: negative not patched", c.description)
+			}
+			if int64(parsed["5"].Inputs["seed"].(float64)) != 99 {
+				t.Errorf("%s: seed not patched", c.description)
+			}
+			// Pony permanent-anchor scaffolding survives the patch:
+			// node 11 is the positive ConditioningConcat, node 13 the
+			// negative one. If these get clobbered the score-tag
+			// anchors stop applying and quality collapses.
+			if parsed["11"].Inputs["conditioning_to"] == nil {
+				t.Errorf("%s: positive concat scaffold lost", c.description)
+			}
+			if parsed["13"].Inputs["conditioning_to"] == nil {
+				t.Errorf("%s: negative concat scaffold lost", c.description)
 			}
 		})
 	}
