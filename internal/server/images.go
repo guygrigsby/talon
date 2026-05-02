@@ -662,6 +662,11 @@ type comfyUIConfig struct {
 	PromptNodeID         string
 	NegativePromptNodeID string
 	SeedNodeID           string
+	// ExtraSeedNodeIDs are additional sampler nodes that need the
+	// same seed (two-pass hires-fix workflows). Patched alongside
+	// SeedNodeID so any "%seed%" placeholder left in a secondary
+	// KSampler doesn't reach ComfyUI as a literal string.
+	ExtraSeedNodeIDs []string
 }
 
 const (
@@ -704,6 +709,9 @@ func (h *ImagesHandler) loadComfyUIConfig(workflowID string) (comfyUIConfig, *Fr
 		cfg.PromptNodeID = entry.PromptNodeID
 		cfg.NegativePromptNodeID = entry.NegativePromptNodeID
 		cfg.SeedNodeID = entry.SeedNodeID
+		if len(entry.ExtraSeedNodeIDs) > 0 {
+			cfg.ExtraSeedNodeIDs = append([]string(nil), entry.ExtraSeedNodeIDs...)
+		}
 		return cfg, nil
 	}
 	// Reject an unknown workflowId rather than silently falling back —
@@ -808,6 +816,14 @@ func readAndPatchWorkflow(cfg comfyUIConfig, p imagesGenerateParams) (json.RawMe
 		}
 		if err := setWorkflowSeed(workflow, cfg.SeedNodeID, seed); err != nil {
 			return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images: " + err.Error()}
+		}
+		// Mirror the same seed into any extra sampler nodes (two-pass
+		// hires-fix workflows). Same seed across passes is what keeps
+		// the refine pass coherent with the base.
+		for _, extra := range cfg.ExtraSeedNodeIDs {
+			if err := setWorkflowSeed(workflow, extra, seed); err != nil {
+				return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images: extra seed node: " + err.Error()}
+			}
 		}
 	}
 

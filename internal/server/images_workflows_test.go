@@ -39,6 +39,7 @@ func TestImagesWorkflowsList_ListsBuiltins(t *testing.T) {
 		"pony-real-anime":        false,
 		"illustrious-char":       false,
 		"illustrious-hyper":      false,
+		"vyx":                    false,
 	}
 	for _, w := range wfs {
 		if _, named := want[w.ID]; named {
@@ -344,6 +345,73 @@ func TestLoadComfyUIConfig_IllustriousBuiltinsLoadCorrectly(t *testing.T) {
 				t.Errorf("%s: VAEDecodeTiled lost tile_size: %+v", c.description, parsed["8"].Inputs)
 			}
 		})
+	}
+}
+
+// TestLoadComfyUIConfig_VyxPatchesAllSeedNodes covers the two-pass
+// hires-fix bug: vyx has TWO KSampler nodes (9 = first pass, 15 =
+// hires refine) and both have inputs.seed templated as "%seed%".
+// Patching only the primary seed leaves the literal string in the
+// second sampler, ComfyUI rejects it as non-numeric, and the run
+// fails with execution_error. Both must be patched to the same
+// seed (deterministic continuity between passes is expected).
+func TestLoadComfyUIConfig_VyxPatchesAllSeedNodes(t *testing.T) {
+	paths := readFixture(t, "{}")
+	h := NewImagesHandler(paths)
+
+	cfg, ferr := h.loadComfyUIConfig("vyx")
+	if ferr != nil {
+		t.Fatalf("loadComfyUIConfig vyx: %+v", ferr)
+	}
+	if cfg.PromptNodeID != "6" || cfg.NegativePromptNodeID != "7" {
+		t.Errorf("vyx pin mismatch (expected prompt=6/negative=7): %+v", cfg)
+	}
+	if cfg.SeedNodeID != "9" {
+		t.Errorf("vyx primary seed pin should be 9 (first KSampler), got %q", cfg.SeedNodeID)
+	}
+	if !strings.Contains(string(cfg.WorkflowJSON), "duchaitenPonyReal_v20") {
+		t.Errorf("vyx workflow JSON missing duchaitenPonyReal_v20 checkpoint")
+	}
+
+	seed := int64(2024)
+	out, ferr := readAndPatchWorkflow(cfg, imagesGenerateParams{Prompt: "a", NegativePrompt: "b", Seed: &seed})
+	if ferr != nil {
+		t.Fatalf("vyx patch: %+v", ferr)
+	}
+	var parsed map[string]struct {
+		Inputs map[string]any `json:"inputs"`
+	}
+	if err := json.Unmarshal(out, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	// Both seed nodes must be numeric (placeholder gone) AND equal:
+	// hires refine uses the primary pass's seed for coherent
+	// continuity; if they diverge the second pass drifts.
+	for _, nodeID := range []string{"9", "15"} {
+		v, ok := parsed[nodeID].Inputs["seed"]
+		if !ok {
+			t.Fatalf("node %s missing inputs.seed: %+v", nodeID, parsed[nodeID].Inputs)
+		}
+		if s, isStr := v.(string); isStr {
+			t.Errorf("node %s seed still a string %q — placeholder not patched", nodeID, s)
+			continue
+		}
+		f, ok := v.(float64)
+		if !ok {
+			t.Errorf("node %s seed unexpected type %T: %v", nodeID, v, v)
+			continue
+		}
+		if int64(f) != 2024 {
+			t.Errorf("node %s seed = %d, want 2024", nodeID, int64(f))
+		}
+	}
+	// Recipe scaffolding must survive: the LoRA stack (2/3/4/5),
+	// the two-pass concat anchors (19/21), and the upscale chain
+	// (11/12/13/14).
+	for _, nodeID := range []string{"2", "3", "4", "5", "19", "21", "11", "12", "13", "14"} {
+		if parsed[nodeID].Inputs == nil {
+			t.Errorf("vyx node %s lost during patch", nodeID)
+		}
 	}
 }
 

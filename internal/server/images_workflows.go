@@ -42,7 +42,14 @@ type builtinWorkflow struct {
 	PromptNodeID         string
 	NegativePromptNodeID string
 	SeedNodeID           string
-	Description          string
+	// ExtraSeedNodeIDs are additional KSampler nodes that share the
+	// same seed. Two-pass workflows (base → hires refine) need both
+	// samplers seeded to the same value for deterministic
+	// continuity, and any node still holding the literal "%seed%"
+	// placeholder fails ComfyUI's KSampler validation. Empty for
+	// single-pass workflows.
+	ExtraSeedNodeIDs []string
+	Description      string
 }
 
 // builtinWorkflows is the source of truth for the dropdown. Order is
@@ -125,6 +132,22 @@ var builtinWorkflows = []builtinWorkflow{
 		NegativePromptNodeID: "7",
 		SeedNodeID:           "3",
 		Description:          "illustriousXL10Improved_v30 + Hyper-SDXL 8-step LoRA + sdxl_vae external VAE. ~4x faster, 1024x1024.",
+	},
+	{
+		// vyx is a two-pass hires-fix workflow on duchaitenPonyReal:
+		// 832x1216 base → Remacri 4x upscale → 1248x1824 downscale →
+		// 0.4-denoise refine. Both KSamplers (9 base, 15 refine)
+		// share the same seed so the refine pass stays coherent.
+		// LoRA stack: ExpressiveH, Skin Color slider (off), Disney
+		// Princess XL (0.4), Perfect Eyes XL (0.5).
+		ID:                   "vyx",
+		Label:                "VYX — duchaitenPonyReal + hires refine",
+		Filename:             "vyx.json",
+		PromptNodeID:         "6",
+		NegativePromptNodeID: "7",
+		SeedNodeID:           "9",
+		ExtraSeedNodeIDs:     []string{"15"},
+		Description:          "duchaitenPonyReal_v20 + 4 LoRAs (ExpressiveH / Skin Color slider / Disney Princess / Perfect Eyes), two-pass hires fix via Remacri 4x upscaler. Slow (~60s) but high fidelity.",
 	},
 }
 
