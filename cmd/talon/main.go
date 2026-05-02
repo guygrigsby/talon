@@ -38,11 +38,27 @@ func resolvePaths() openclaw.Paths {
 	return p
 }
 
+// talonVersion is the version string emitted by `talon version` and
+// `talon -V`/`--version`. Bumped manually for now; release tooling
+// (talon-87g/talon-u9x) will inject via -ldflags later.
+const talonVersion = "0.1.0-dev"
+
 func main() {
 	root := &cobra.Command{
 		Use:   "talon",
 		Short: "Fast openclaw-compatible gateway client",
+		// Version drives Cobra's auto-generated -v/--version flag
+		// (we bind -V manually below since openclaw uses -V). Format
+		// matches `talon version` for byte-equivalence.
+		Version: "talon " + talonVersion,
 	}
+	// openclaw's commander uses -V (capital), not -v. Match that for
+	// drop-in alias parity. SetVersionTemplate strips the default
+	// "{name} version {version}" wrapping so the output matches our
+	// `version` subcommand exactly.
+	root.SetVersionTemplate("{{.Version}}\n")
+	root.Flags().BoolP("version", "V", false, "Print version and exit")
+
 	root.PersistentFlags().StringVar(&flagTalonConfig, "config", "", "path to the talon overlay config (default: $TALON_CONFIG_PATH or ~/.talon/openclaw.json)")
 	root.PersistentFlags().StringVar(&flagOpenclawConfig, "openclaw-config", "", "path to the read-only openclaw config (default: $OPENCLAW_CONFIG_PATH or ~/.openclaw/openclaw.json)")
 	root.PersistentFlags().BoolVar(&flagNoFallback, "no-openclaw-fallback", false, "ignore the openclaw config layer when reading")
@@ -59,6 +75,7 @@ func main() {
 	root.AddCommand(chatHistoryCmd())
 	root.AddCommand(statusCmd())
 	root.AddCommand(uiCmd())
+	root.AddCommand(docsCmd())
 
 	// closeSharedRPC is wired as the post-run hook so any RPC client
 	// the command branches lazily opened gets its WS shut cleanly
@@ -82,7 +99,7 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print talon client version",
 		Run: func(cmd *cobra.Command, args []string) {
-			fmt.Println("talon 0.1.0-dev")
+			fmt.Println("talon " + talonVersion)
 		},
 	}
 }
@@ -561,5 +578,6 @@ func agentsCmd() *cobra.Command {
 			return renderAgents(os.Stdout, payload)
 		},
 	})
+	c.AddCommand(agentsBindingsCmd())
 	return c
 }

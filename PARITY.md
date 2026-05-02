@@ -10,14 +10,14 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 |---|---|---|
 | `acp` (`client`) | ✗ | talon-aws (gateway server), ACP runtime |
 | `agent` | ✗ | talon-aws, talon-ekd, talon-98f |
-| `agents` (7 subs) | ◐ `list` only | `list` renders a tab-aligned table (default agent first, then alpha; columns: ID, MODEL, WORKSPACE, FALLBACKS, NAME); use `--json` for raw RPC payload (talon-8eb). Other subs: talon-48e, talon-aws |
+| `agents` (7 subs) | ◐ `list` + `bindings` | `list` renders a tab-aligned table (default agent first, then alpha; columns: ID, MODEL, WORKSPACE, FALLBACKS, NAME); use `--json` for raw RPC payload (talon-8eb). `bindings` lists `channels.<id>.agentId` entries (with optional `--agent <id>` filter). Other subs (`bind`/`unbind`/`add`/`set-identity`/`delete`): talon-48e, talon-aws |
 | `approvals` (4 subs) | ✗ | talon-97i, talon-aws |
 | `backup` (3 subs) | ✗ | talon-aws (state on disk to back up) |
 | `capability` (10 subs) | ✗ | talon-ekd, talon-aws |
 | `channels` (10 subs) | ✗ | talon-kqk, talon-aws |
 | `chat` | ◐ wrong semantics | talon-dcj — openclaw `chat` = `tui --local`; talon `chat` is one-shot stream. Plus talon-rpk, talon-yct, talon-z8h, talon-8h2 |
 | `clawbot` (1 sub: `qr`) | ⊘ | legacy aliases, not worth cloning |
-| `completion` | ✗ | talon-tmf — Cobra has built-in support |
+| `completion` | ✓ | Cobra built-in (`completion bash|zsh|fish|powershell`) |
 | `config` (6 subs) | ◐ | Layered overlay model (talon-2sv): read merges `~/.talon` over `~/.openclaw`, writes target `~/.talon` only. talon-1oj (set rich modes — Phase B), talon-7vk (whitespace), talon-9ic (tombstones for openclaw-layer deletes) |
 | `configure` (interactive) | ✗ | depends on entire config surface; large port |
 | `cron` (10 subs) | ✗ | talon-3tg, talon-aws |
@@ -26,7 +26,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 | `devices` (8 subs) | ✗ | talon-job, talon-26v, talon-xk1, talon-aws |
 | `directory` (3 subs) | ✗ | talon-kqk, talon-aws |
 | `dns` (1 sub: `setup`) | ✗ | wide-area discovery; depends on bonjour work (talon-r0p) |
-| `docs` | ✗ | trivial port (web search wrapper) |
+| `docs` | ◐ | URL + search-link surface (no MCP shell-out yet — that's the openclaw runtime dep we'd rather not take on). Args render `https://docs.openclaw.ai/?q=<query>`. |
 | `doctor` | ✗ | talon-uyp |
 | `exec-policy` (3 subs) | ✗ | talon-aws (host approvals integration) |
 | `gateway` (12 subs) | ◐ 6/12 | see below |
@@ -60,7 +60,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 | `tui` | ✗ | talon-pcn |
 | `uninstall` | ✗ | talon-aws |
 | `update` (2 subs) | ✗ | talon-87g (homebrew), talon-u9x (go install) |
-| `version` | ◐ | talon uses subcommand; openclaw uses `-V` flag — talon-0vv |
+| `version` | ✓ | Both `talon version` subcommand and `-V`/`--version` flag (parity with openclaw's commander surface). |
 | `webhooks` (1 sub: `gmail`) | ✗ | depends on gogcli integration |
 
 ## `gateway` subcommands (12 total)
