@@ -13,7 +13,7 @@ WEB_DIST ?= ../openclaw/dist/control-ui
 
 GO_SRC := $(shell find cmd internal -name '*.go' 2>/dev/null)
 
-.PHONY: build all install run gateway-run gateway-run-with-ui test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop proto proto-tools
+.PHONY: build all install run gateway-run gateway-run-with-ui test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop docker-bounce docker-logs proto proto-tools
 
 build: $(BIN)
 
@@ -112,9 +112,15 @@ docker-build:
 # host so agents.list[].workspace strings (which embed host paths like
 # "$$HOME/.openclaw/workspace") resolve transparently inside the
 # container. HOME is propagated for the same reason.
+# `--restart=unless-stopped` keeps the gateway up across crashes
+# and host reboots while still respecting `make docker-stop` (or
+# explicit `docker stop`) — the right semantics for an unattended
+# box. Drops `--rm` since `--rm` and `--restart` are mutually
+# exclusive; cleanup happens via the `docker rm -f` line below on
+# the next `docker-run` invocation.
 docker-run: docker-build
 	@-docker rm -f $(DOCKER_NAME) >/dev/null 2>&1
-	docker run -i -d --rm \
+	docker run -i -d --restart=unless-stopped \
 	    --name $(DOCKER_NAME) \
 	    -p $(DOCKER_HOST_PORT):18789 \
 	    --add-host=host.docker.internal:host-gateway \
@@ -123,8 +129,17 @@ docker-run: docker-build
 	    -v $(HOME)/.talon:$(HOME)/.talon \
 	    $(DOCKER_IMAGE) $(ARGS)
 
+docker-bounce: docker-stop docker-run
+
 docker-stop:
 	-docker stop $(DOCKER_NAME)
+
+# Tail the gateway log stream. Docker's default json-file driver
+# rotates at 10MB (configurable in daemon.json) and persists across
+# container restarts thanks to --restart=unless-stopped, so this
+# replaces the no-log-file gap for unattended ops.
+docker-logs:
+	docker logs $(DOCKER_NAME) --tail=200 -f
 
 # ---- proto ------------------------------------------------------------
 # Regenerates the gRPC plugin service stubs from the canonical .proto.
