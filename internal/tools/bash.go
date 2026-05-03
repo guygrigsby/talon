@@ -39,6 +39,12 @@ func (t *bashTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	if strings.TrimSpace(p.Command) == "" {
 		return "", fmt.Errorf("bash: command is required")
 	}
+	// Defense-in-depth denylist. Returns a non-error response so
+	// the model sees the rejection reason and can adapt — vs. an
+	// error that would surface as a generic tool failure.
+	if reason := bashDenylistViolation(p.Command); reason != "" {
+		return "bash: " + reason, nil
+	}
 	timeout := 30 * time.Second
 	if p.TimeoutSeconds > 0 {
 		timeout = time.Duration(p.TimeoutSeconds) * time.Second

@@ -177,6 +177,7 @@ type ChatHandler struct {
 	tools     func(workspace string) ToolRunner
 	store     *ChatStore
 	sessions  *SessionStore
+	costs     *CostTracker
 
 	// runs tracks active runs by "sessionKey|idempotencyKey" so a duplicate
 	// chat.send returns the same runId without spawning a second stream.
@@ -224,6 +225,15 @@ func (h *ChatHandler) WithTools(ws WorkspaceResolver, mk func(workspace string) 
 // the model that gets queried.
 func (h *ChatHandler) WithSessions(sessions *SessionStore) *ChatHandler {
 	h.sessions = sessions
+	return h
+}
+
+// WithCostTracker wires per-agent USD cost accounting + cap
+// enforcement. Nil disables tracking (the existing behavior).
+// Pre-flight Allow() runs once per chat.send; Record() runs once
+// per provider DeltaUsage event.
+func (h *ChatHandler) WithCostTracker(c *CostTracker) *ChatHandler {
+	h.costs = c
 	return h
 }
 
@@ -398,6 +408,13 @@ func (h *ChatHandler) handleSend(ctx context.Context, hc HandlerCtx, params json
 	agentID := AgentIDFromSessionKey(p.SessionKey)
 	if agentID == "" {
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "chat.send: cannot derive agent from sessionKey " + p.SessionKey}
+	}
+
+	// Pre-flight cost-cap check. When the cap is unset (or no
+	// tracker is wired) Allow returns nil immediately — zero
+	// overhead for users not opting in.
+	if err := h.costs.Allow(agentID); err != nil {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "chat.send: " + err.Error()}
 	}
 
 	model, err := h.resolver.PrimaryModel(agentID)
@@ -630,7 +647,12 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 				_ = h.emitError(emit.chatSess, emit.runID, emit.sessionKey, seq, "provider", d.Err.Error())
 				return accumulated.String(), d.Err
 			case provider.DeltaUsage:
-				// usage not surfaced over the wire yet.
+				// usage not surfaced over the wire yet, but the
+				// cost tracker (when wired) folds it into the
+				// per-agent daily accumulator for cap enforcement.
+				if h.costs != nil && d.Usage != nil {
+					h.costs.Record(agentID, model, *d.Usage)
+				}
 			}
 		}
 

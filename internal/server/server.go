@@ -130,6 +130,11 @@ func New(cfg Config) *Server {
 			}
 			ch = ch.WithTools(cfg.WorkspaceResolver, factory)
 		}
+		// Per-agent daily USD cap (agents.defaults.dailyUsdCap).
+		// No-op when the cap is unset.
+		if cfg.Paths.Talon.Dir != "" {
+			ch = ch.WithCostTracker(NewCostTracker(cfg.Paths))
+		}
 		ch.Register(s.registry)
 		s.chat = ch
 	}

@@ -77,7 +77,6 @@ func gatewayRunCmd() *cobra.Command {
 			for flag, val := range map[string]string{
 				"--password":        password,
 				"--password-file":   passwordFile,
-				"--tailscale":       tailscale,
 				"--raw-stream-path": rawStreamPath,
 			} {
 				if val != "" {
@@ -89,13 +88,20 @@ func gatewayRunCmd() *cobra.Command {
 				"--reset":                     reset,
 				"--allow-unconfigured":        allowUnconfigured,
 				"--raw-stream":                rawStream,
-				"--tailscale-reset-on-exit":   tailscaleReset,
 				"--compact":                   compact,
 				"--cli-backend-logs":          cliBackendLogs,
 			} {
 				if val {
 					fmt.Fprintf(os.Stderr, "talon: %s accepted but not yet wired\n", flag)
 				}
+			}
+
+			// --tailscale: parse mode early so a typo aborts before
+			// we spin up listeners. Actual exposure happens after
+			// the gateway is listening (below).
+			tsMode, err := parseTailscaleMode(tailscale)
+			if err != nil {
+				return err
 			}
 			_ = wsLog
 			_ = verbose
@@ -204,6 +210,27 @@ func gatewayRunCmd() *cobra.Command {
 			ui := buildUIURL(defaultUIHost, gwHost, port, token, "main", "/chat")
 			log.Printf("UI:  %s", ui)
 			log.Printf("     (override host with: talon ui url --ui-host=...)")
+
+			// Crash-loop detection. Records this startup and, if
+			// we've started 3+ times in 5 minutes, fires a
+			// Telegram alert (when channels.telegram is configured).
+			// Best-effort, never blocks startup.
+			recordStartupAndAlert(ctx, paths)
+
+			// Tailscale exposure: spin this up after the listener is
+			// printed so the user sees the local URL even if the
+			// CLI shell-out fails. Funnel/serve persist on the
+			// Tailscale side, so the call can be best-effort.
+			if tsMode != tailscaleOff {
+				if err := applyTailscale(ctx, tsMode, port); err != nil {
+					log.Printf("tailscale: %v", err)
+				} else {
+					log.Printf("tailscale: %s mode active (port %d via tailnet)", tsMode, port)
+				}
+				if tailscaleReset {
+					defer resetTailscale(context.Background())
+				}
+			}
 			return srv.Run(ctx)
 		},
 	}
