@@ -544,9 +544,12 @@ top-level properties tree. Names may be dotted to drill in (e.g.
 }
 
 func modelsCmd() *cobra.Command {
-	return &cobra.Command{
+	c := &cobra.Command{
 		Use:   "models",
-		Short: "List available models",
+		Short: "Model discovery, defaults, fallbacks, and aliases",
+		// Parent default mirrors openclaw: bare `models` prints the
+		// list. Keeps backward compat for users who learned it as a
+		// single command before subcommands landed.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			payload, err := runRPC("models.list", nil)
 			if err != nil {
@@ -559,6 +562,25 @@ func modelsCmd() *cobra.Command {
 			return renderModels(os.Stdout, payload)
 		},
 	}
+	c.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "List available models",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			payload, err := runRPC("models.list", nil)
+			if err != nil {
+				return err
+			}
+			if flagJSON {
+				emit(payload)
+				return nil
+			}
+			return renderModels(os.Stdout, payload)
+		},
+	})
+	c.AddCommand(modelsSetCmd())
+	c.AddCommand(modelsFallbacksCmd())
+	c.AddCommand(modelsAliasesCmd())
+	return c
 }
 
 func agentsCmd() *cobra.Command {

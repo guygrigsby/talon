@@ -38,7 +38,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 | `mcp` (6 subs) | ✗ | talon-v8k |
 | `memory` | ✗ | depends on memory backend |
 | `message` (24 subs) | ✗ | talon-kqk, talon-aws — large surface |
-| `models` (9 subs) | ◐ list only, no subcommand parent | `models` renders a tab-aligned table (sorted by ID; columns: ID, MODALITIES, CTX, REASONING, ALIAS, NAME); ctx compacted to K/M; use `--json` for raw RPC payload (talon-8eb). Other subs: talon-d0v |
+| `models` (9 subs) | ◐ list/set/fallbacks/aliases | `models` (and `models list`) renders a tab-aligned table (sorted by ID; columns: ID, MODALITIES, CTX, REASONING, ALIAS, NAME); use `--json` for raw RPC payload. `models set <model>` writes `agents.defaults.model.primary`. `models fallbacks list/add/remove/clear` manages `agents.defaults.model.fallbacks`. `models aliases list/add/remove` manages `agents.defaults.models.<id>.alias`. All write subs emit per-path reload hints. Missing: `status --probe`, `scan`, `auth *`, `set-image` / `image-fallbacks` (talon-d0v). |
 | `node` (6 subs) | ✗ | talon-yw5, talon-aws |
 | `nodes` (15 subs) | ✗ | talon-yw5, talon-aws |
 | `onboard` (interactive) | ✗ | depends on entire setup surface |
@@ -68,7 +68,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 | Subcommand | Status | Notes |
 |---|---|---|
 | `call` | ✓ | RPC pass-through (talon-lhh) |
-| `diagnostics export` | ✗ | talon-kao — local sanitized .zip writer |
+| `diagnostics export` | ✓ | Writes a sanitized .zip with manifest, redacted merged config, paths layout, optional health snapshot, audit-log tail. Best-effort health probe (continues on dial failure). |
 | `discover` | ✗ | talon-r0p — needs Bonjour mDNS |
 | `health` | ✓ | RPC `health` (talon-lhh) |
 | `install` | ✗ | talon-4an → blocked on talon-aws |

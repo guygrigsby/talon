@@ -342,42 +342,47 @@ func gatewayDiagnosticsCmd() *cobra.Command {
 }
 
 func gatewayDiagnosticsExportCmd() *cobra.Command {
+	opts := &diagnosticsExportOpts{}
+	// urlFlag/tokenFlag/passwordFlag/noStabilityBundle accepted for
+	// openclaw flag-shape parity but not yet wired — we use the
+	// shared dial path (config-driven URL/token) and don't have a
+	// stability bundle backend on talon yet (tracked separately).
 	var (
-		output             string
-		logLines           int
-		logBytes           int
-		urlFlag            string
-		tokenFlag          string
-		passwordFlag       string
-		timeoutMs          int
-		noStabilityBundle  bool
-		jsonOut            bool
+		urlFlag           string
+		tokenFlag         string
+		passwordFlag      string
+		noStabilityBundle bool
 	)
 	c := &cobra.Command{
 		Use:   "export",
 		Short: "Write a shareable, payload-free diagnostics .zip",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			_ = output
-			_ = logLines
-			_ = logBytes
-			_ = urlFlag
-			_ = tokenFlag
-			_ = passwordFlag
-			_ = timeoutMs
-			_ = noStabilityBundle
-			_ = jsonOut
-			return notYetImplemented("talon-kao")
+			for flag, val := range map[string]string{
+				"--url":      urlFlag,
+				"--token":    tokenFlag,
+				"--password": passwordFlag,
+			} {
+				if val != "" {
+					fmt.Fprintf(os.Stderr, "talon: %s accepted but not yet wired (using config-driven dial)\n", flag)
+				}
+			}
+			if noStabilityBundle {
+				// Stability bundle integration is a separate item
+				// (we don't write a bundle today) — flag is a no-op
+				// for now, accept silently.
+			}
+			return diagnosticsExportRunE(*opts)
 		},
 	}
-	c.Flags().StringVar(&output, "output", "", "Output .zip path")
-	c.Flags().IntVar(&logLines, "log-lines", 5000, "Maximum sanitized log lines to include")
-	c.Flags().IntVar(&logBytes, "log-bytes", 1000000, "Maximum log bytes to inspect")
+	c.Flags().StringVar(&opts.output, "output", "", "Output .zip path")
+	c.Flags().IntVar(&opts.logLines, "log-lines", 5000, "Maximum sanitized log lines to include")
+	c.Flags().IntVar(&opts.logBytes, "log-bytes", 1000000, "Maximum log bytes to inspect")
 	c.Flags().StringVar(&urlFlag, "url", "", "Gateway WebSocket URL for health snapshot")
 	c.Flags().StringVar(&tokenFlag, "token", "", "Gateway token for health snapshot")
 	c.Flags().StringVar(&passwordFlag, "password", "", "Gateway password for health snapshot")
-	c.Flags().IntVar(&timeoutMs, "timeout", 3000, "Status/health snapshot timeout in ms")
-	c.Flags().BoolVar(&noStabilityBundle, "no-stability-bundle", false, "Skip persisted stability bundle lookup")
-	c.Flags().BoolVar(&jsonOut, "json", false, "Output JSON")
+	c.Flags().IntVar(&opts.timeoutMs, "timeout", 3000, "Status/health snapshot timeout in ms (0 = skip)")
+	c.Flags().BoolVar(&noStabilityBundle, "no-stability-bundle", false, "Skip persisted stability bundle lookup (no-op today)")
+	c.Flags().BoolVar(&opts.jsonOut, "json", false, "Output JSON")
 	return c
 }
 
