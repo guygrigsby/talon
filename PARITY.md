@@ -48,7 +48,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 | `qr` | ✗ | depends on talon-xk1 (proper device pairing) |
 | `reset` | ✗ | talon-aws (state to reset) |
 | `sandbox` (3 subs) | ✗ | sandbox runtime |
-| `secrets` (4 subs) | ◐ `ls` | `talon secrets ls` audits the merged config and lists sensitive paths as literal/ref/empty (op:// / keychain:// references via talon-op-plugin / talon-keychain-plugin). `migrate` and `keychain-bootstrap` subcommands ship in a follow-up. talon-ekv tracks the broader credential surface. |
+| `secrets` (4 subs) | ◐ ls/migrate/keychain-bootstrap | `talon secrets ls` audits the merged config (literal/ref/empty). `migrate <path> [--vault Personal --field credential]` moves one literal into 1Password, replaces with `op://...`, round-trips a verify. `keychain-bootstrap` stores the OP service-account token in the macOS keychain so `talon-op-plugin` auths non-interactively from a fresh shell. References resolved via `talon-op-plugin` / `talon-keychain-plugin`. talon-ekv tracks remaining surface (configure/get/audit). |
 | `security` (1 sub: `audit`) | ✗ | talon-ekv (config audit) |
 | `sessions` (1 sub: `cleanup`) | ✗ | talon-c0b, talon-8lr |
 | `setup` | ✗ | talon-aws |

@@ -38,6 +38,8 @@ func secretsCmd() *cobra.Command {
 		Short: "Inspect and migrate on-disk secrets",
 	}
 	c.AddCommand(secretsLsCmd())
+	c.AddCommand(secretsMigrateCmd())
+	c.AddCommand(secretsKeychainBootstrapCmd())
 	return c
 }
 
