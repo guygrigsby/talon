@@ -64,6 +64,11 @@ func secretsLsCmd() *cobra.Command {
 				return fmt.Errorf("read merged config: %w", err)
 			}
 			entries := auditSecrets(merged)
+			// Also walk known openclaw-layer JSON files (auth-
+			// profiles per agent, identity / paired devices,
+			// exec-approvals). These don't surface in the
+			// merged config but DO contain credentials.
+			entries = append(entries, auditFileSecrets(paths.Openclaw.Dir)...)
 			if flagJSON {
 				out, _ := json.MarshalIndent(entries, "", "  ")
 				fmt.Fprintln(cmd.OutOrStdout(), string(out))

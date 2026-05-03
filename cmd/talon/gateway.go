@@ -252,7 +252,13 @@ func gatewayRunCmd() *cobra.Command {
 				gwHost = "localhost" // 0.0.0.0 isn't dialable; show loopback
 			}
 			ui := buildUIURL(defaultUIHost, gwHost, port, token, "main", "/chat")
-			log.Printf("UI:  %s", ui)
+			// Log-safe form: redact the token's value so the URL
+			// is still diagnostic but no credential lands in
+			// stdout / Docker logs / terminal scrollback. The
+			// real URL (with token) is what the user clicks
+			// from `talon dashboard` — which copies to clipboard
+			// and opens the browser, never logs.
+			log.Printf("UI:  %s", logSafeURL(ui))
 			log.Printf("     (override host with: talon ui url --ui-host=...)")
 
 			// Crash-loop detection. Records this startup and, if

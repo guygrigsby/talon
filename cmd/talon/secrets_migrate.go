@@ -23,14 +23,17 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
+	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/guygrigsby/talon/internal/secrets"
 	"github.com/spf13/cobra"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // keychainServiceForOPToken matches the constant in
@@ -66,11 +69,23 @@ Examples:
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path := args[0]
+			paths := resolvePaths()
+
+			// Dispatch on path shape:
+			//   file://<rel>:<key>  → openclaw-layer JSON file
+			//                          (auth-profiles, paired devices,
+			//                          identity, exec-approvals).
+			//                          Writes go to TALON OVERLAY,
+			//                          never to ~/.openclaw.
+			//   anything else        → dotted merged-config path.
+			if strings.HasPrefix(path, "file://") {
+				return migrateFilePath(cmd, paths, path, vault, field, itemName, dryRun, yes)
+			}
+
 			segments, err := config.ParsePath(path)
 			if err != nil {
 				return fmt.Errorf("parse path: %w", err)
 			}
-			paths := resolvePaths()
 			merged, err := config.MergedBytes(paths)
 			if err != nil {
 				return fmt.Errorf("read merged config: %w", err)
@@ -153,6 +168,128 @@ Examples:
 	return c
 }
 
+// migrateFilePath handles paths of the form
+// "file://<rel>:<dotted-key>" — i.e. a secret living inside a
+// JSON file in ~/.openclaw (auth-profiles.json, paired.json,
+// etc.). Reads the value from the openclaw layer (or a
+// pre-existing talon overlay copy), creates the 1P item, and
+// writes the modified file with the op:// reference to the
+// TALON OVERLAY at ~/.talon/<rel>. The openclaw file is never
+// modified — the per-agent reader in gateway_chat.go already
+// prefers the talon overlay path so the override picks up
+// transparently.
+func migrateFilePath(cmd *cobra.Command, paths openclaw.Paths, fullPath, vault, field, itemName string, dryRun, yes bool) error {
+	rel, key, err := parseFileRef(fullPath)
+	if err != nil {
+		return err
+	}
+	if !secrets.IsSensitivePath(key) {
+		return fmt.Errorf("key %q in %s doesn't look sensitive (no token/key/auth segment); refusing to migrate", key, rel)
+	}
+
+	// Source preference: talon overlay first (so a prior partial
+	// migration is consistent), then openclaw layer.
+	overlayPath := filepath.Join(paths.Talon.Dir, rel)
+	openclawPath := filepath.Join(paths.Openclaw.Dir, rel)
+	srcPath := overlayPath
+	if _, err := os.Stat(srcPath); err != nil {
+		srcPath = openclawPath
+	}
+	raw, err := os.ReadFile(srcPath)
+	if err != nil {
+		return fmt.Errorf("read %s: %w", srcPath, err)
+	}
+	cur := gjson.GetBytes(raw, key)
+	if !cur.Exists() {
+		return fmt.Errorf("key %q not found in %s", key, srcPath)
+	}
+	if cur.Type != gjson.String {
+		return fmt.Errorf("key %q in %s is not a string (got %s)", key, srcPath, gjsonTypeName(cur.Type))
+	}
+	value := cur.Str
+	if value == "" {
+		return fmt.Errorf("key %q in %s has empty value", key, srcPath)
+	}
+	if secrets.IsReference(value) {
+		return fmt.Errorf("key %q in %s is already a reference (%s)", key, srcPath, value)
+	}
+
+	if itemName == "" {
+		itemName = itemNameForPath(strings.TrimPrefix(fullPath, "file://"))
+	}
+	ref := fmt.Sprintf("op://%s/%s/%s", vault, itemName, field)
+
+	cmd.Println("Migrating", fullPath)
+	cmd.Printf("  → 1Password: vault=%s item=%s field=%s\n", vault, itemName, field)
+	cmd.Printf("  → Source file: %s\n", srcPath)
+	cmd.Printf("  → Talon overlay write: %s\n", overlayPath)
+	cmd.Println("  → New reference:", ref)
+	cmd.Println("  (the openclaw file is left untouched; talon's reader prefers the overlay)")
+	if dryRun {
+		cmd.Println("(dry-run; no changes made)")
+		return nil
+	}
+	if !yes {
+		cmd.Print("Proceed? [y/N] ")
+		reader := bufio.NewReader(os.Stdin)
+		line, _ := reader.ReadString('\n')
+		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
+			return fmt.Errorf("aborted")
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := upsertOpItem(ctx, vault, itemName, field, value); err != nil {
+		return fmt.Errorf("write to 1Password: %w", err)
+	}
+	roundTrip, err := secrets.NewResolver().Resolve(ctx, ref)
+	if err != nil {
+		return fmt.Errorf("verify new reference: %w (config NOT modified)", err)
+	}
+	if roundTrip != value {
+		return fmt.Errorf("verify mismatch (config NOT modified)")
+	}
+
+	// Write the modified JSON to the talon overlay. Use sjson so
+	// the rest of the file structure stays byte-identical to
+	// the source — minimizes diff and avoids reformatting.
+	updated, err := sjsonSetString(raw, key, ref)
+	if err != nil {
+		return fmt.Errorf("rewrite JSON: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(overlayPath), 0o700); err != nil {
+		return fmt.Errorf("mkdir overlay: %w", err)
+	}
+	if err := os.WriteFile(overlayPath, updated, 0o600); err != nil {
+		return fmt.Errorf("write overlay: %w", err)
+	}
+	cmd.Println("✓ Migrated", fullPath, "→", ref)
+	cmd.Println("  Wrote talon overlay at", overlayPath)
+	return nil
+}
+
+// parseFileRef splits "file://<rel>:<key>" into (rel, key).
+// Returns an error when the shape doesn't match — `:` is required
+// to delimit file from key, and rel must be non-empty.
+func parseFileRef(fullPath string) (rel, key string, err error) {
+	body := strings.TrimPrefix(fullPath, "file://")
+	idx := strings.Index(body, ":")
+	if idx <= 0 || idx == len(body)-1 {
+		return "", "", fmt.Errorf("file:// path must be file://<rel>:<key>, got %q", fullPath)
+	}
+	return body[:idx], body[idx+1:], nil
+}
+
+// sjsonSetString writes a string value at the given dotted key
+// in raw JSON. Wraps github.com/tidwall/sjson; isolated as a
+// function so the import lives in one place and tests can mock
+// if needed.
+func sjsonSetString(raw []byte, key, value string) ([]byte, error) {
+	return sjson.SetBytes(raw, key, value)
+}
+
 // itemNameForPath turns a dotted config path into a 1Password
 // item name that's valid + reverse-readable. We replace dots with
 // dashes (1P item names allow most characters but dots feel
@@ -168,6 +305,8 @@ func itemNameForPath(path string) string {
 		"]", "",
 		`"`, "",
 		" ", "-",
+		"/", "-", // file:// paths contain slashes
+		":", "-", // file://...:key delimiter + profile ids like "openai:default"
 	).Replace(path)
 	// Collapse runs of dashes left over from adjacent
 	// separators (e.g. ."key" → -"key" → --key after quote

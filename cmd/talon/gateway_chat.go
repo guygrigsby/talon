@@ -419,11 +419,19 @@ func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provi
 		if err != nil {
 			return nil, fmt.Errorf("openai: %w", err)
 		}
+		key, err = resolveSecretRef(key)
+		if err != nil {
+			return nil, fmt.Errorf("openai: resolve key: %w", err)
+		}
 		return openai.New(openai.Options{APIKey: key}), nil
 	case "deepseek":
 		key, err := deepseek.LoadAPIKey(authPath)
 		if err != nil {
 			return nil, fmt.Errorf("deepseek: %w", err)
+		}
+		key, err = resolveSecretRef(key)
+		if err != nil {
+			return nil, fmt.Errorf("deepseek: resolve key: %w", err)
 		}
 		return deepseek.New(deepseek.Options{APIKey: key}), nil
 	case "lmstudio":
@@ -456,6 +464,9 @@ func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provi
 		}
 		if key == "" {
 			key = "lm-studio" // placeholder — non-empty so the openai package's APIKey gate passes
+		}
+		if key, err = resolveSecretRef(key); err != nil {
+			return nil, fmt.Errorf("lmstudio: resolve key: %w", err)
 		}
 		baseURL := f.lookupLMStudioBaseURL()
 		return openai.New(openai.Options{
