@@ -22,6 +22,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /out/talon ./cmd/talon
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/talon-testplugin ./internal/plugin/testplugin
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/talon-deepseek-plugin ./apps/talon-deepseek-plugin
 RUN CGO_ENABLED=0 GOOS=linux go build -o /out/talon-telegram-plugin ./apps/talon-telegram-plugin
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/talon-op-plugin ./apps/talon-op-plugin
+RUN CGO_ENABLED=0 GOOS=linux go build -o /out/talon-keychain-plugin ./apps/talon-keychain-plugin
 
 # ---- shim install (Node) -------------------------------------------------
 # openclaw-plugin-host is a Node.js subprocess that loads existing
@@ -42,6 +44,8 @@ COPY --from=build /out/talon /usr/local/bin/talon
 COPY --from=build /out/talon-testplugin /usr/local/bin/talon-testplugin
 COPY --from=build /out/talon-deepseek-plugin /usr/local/bin/talon-deepseek-plugin
 COPY --from=build /out/talon-telegram-plugin /usr/local/bin/talon-telegram-plugin
+COPY --from=build /out/talon-op-plugin /usr/local/bin/talon-op-plugin
+COPY --from=build /out/talon-keychain-plugin /usr/local/bin/talon-keychain-plugin
 COPY --from=shim-install /shim /opt/openclaw-plugin-host
 # Stable wrapper so plugins.entries.<name>.cmd can be a single string.
 RUN ln -s /opt/openclaw-plugin-host/bin/openclaw-plugin-host.mjs /usr/local/bin/openclaw-plugin-host

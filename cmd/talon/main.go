@@ -76,6 +76,8 @@ func main() {
 	root.AddCommand(statusCmd())
 	root.AddCommand(uiCmd())
 	root.AddCommand(docsCmd())
+	root.AddCommand(secretsCmd())
+	root.AddCommand(dashboardCmd())
 
 	// closeSharedRPC is wired as the post-run hook so any RPC client
 	// the command branches lazily opened gets its WS shut cleanly
@@ -254,7 +256,10 @@ func configCmd() *cobra.Command {
 	fileCmd.Flags().BoolVar(&fileAll, "all", false, "print both the talon and openclaw paths")
 	c.AddCommand(fileCmd)
 
-	var rawFlag bool
+	var (
+		rawFlag    bool
+		revealFlag bool
+	)
 	getCmd := &cobra.Command{
 		Use:   "get <path>",
 		Short: "Get a value from the merged config (talon overrides openclaw)",
@@ -271,30 +276,16 @@ func configCmd() *cobra.Command {
 			if !res.Exists() {
 				return fmt.Errorf("path not found: %s", args[0])
 			}
-			if rawFlag {
-				fmt.Println(res.Raw)
-				return nil
-			}
-			switch res.Type {
-			case 1, 2: // false, number
-				fmt.Println(res.Raw)
-			case 3: // string
-				fmt.Println(res.Str)
-			case 4: // true
-				fmt.Println("true")
-			default:
-				var v any
-				if err := json.Unmarshal([]byte(res.Raw), &v); err != nil {
-					fmt.Println(res.Raw)
-					return nil
-				}
-				b, _ := json.MarshalIndent(v, "", "  ")
-				fmt.Println(string(b))
+			out, redacted := renderConfigGetValue(args[0], res, rawFlag, revealFlag)
+			fmt.Println(out)
+			if redacted {
+				fmt.Fprintln(os.Stderr, "talon: redacted sensitive value (use --reveal to show)")
 			}
 			return nil
 		},
 	}
 	getCmd.Flags().BoolVar(&rawFlag, "raw", false, "print raw JSON value (don't unwrap strings)")
+	getCmd.Flags().BoolVar(&revealFlag, "reveal", false, "show sensitive values (token/password/apiKey/...) instead of [REDACTED]")
 	c.AddCommand(getCmd)
 
 	var (

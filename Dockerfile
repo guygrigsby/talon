@@ -32,6 +32,14 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w" \
     -o /out/talon-telegram-plugin \
     ./apps/talon-telegram-plugin
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w" \
+    -o /out/talon-op-plugin \
+    ./apps/talon-op-plugin
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w" \
+    -o /out/talon-keychain-plugin \
+    ./apps/talon-keychain-plugin
 
 # ---- shim install (Node) -------------------------------------------------
 # openclaw-plugin-host is the Node subprocess that loads vendored
@@ -64,6 +72,8 @@ RUN apk add --no-cache \
 COPY --from=builder /out/talon /usr/local/bin/talon
 COPY --from=builder /out/talon-deepseek-plugin /usr/local/bin/talon-deepseek-plugin
 COPY --from=builder /out/talon-telegram-plugin /usr/local/bin/talon-telegram-plugin
+COPY --from=builder /out/talon-op-plugin /usr/local/bin/talon-op-plugin
+COPY --from=builder /out/talon-keychain-plugin /usr/local/bin/talon-keychain-plugin
 COPY --from=shim-install /shim /opt/openclaw-plugin-host
 # Stable wrapper so plugins.bundled.shimCmd defaults can be a single
 # string ("openclaw-plugin-host") that resolves via PATH.

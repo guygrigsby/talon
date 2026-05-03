@@ -22,7 +22,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 | `configure` (interactive) | ✗ | depends on entire config surface; large port |
 | `cron` (10 subs) | ✗ | talon-3tg, talon-aws |
 | `daemon` (6 subs) | ⊘ | legacy alias for `gateway` service mgmt |
-| `dashboard` | ✗ | depends on Control UI; out of scope until talon-aws |
+| `dashboard` | ✓ | Prints + clipboards + opens the gateway URL with token auto-auth in fragment. Token resolved through the secrets resolver (op:// / keychain:// references work). |
 | `devices` (8 subs) | ✗ | talon-job, talon-26v, talon-xk1, talon-aws |
 | `directory` (3 subs) | ✗ | talon-kqk, talon-aws |
 | `dns` (1 sub: `setup`) | ✗ | wide-area discovery; depends on bonjour work (talon-r0p) |
@@ -48,7 +48,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 | `qr` | ✗ | depends on talon-xk1 (proper device pairing) |
 | `reset` | ✗ | talon-aws (state to reset) |
 | `sandbox` (3 subs) | ✗ | sandbox runtime |
-| `secrets` (4 subs) | ✗ | talon-ekv |
+| `secrets` (4 subs) | ◐ `ls` | `talon secrets ls` audits the merged config and lists sensitive paths as literal/ref/empty (op:// / keychain:// references via talon-op-plugin / talon-keychain-plugin). `migrate` and `keychain-bootstrap` subcommands ship in a follow-up. talon-ekv tracks the broader credential surface. |
 | `security` (1 sub: `audit`) | ✗ | talon-ekv (config audit) |
 | `sessions` (1 sub: `cleanup`) | ✗ | talon-c0b, talon-8lr |
 | `setup` | ✗ | talon-aws |

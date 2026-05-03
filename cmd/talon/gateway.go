@@ -17,8 +17,10 @@ import (
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/plugin"
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
+	"github.com/guygrigsby/talon/internal/secrets"
 	"github.com/guygrigsby/talon/internal/server"
 	"github.com/spf13/cobra"
+	"github.com/tidwall/gjson"
 	"google.golang.org/grpc"
 )
 
@@ -122,7 +124,41 @@ func gatewayRunCmd() *cobra.Command {
 				fmt.Fprintln(os.Stderr, "talon: --force accepted but kill-existing-listener not yet wired")
 			}
 
+			// Auth resolution order:
+			//  1. --auth + --token CLI flags (explicit override)
+			//  2. gateway.auth.{mode,token} from merged config,
+			//     with the token routed through the secrets
+			//     resolver so op:// / keychain:// references
+			//     work the same as a literal value
+			//  3. AuthNone fallback when nothing's configured
+			//
+			// Filling in from config closes the foot-gun the user
+			// hit before: starting `gateway run` without --token
+			// silently dropped to auth=none even though the
+			// config had a token set, leaving a LAN-bound listener
+			// open to anyone on the network.
 			authMode := server.AuthMode(auth)
+			if authMode == "" || token == "" {
+				cfgPaths := resolvePaths()
+				if merged, err := config.MergedBytes(cfgPaths); err == nil {
+					if authMode == "" {
+						if v := gjson.GetBytes(merged, "gateway.auth.mode"); v.Exists() && v.Str != "" {
+							authMode = server.AuthMode(v.Str)
+						}
+					}
+					if token == "" {
+						if v := gjson.GetBytes(merged, "gateway.auth.token"); v.Exists() && v.Str != "" {
+							resolveCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+							resolved, rerr := secrets.NewResolver().Resolve(resolveCtx, v.Str)
+							cancel()
+							if rerr != nil {
+								return fmt.Errorf("resolve gateway.auth.token: %w", rerr)
+							}
+							token = resolved
+						}
+					}
+				}
+			}
 			if authMode == "" {
 				if token != "" {
 					authMode = server.AuthToken
@@ -131,7 +167,15 @@ func gatewayRunCmd() *cobra.Command {
 				}
 			}
 			if authMode == server.AuthToken && token == "" {
-				return fmt.Errorf("--auth=token requires --token")
+				return fmt.Errorf("--auth=token requires --token (or gateway.auth.token in config)")
+			}
+			// LAN-binding without auth is the canonical foot-gun;
+			// loud warning so the user notices before someone else
+			// on the network does.
+			if authMode == server.AuthNone && (bind == "lan" || bind == "auto" || bind == "tailnet") {
+				fmt.Fprintln(os.Stderr, "talon: WARNING — gateway is binding to "+bind+" with auth=none.")
+				fmt.Fprintln(os.Stderr, "talon: anyone on the network can drive this gateway.")
+				fmt.Fprintln(os.Stderr, "talon: set gateway.auth.token in config (`talon config set gateway.auth.token op://...`) or pass --token.")
 			}
 
 			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
