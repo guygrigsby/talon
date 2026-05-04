@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -21,7 +21,6 @@ type Config struct {
 	Addr   string
 	WebDir string
 	Auth   AuthConfig
-	Logger *log.Logger
 
 	// AgentResolver, if set, enables chat.send by translating sessionKey →
 	// agent → ModelID. Leaving nil disables chat.send (returns INTERNAL).
@@ -219,9 +218,9 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	conn.SetReadLimit(64 * 1024 * 1024)
 
 	sess := newSession(s, conn)
-	s.logf("ws connected conn=%s remote=%s", sess.connID, r.RemoteAddr)
+	slog.Info("ws connected", "conn", sess.connID, "remote", r.RemoteAddr)
 	sess.Run(r.Context())
-	s.logf("ws closed conn=%s", sess.connID)
+	slog.Info("ws closed", "conn", sess.connID)
 }
 
 func (s *Server) uptimeMs() int64 {
@@ -244,7 +243,8 @@ func (s *Server) registerSession(key string, sess *Session) *Session {
 	s.sessions[key] = sess
 	s.sessionsMu.Unlock()
 	if old != nil && old != sess {
-		s.logf("ws replaced conn=%s by conn=%s key=%q", old.connID, sess.connID, key)
+		slog.Info("ws session replaced",
+			"old_conn", old.connID, "new_conn", sess.connID, "key", key)
 		old.shutdown("replaced-by-newer-instance")
 	}
 	return old
@@ -264,10 +264,3 @@ func (s *Server) unregisterSession(key string, sess *Session) {
 	}
 }
 
-func (s *Server) logf(format string, args ...any) {
-	if s.cfg.Logger != nil {
-		s.cfg.Logger.Printf(format, args...)
-	} else {
-		log.Printf(format, args...)
-	}
-}

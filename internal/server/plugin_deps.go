@@ -408,6 +408,55 @@ var builtinPlugins = []builtinPlugin{
 		Kind:        "channel",
 		Label:       "Telegram",
 	},
+	{
+		EntryName:   "brave",
+		BinaryPath:  "/usr/local/bin/talon-brave-plugin",
+		Description: "Brave Search web_search tool (replaces openclaw extensions/brave)",
+		Version:     "0.1.0",
+		Kind:        "plugin",
+		Label:       "Brave Search",
+	},
+	{
+		EntryName:   "whisper",
+		BinaryPath:  "/usr/local/bin/talon-whisper-plugin",
+		Description: "OpenAI Whisper transcription tool (replaces openclaw skills/openai-whisper-api)",
+		Version:     "0.1.0",
+		Kind:        "plugin",
+		Label:       "Whisper Transcription",
+	},
+	{
+		EntryName:   "bluebubbles",
+		BinaryPath:  "/usr/local/bin/talon-bluebubbles-plugin",
+		Description: "BlueBubbles iMessage channel — webhook in, REST out (replaces openclaw extensions/bluebubbles)",
+		Version:     "0.1.0",
+		Kind:        "channel",
+		Label:       "BlueBubbles",
+	},
+	{
+		EntryName:   "mac-notify",
+		BinaryPath:  "/usr/local/bin/talon-mac-notify-plugin",
+		Description: "Local macOS Notification Center via osascript (mac_notify tool)",
+		Version:     "0.1.0",
+		Kind:        "plugin",
+		Label:       "Mac Notify",
+	},
+}
+
+// BuiltinPluginCmd returns the default spawn cmd for a first-party
+// plugin name, or nil if the name isn't bundled. Lets callers (chiefly
+// the gateway's plugin-spec parser) fall through to a sane default
+// when an enabled entry has no explicit cmd in config.
+//
+// The returned path is the prod-image absolute path; the spawn-time
+// resolver in internal/plugin remaps to a sibling-of-talon or PATH
+// hit when the absolute path is missing.
+func BuiltinPluginCmd(name string) []string {
+	for _, b := range builtinPlugins {
+		if b.EntryName == name {
+			return []string{b.BinaryPath}
+		}
+	}
+	return nil
 }
 
 // extensionSource pairs a directory with a label for the lookup-chain

@@ -57,6 +57,38 @@ func TestParsePluginSpecs_OnlyEnabledWithCmd(t *testing.T) {
 	}
 }
 
+func TestParsePluginSpecs_AutoFillsFromBuiltinRegistry(t *testing.T) {
+	// Entries enabled with neither explicit cmd nor bundled fall back
+	// to server.BuiltinPluginCmd. The spawn-time resolver redirects
+	// the registry's prod absolute path to a sibling-of-talon hit on
+	// dev checkouts, so this avoids forcing users to set cmd by hand.
+	body := []byte(`{
+		"plugins": {
+			"entries": {
+				"deepseek": {"enabled": true},
+				"telegram": {"enabled": true},
+				"brave":    {"enabled": true},
+				"whisper":  {"enabled": true},
+				"openai":   {"enabled": true}
+			}
+		}
+	}`)
+	got := parsePluginSpecs(body, pluginParseDefaults{})
+	byName := map[string][]string{}
+	for _, s := range got {
+		byName[s.name] = s.cmd
+	}
+	for _, name := range []string{"deepseek", "telegram", "brave", "whisper"} {
+		want := server.BuiltinPluginCmd(name)
+		if !reflect.DeepEqual(byName[name], want) {
+			t.Errorf("%s cmd = %v, want %v", name, byName[name], want)
+		}
+	}
+	if _, present := byName["openai"]; present {
+		t.Errorf("openai is not bundled; should not auto-fill")
+	}
+}
+
 func TestParsePluginSpecs_NoEntriesSection(t *testing.T) {
 	got := parsePluginSpecs([]byte(`{}`), pluginParseDefaults{})
 	if len(got) != 0 {

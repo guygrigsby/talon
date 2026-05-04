@@ -5,9 +5,10 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -52,10 +53,15 @@ func (h *Host) LoadPlugin(ctx context.Context, name string, opts LoadOptions) (*
 		return nil, err
 	}
 
+	resolved, err := resolvePluginCmd(name, opts.Cmd)
+	if err != nil {
+		return nil, err
+	}
+
 	// Build the subprocess. We don't use CommandContext here because we
 	// want to control the kill path explicitly via the lifecycle
 	// goroutine — CommandContext would race with Stop().
-	cmd := exec.Command(opts.Cmd[0], opts.Cmd[1:]...)
+	cmd := exec.Command(resolved[0], resolved[1:]...)
 	cmd.Env = append(append([]string{}, os.Environ()...), opts.Env...)
 	cmd.Env = append(cmd.Env,
 		EnvHandshake+"="+HandshakeMagic,
@@ -137,6 +143,59 @@ func (h *Host) LoadPlugin(ctx context.Context, name string, opts LoadOptions) (*
 	return inst, nil
 }
 
+// resolvePluginCmd locates the plugin binary referenced by cmd[0],
+// falling back to known-good locations when the configured path doesn't
+// exist on disk. Resolution order:
+//
+//  1. cmd[0] as-is (matches the configured path; covers Docker/installed
+//     layouts where the binary lives at an absolute path).
+//  2. Sibling of the talon binary (matches the dev layout where
+//     `make build` and `make plugins` deposit binaries into bin/).
+//  3. PATH lookup on basename (covers Homebrew-style installs where
+//     plugins are on PATH).
+//
+// Each fallback is logged so users see what's happening when the
+// configured path is stale (e.g. /usr/local/bin/talon-X-plugin from a
+// container config copied to a bare-metal checkout).
+//
+// On full failure the error names every location searched so the user
+// knows where to drop the binary or which path to fix.
+func resolvePluginCmd(name string, cmd []string) ([]string, error) {
+	if len(cmd) == 0 {
+		return nil, fmt.Errorf("plugin %s: empty Cmd", name)
+	}
+	bin := cmd[0]
+	if _, err := os.Stat(bin); err == nil {
+		return cmd, nil
+	}
+
+	base := filepath.Base(bin)
+	tried := []string{bin}
+
+	if exe, err := os.Executable(); err == nil {
+		sibling := filepath.Join(filepath.Dir(exe), base)
+		if sibling != bin {
+			if _, err := os.Stat(sibling); err == nil {
+				slog.Info("plugin cmd resolved via sibling",
+					"plugin", name, "configured", bin, "resolved", sibling)
+				out := append([]string{sibling}, cmd[1:]...)
+				return out, nil
+			}
+			tried = append(tried, sibling)
+		}
+	}
+
+	if found, err := exec.LookPath(base); err == nil && found != bin {
+		slog.Info("plugin cmd resolved via PATH",
+			"plugin", name, "configured", bin, "resolved", found)
+		out := append([]string{found}, cmd[1:]...)
+		return out, nil
+	}
+	tried = append(tried, "$PATH/"+base)
+
+	return nil, fmt.Errorf("plugin %s: cmd not found (tried %v)", name, tried)
+}
+
 // readHandshake consumes the first stdout line within timeout and
 // returns the parsed handshake. The caller keeps the reader for
 // subsequent log forwarding.
@@ -178,8 +237,13 @@ func readHandshake(r io.Reader, timeout time.Duration) (*HandshakeLine, error) {
 func forwardStdout(name string, r io.Reader) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 4096), 64*1024)
+	logger := slog.Default().With("plugin", name)
 	for scanner.Scan() {
-		log.Printf("[plugin/%s] %s", name, scanner.Text())
+		// Plugin stdout-after-handshake is free-form text; we just
+		// surface it via slog at INFO so it shows up in the same
+		// pipeline as everything else. The "plugin" attr lets
+		// readers filter to a single subprocess.
+		logger.Info("plugin stdout", "line", scanner.Text())
 	}
 }
 

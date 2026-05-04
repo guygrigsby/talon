@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -220,7 +220,7 @@ func gatewayRunCmd() *cobra.Command {
 			pb.RegisterHostServer(grpcSrv, hostService)
 			go func() {
 				if err := grpcSrv.Serve(hostListener); err != nil {
-					log.Printf("plugin host: gRPC serve: %v", err)
+					slog.Error("plugin host gRPC serve failed", "err", err)
 				}
 			}()
 			defer grpcSrv.GracefulStop()
@@ -241,8 +241,19 @@ func gatewayRunCmd() *cobra.Command {
 				}
 			}()
 
-			log.Printf("talon gateway listening on %s (auth=%s, chat=enabled, providers=openai/deepseek/lmstudio, reads=enabled, tools=read/write/edit/bash/glob/grep/remember/subagent, plugins=%d, channels=%d, host-svc=%s)",
-				addr, authMode, len(pluginNames), len(channelDispatchers), hostListener.Addr().String())
+			// Message text "talon gateway listening" is matched by the
+			// e2e harness's wait-for-ready hook (internal/e2e). Don't
+			// rename without updating that pattern.
+			slog.Info("talon gateway listening",
+				"addr", addr,
+				"auth", authMode,
+				"chat", "enabled",
+				"providers", "openai/deepseek/lmstudio",
+				"tools", "read/write/edit/bash/glob/grep/remember/subagent",
+				"plugins", len(pluginNames),
+				"channels", len(channelDispatchers),
+				"host_svc", hostListener.Addr().String(),
+			)
 			// Forgettable-URL mitigation: print the deep-link the openclaw
 			// web UI needs after a fresh page load (cache cleared, new
 			// browser, etc). Token is included only when --auth=token; the
@@ -258,8 +269,7 @@ func gatewayRunCmd() *cobra.Command {
 			// real URL (with token) is what the user clicks
 			// from `talon dashboard` — which copies to clipboard
 			// and opens the browser, never logs.
-			log.Printf("UI:  %s", logSafeURL(ui))
-			log.Printf("     (override host with: talon ui url --ui-host=...)")
+			slog.Info("ui url", "url", logSafeURL(ui), "hint", "override host with: talon ui url --ui-host=...")
 
 			// Crash-loop detection. Records this startup and, if
 			// we've started 3+ times in 5 minutes, fires a
@@ -273,9 +283,9 @@ func gatewayRunCmd() *cobra.Command {
 			// Tailscale side, so the call can be best-effort.
 			if tsMode != tailscaleOff {
 				if err := applyTailscale(ctx, tsMode, port); err != nil {
-					log.Printf("tailscale: %v", err)
+					slog.Error("tailscale setup failed", "err", err)
 				} else {
-					log.Printf("tailscale: %s mode active (port %d via tailnet)", tsMode, port)
+					slog.Info("tailscale active", "mode", tsMode, "port", port)
 				}
 				if tailscaleReset {
 					defer resetTailscale(context.Background())

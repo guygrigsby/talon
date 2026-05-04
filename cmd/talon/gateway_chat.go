@@ -3,9 +3,10 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/netutil"
@@ -102,6 +103,13 @@ func newToolRunnerFactory(host *plugin.Host, paths openclaw.Paths) func(workspac
 type pluginSpec struct {
 	name string
 	cmd  []string
+	// env are extra environment variables passed to the plugin
+	// subprocess. KEY=VALUE form so they slot directly into
+	// exec.Cmd.Env. Populated from entry.env (explicit user
+	// config) plus auto-translated from legacy openclaw config
+	// paths the native plugins replace (e.g. plugins.entries.
+	// brave.config.webSearch.apiKey → BRAVE_API_KEY_REF).
+	env []string
 }
 
 // defaultPluginDefaults probes the runtime for the bundled-extension
@@ -179,24 +187,115 @@ func parsePluginSpecs(merged []byte, defaults pluginParseDefaults) []pluginSpec 
 		if !entry.Get("enabled").Bool() {
 			return true
 		}
+		env := buildPluginEnv(nameKey.Str, entry)
 		if cmd := stringArray(entry.Get("cmd")); len(cmd) > 0 {
-			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd})
+			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd, env: env})
 			return true
 		}
 		if extName := entry.Get("bundled").Str; extName != "" {
 			extDir := resolveBundledDir(bundledPaths, extName)
 			if extDir == "" {
-				log.Printf("plugin %s: bundled=%q not found in any of plugins.bundled.paths %v; skipping",
-					nameKey.Str, extName, bundledPaths)
+				slog.Warn("plugin bundled extension not found",
+					"plugin", nameKey.Str, "bundled", extName, "paths", bundledPaths)
 				return true
 			}
 			fullCmd := append(append([]string(nil), shimCmd...), extDir)
-			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: fullCmd})
+			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: fullCmd, env: env})
+			return true
+		}
+		// No explicit cmd or bundled — fall back to the first-party
+		// builtin registry. The spawn-time resolver in internal/plugin
+		// remaps the registry's absolute prod path to a sibling-of-talon
+		// or PATH hit when the absolute path is missing on disk, so the
+		// dev workflow (`make build && make plugins`) works without
+		// config edits.
+		if cmd := server.BuiltinPluginCmd(nameKey.Str); len(cmd) > 0 {
+			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd, env: env})
 			return true
 		}
 		return true
 	})
 	return specs
+}
+
+// buildPluginEnv assembles the env vars to hand to a plugin
+// subprocess. Combines two sources, last-write-wins (so explicit
+// user `env: {...}` overrides any auto-translation):
+//
+//  1. Auto-translation from legacy openclaw config paths the
+//     native plugins replace. plugins.entries.brave.config.
+//     webSearch.apiKey → BRAVE_API_KEY (or BRAVE_API_KEY_REF
+//     when the value looks like an op:// / keychain:// reference).
+//     Lets users keep the original openclaw config shape after
+//     swapping in the native plugin.
+//  2. Explicit entry.env: {KEY: VAL} block — user override.
+//
+// Other plugin names get just the explicit env block.
+func buildPluginEnv(name string, entry gjson.Result) []string {
+	out := []string{}
+	switch name {
+	case "brave":
+		if v := entry.Get("config.webSearch.apiKey").Str; v != "" {
+			if isSecretRef(v) {
+				out = append(out, "BRAVE_API_KEY_REF="+v)
+			} else {
+				out = append(out, "BRAVE_API_KEY="+v)
+			}
+		}
+	case "whisper":
+		// Whisper uses an OpenAI key; auto-translate from the
+		// well-known openai-whisper-api skill config path.
+		if v := entry.Get("config.apiKey").Str; v != "" {
+			if isSecretRef(v) {
+				out = append(out, "OPENAI_API_KEY_REF="+v)
+			} else {
+				out = append(out, "OPENAI_API_KEY="+v)
+			}
+		}
+	}
+	// Explicit env block. Iterate in alphabetic key order so the
+	// resulting slice is deterministic for tests.
+	if env := entry.Get("env"); env.IsObject() {
+		keys := []string{}
+		env.ForEach(func(k, _ gjson.Result) bool {
+			keys = append(keys, k.Str)
+			return true
+		})
+		sortStrings(keys)
+		for _, k := range keys {
+			v := env.Get(escapeForGjson(k)).String()
+			out = append(out, k+"="+v)
+		}
+	}
+	return out
+}
+
+// isSecretRef reports whether v looks like an op:// or keychain://
+// reference. Mirrors internal/secrets.IsReference but inlined
+// here to avoid the import cycle (cmd/talon already imports
+// internal/secrets transitively but not directly here).
+func isSecretRef(v string) bool {
+	return strings.HasPrefix(v, "op://") || strings.HasPrefix(v, "keychain://")
+}
+
+// escapeForGjson wraps a key in double-brackets when it contains
+// characters gjson treats as path separators. Empty / safe keys
+// pass through unchanged.
+func escapeForGjson(k string) string {
+	if !strings.ContainsAny(k, ".[") {
+		return k
+	}
+	return "[\"" + strings.ReplaceAll(k, `"`, `\"`) + "\"]"
+}
+
+// sortStrings is the stdlib sort.Strings under a name that
+// doesn't collide with the existing helper in tools.
+func sortStrings(s []string) {
+	for i := 1; i < len(s); i++ {
+		for j := i; j > 0 && s[j-1] > s[j]; j-- {
+			s[j-1], s[j] = s[j], s[j-1]
+		}
+	}
 }
 
 // resolveBundledDir walks paths in order and returns the first dir
@@ -240,20 +339,20 @@ func stringArray(v gjson.Result) []string {
 func loadConfiguredPlugins(ctx context.Context, host *plugin.Host, paths openclaw.Paths) {
 	merged, err := config.MergedBytes(paths)
 	if err != nil {
-		log.Printf("plugins: read merged config: %v", err)
+		slog.Error("plugins read merged config failed", "err", err)
 		return
 	}
 	for _, spec := range parsePluginSpecs(merged, defaultPluginDefaults(paths)) {
-		inst, err := host.LoadPlugin(ctx, spec.name, plugin.LoadOptions{Cmd: spec.cmd})
+		inst, err := host.LoadPlugin(ctx, spec.name, plugin.LoadOptions{Cmd: spec.cmd, Env: spec.env})
 		if err != nil {
-			log.Printf("plugin %s: load failed: %v", spec.name, err)
+			slog.Error("plugin load failed", "plugin", spec.name, "err", err)
 			continue
 		}
-		log.Printf("plugin %s: loaded — tools=%d providers=%d channels=%d",
-			spec.name,
-			len(inst.Manifest.GetOffersTools()),
-			len(inst.Manifest.GetOffersProviders()),
-			len(inst.Manifest.GetOffersChannels()),
+		slog.Info("plugin loaded",
+			"plugin", spec.name,
+			"tools", len(inst.Manifest.GetOffersTools()),
+			"providers", len(inst.Manifest.GetOffersProviders()),
+			"channels", len(inst.Manifest.GetOffersChannels()),
 		)
 	}
 }
@@ -331,7 +430,7 @@ func collectChannelOffers(host *plugin.Host) []pluginChannelOffer {
 func startConfiguredChannels(ctx context.Context, host *plugin.Host, paths openclaw.Paths, runner plugin.SessionRunner) []*plugin.ChannelDispatcher {
 	merged, err := config.MergedBytes(paths)
 	if err != nil {
-		log.Printf("channels: read merged config: %v", err)
+		slog.Error("channels read merged config failed", "err", err)
 		return nil
 	}
 	bindings := parseChannelBindings(merged, collectChannelOffers(host))
@@ -343,13 +442,14 @@ func startConfiguredChannels(ctx context.Context, host *plugin.Host, paths openc
 		}
 		d, err := plugin.NewChannelDispatcher(inst, b.Binding, runner)
 		if err != nil {
-			log.Printf("channel %s/%s: %v", b.PluginName, b.Binding.ChannelName, err)
+			slog.Error("channel dispatcher failed",
+				"plugin", b.PluginName, "channel", b.Binding.ChannelName, "err", err)
 			continue
 		}
 		d.Start(ctx)
 		out = append(out, d)
-		log.Printf("plugin %s: channel %q dispatching to agent %q",
-			b.PluginName, b.Binding.ChannelName, b.Binding.AgentID)
+		slog.Info("channel dispatching",
+			"plugin", b.PluginName, "channel", b.Binding.ChannelName, "agent", b.Binding.AgentID)
 	}
 	return out
 }

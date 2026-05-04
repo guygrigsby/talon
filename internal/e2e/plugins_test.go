@@ -68,7 +68,7 @@ func TestE2E_PluginChannelRoundtrip(t *testing.T) {
 	// the wiring announce so a regression that loaded the plugin but
 	// failed to dispatch shows up specifically.
 	logs := g.LogsString()
-	if !strings.Contains(logs, "channel \"testchan\" dispatching to agent \"main\"") {
+	if !strings.Contains(logs, "channel dispatching") || !strings.Contains(logs, "channel=testchan") || !strings.Contains(logs, "agent=main") {
 		t.Errorf("expected dispatcher startup log; got logs:\n%s", logs)
 	}
 }
@@ -96,11 +96,11 @@ func TestE2E_PluginLoadsAndAnnounces(t *testing.T) {
 
 	g := StartGateway(t, GatewayOpts{ConfigJSON: cfg, StartupTimeout: 90 * time.Second})
 
-	line, err := g.WaitForLog("plugin testplugin: loaded", 30*time.Second)
+	line, err := g.WaitForLog(`plugin loaded plugin=testplugin`, 30*time.Second)
 	if err != nil {
 		t.Fatalf("did not see plugin load announce: %v\n--- container logs ---\n%s", err, g.LogsString())
 	}
-	// Announce format: "plugin testplugin: loaded — tools=1 providers=1 channels=1"
+	// Announce format: 'INFO  plugin loaded plugin=testplugin tools=1 providers=1 channels=1'
 	if !strings.Contains(line, "tools=1") || !strings.Contains(line, "providers=1") || !strings.Contains(line, "channels=1") {
 		t.Errorf("manifest counts wrong: %q", line)
 	}

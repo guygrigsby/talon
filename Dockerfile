@@ -40,6 +40,26 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w" \
     -o /out/talon-keychain-plugin \
     ./apps/talon-keychain-plugin
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w" \
+    -o /out/talon-brave-plugin \
+    ./apps/talon-brave-plugin
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w" \
+    -o /out/talon-whisper-plugin \
+    ./apps/talon-whisper-plugin
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w" \
+    -o /out/talon-bluebubbles-plugin \
+    ./apps/talon-bluebubbles-plugin
+# mac-notify is built for image consistency, but mac_notify itself is
+# macOS-only and returns a clear "non-darwin" error if invoked here.
+# The binary stays useful when the same image is run on a Mac via
+# Docker Desktop with file mounts, etc.
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -ldflags="-s -w" \
+    -o /out/talon-mac-notify-plugin \
+    ./apps/talon-mac-notify-plugin
 
 # ---- shim install (Node) -------------------------------------------------
 # openclaw-plugin-host is the Node subprocess that loads vendored
@@ -74,6 +94,10 @@ COPY --from=builder /out/talon-deepseek-plugin /usr/local/bin/talon-deepseek-plu
 COPY --from=builder /out/talon-telegram-plugin /usr/local/bin/talon-telegram-plugin
 COPY --from=builder /out/talon-op-plugin /usr/local/bin/talon-op-plugin
 COPY --from=builder /out/talon-keychain-plugin /usr/local/bin/talon-keychain-plugin
+COPY --from=builder /out/talon-brave-plugin /usr/local/bin/talon-brave-plugin
+COPY --from=builder /out/talon-whisper-plugin /usr/local/bin/talon-whisper-plugin
+COPY --from=builder /out/talon-bluebubbles-plugin /usr/local/bin/talon-bluebubbles-plugin
+COPY --from=builder /out/talon-mac-notify-plugin /usr/local/bin/talon-mac-notify-plugin
 COPY --from=shim-install /shim /opt/openclaw-plugin-host
 # Stable wrapper so plugins.bundled.shimCmd defaults can be a single
 # string ("openclaw-plugin-host") that resolves via PATH.

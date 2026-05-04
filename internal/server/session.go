@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -114,7 +115,7 @@ func (s *Session) Run(ctx context.Context) {
 	handshakeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	if err := s.handshake(handshakeCtx); err != nil {
-		s.server.logf("handshake failed conn=%s: %v", s.connID, err)
+		slog.Error("handshake failed", "conn", s.connID, "err", err)
 		return
 	}
 	s.register()
@@ -215,13 +216,13 @@ func (s *Session) handleRequest(ctx context.Context, f *Frame) {
 	// flag. Costs one map lookup + one log call per request; trivial
 	// next to the WS write that follows.
 	if ferr != nil {
-		s.server.logf("rpc method=%s id=%s dur=%s err=%s msg=%s",
-			f.Method, f.ID, dur, ferr.Code, ferr.Message)
+		slog.Error("rpc failed",
+			"method", f.Method, "id", f.ID, "dur", dur,
+			"code", ferr.Code, "err", ferr.Message)
 		_ = s.replyError(ctx, f.ID, ferr)
 		return
 	}
-	s.server.logf("rpc method=%s id=%s dur=%s ok",
-		f.Method, f.ID, dur)
+	slog.Info("rpc ok", "method", f.Method, "id", f.ID, "dur", dur)
 	_ = s.replyOK(ctx, f.ID, res)
 }
 

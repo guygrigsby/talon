@@ -7,7 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -588,14 +588,15 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 		if finalEmitEnd.IsZero() {
 			return // returned via error path; skip
 		}
-		log.Printf("chat.timing run=%s agent=%s iters=%d "+
-			"toFirstDelta=%s deltaSpan=%s afterLastDelta=%s finalEmit=%s total=%s",
-			emit.runID, agentID, seq,
-			firstDeltaAt.Sub(loopStart).Truncate(time.Millisecond),
-			lastDeltaAt.Sub(firstDeltaAt).Truncate(time.Millisecond),
-			finalEmitStart.Sub(lastDeltaAt).Truncate(time.Millisecond),
-			finalEmitEnd.Sub(finalEmitStart).Truncate(time.Millisecond),
-			finalEmitEnd.Sub(loopStart).Truncate(time.Millisecond),
+		slog.Info("chat timing",
+			"run", emit.runID,
+			"agent", agentID,
+			"iters", seq,
+			"to_first_delta", firstDeltaAt.Sub(loopStart).Truncate(time.Millisecond),
+			"delta_span", lastDeltaAt.Sub(firstDeltaAt).Truncate(time.Millisecond),
+			"after_last_delta", finalEmitStart.Sub(lastDeltaAt).Truncate(time.Millisecond),
+			"final_emit", finalEmitEnd.Sub(finalEmitStart).Truncate(time.Millisecond),
+			"total", finalEmitEnd.Sub(loopStart).Truncate(time.Millisecond),
 		)
 	}()
 

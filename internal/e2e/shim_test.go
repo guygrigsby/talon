@@ -44,7 +44,7 @@ func TestE2E_OpenclawShim_LoadsExtension(t *testing.T) {
 
 	g := StartGateway(t, GatewayOpts{ConfigJSON: cfg, StartupTimeout: 90 * time.Second})
 
-	line, err := g.WaitForLog("plugin openclaw-fake: loaded", 30*time.Second)
+	line, err := g.WaitForLog(`plugin loaded plugin=openclaw-fake`, 30*time.Second)
 	if err != nil {
 		t.Fatalf("did not see shim load announce: %v\n--- container logs ---\n%s", err, g.LogsString())
 	}
@@ -110,7 +110,7 @@ func TestE2E_OpenclawShim_ChannelRoundtrip(t *testing.T) {
 	}
 
 	logs := g.LogsString()
-	if !strings.Contains(logs, "channel \"fakechan\" dispatching to agent \"main\"") {
+	if !strings.Contains(logs, "channel dispatching") || !strings.Contains(logs, "channel=fakechan") || !strings.Contains(logs, "agent=main") {
 		t.Errorf("expected dispatcher startup log; got logs:\n%s", logs)
 	}
 }

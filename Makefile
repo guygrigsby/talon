@@ -13,14 +13,27 @@ WEB_DIST ?= ../openclaw/dist/control-ui
 
 GO_SRC := $(shell find cmd internal -name '*.go' 2>/dev/null)
 
-.PHONY: build all install run gateway-run gateway-run-with-ui test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop docker-bounce docker-logs proto proto-tools
+PLUGINS := deepseek telegram brave whisper op keychain bluebubbles mac-notify
+PLUGIN_BINS := $(addprefix bin/talon-,$(addsuffix -plugin,$(PLUGINS)))
 
-build: $(BIN)
+.PHONY: build all install run gateway-run gateway-run-with-ui plugins test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop docker-bounce docker-logs proto proto-tools
+
+build: $(BIN) plugins
 
 all: build web-build
 
 $(BIN): $(GO_SRC) go.mod go.sum
 	$(GO) build -ldflags '$(LDFLAGS)' -o $(BIN) $(PKG)
+
+# plugins builds every first-party plugin binary into bin/, alongside
+# the talon binary. The spawn resolver (internal/plugin/spawn.go) falls
+# back to a sibling-of-talon lookup when the configured cmd path is
+# missing, so a `make build && make plugins` checkout works without
+# editing config.
+plugins: $(PLUGIN_BINS)
+
+bin/talon-%-plugin: $(GO_SRC) go.mod go.sum
+	$(GO) build -ldflags '$(LDFLAGS)' -o $@ ./apps/talon-$*-plugin
 
 install:
 	$(GO) install -ldflags '$(LDFLAGS)' $(PKG)

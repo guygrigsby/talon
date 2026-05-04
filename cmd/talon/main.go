@@ -11,6 +11,7 @@ import (
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/gateway"
+	talonlog "github.com/guygrigsby/talon/internal/log"
 	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/spf13/cobra"
 )
@@ -20,6 +21,7 @@ var (
 	flagOpenclawConfig string
 	flagNoFallback     bool
 	flagJSON           bool
+	flagLogFormat      string
 )
 
 // resolvePaths returns the layered paths for this invocation, applying any
@@ -63,6 +65,26 @@ func main() {
 	root.PersistentFlags().StringVar(&flagOpenclawConfig, "openclaw-config", "", "path to the read-only openclaw config (default: $OPENCLAW_CONFIG_PATH or ~/.openclaw/openclaw.json)")
 	root.PersistentFlags().BoolVar(&flagNoFallback, "no-openclaw-fallback", false, "ignore the openclaw config layer when reading")
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "emit raw JSON response")
+	root.PersistentFlags().StringVar(&flagLogFormat, "log-format", "", "log handler: text (default, ANSI-colored on TTY) or json. Env override: TALON_LOG_FORMAT")
+
+	// Wire the structured logger before any other init runs so
+	// PersistentPreRun and the cobra-RunE bodies all share the same
+	// pipeline. PersistentPreRunE fires after flag parsing, so the
+	// --log-format flag is final by the time we read it.
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		f := flagLogFormat
+		if f == "" {
+			f = os.Getenv("TALON_LOG_FORMAT")
+		}
+		talonlog.Init(talonlog.ParseFormat(f))
+		// Propagate to plugin subprocesses: spawned plugins inherit
+		// our env, so writing TALON_LOG_FORMAT here makes the flag
+		// take effect in every child plugin's talonlog.Init call.
+		if f != "" {
+			_ = os.Setenv("TALON_LOG_FORMAT", f)
+		}
+		return nil
+	}
 
 	root.AddCommand(versionCmd())
 	root.AddCommand(healthCmd())

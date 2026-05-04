@@ -36,12 +36,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 
 	"google.golang.org/grpc"
 
+	talonlog "github.com/guygrigsby/talon/internal/log"
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 	"github.com/guygrigsby/talon/internal/provider"
 	"github.com/guygrigsby/talon/internal/provider/deepseek"
@@ -245,28 +247,32 @@ func loadAPIKey() (string, error) {
 }
 
 func main() {
+	talonlog.Init(talonlog.ParseFormat(os.Getenv("TALON_LOG_FORMAT")))
+	log := slog.With("plugin", "deepseek")
+
 	if got := os.Getenv("TALON_PLUGIN_HANDSHAKE"); got != handshakeMagic {
-		fmt.Fprintf(os.Stderr, "talon-deepseek-plugin: TALON_PLUGIN_HANDSHAKE=%q, want %q (refusing to start outside the host)\n", got, handshakeMagic)
+		log.Error("handshake env mismatch — refusing to start outside the host",
+			"got", got, "want", handshakeMagic)
 		os.Exit(1)
 	}
 	if os.Getenv("TALON_PLUGIN_AUTH_COOKIE") == "" {
-		fmt.Fprintln(os.Stderr, "talon-deepseek-plugin: missing TALON_PLUGIN_AUTH_COOKIE")
+		log.Error("missing TALON_PLUGIN_AUTH_COOKIE")
 		os.Exit(1)
 	}
 
 	apiKey, err := loadAPIKey()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "talon-deepseek-plugin: %v\n", err)
+		log.Error("load API key failed", "err", err)
 		os.Exit(1)
 	}
 	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "talon-deepseek-plugin: deepseek:default profile has empty key — configure it in auth-profiles.json before enabling this plugin")
+		log.Error("deepseek:default profile has empty key — configure it in auth-profiles.json before enabling this plugin")
 		os.Exit(1)
 	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "talon-deepseek-plugin: listen: %v\n", err)
+		log.Error("listen failed", "err", err)
 		os.Exit(1)
 	}
 
@@ -275,13 +281,12 @@ func main() {
 		prov: deepseek.New(deepseek.Options{APIKey: apiKey}),
 	})
 
-	// Print the handshake BEFORE Serve blocks. Stdout is line-buffered
-	// when attached to a pipe, so this gets flushed immediately. The
-	// host parses the line via internal/plugin/handshake.go.
+	// Handshake stays on stdout — host's readHandshake parses the
+	// FIRST stdout line literally and would choke on slog output.
 	fmt.Printf("1|TCP|%s|grpc\n", listener.Addr().String())
 
 	if err := server.Serve(listener); err != nil {
-		fmt.Fprintf(os.Stderr, "talon-deepseek-plugin: serve: %v\n", err)
+		log.Error("grpc serve failed", "err", err)
 		os.Exit(1)
 	}
 }

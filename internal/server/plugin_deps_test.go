@@ -377,15 +377,18 @@ func TestPluginDepsStatus_FlagsInUseFromConfig(t *testing.T) {
 	if err := os.MkdirAll(talonExt, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// brave is enabled directly; discord is configured as a channel
-	// (channels.discord exists) — both should report inUse=true via
-	// the two distinct signal paths the helper recognizes for npm
-	// extensions. telegram exists too, but as a builtin — its
-	// channels.<name> signal goes through a separate code path.
+	// matrix is enabled directly; discord is configured as a
+	// channel (channels.discord exists) — both should report
+	// inUse=true via the two distinct signal paths the helper
+	// recognizes for npm extensions. telegram exists too, but as
+	// a builtin — its channels.<name> signal goes through a
+	// separate code path. (matrix used here instead of brave
+	// because brave is now also a builtin and would shadow the
+	// npm-extension we're trying to test.)
 	cfg := fmt.Sprintf(`{
 		"plugins": {
 			"bundled": {"path": %q},
-			"entries": {"brave": {"enabled": true}}
+			"entries": {"matrix": {"enabled": true}}
 		},
 		"channels": {
 			"discord":  {"agentId": "main"},
@@ -395,7 +398,7 @@ func TestPluginDepsStatus_FlagsInUseFromConfig(t *testing.T) {
 	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	writeExtension(t, talonExt, "brave", nil, false)
+	writeExtension(t, talonExt, "matrix", nil, false)
 	writeExtension(t, talonExt, "discord", map[string]string{"discord.js": "^14.0.0"}, true)
 	// discord needs an openclaw.channel.id in its package.json for
 	// the channels.* signal to match. Re-write its package.json
@@ -417,8 +420,8 @@ func TestPluginDepsStatus_FlagsInUseFromConfig(t *testing.T) {
 	for _, it := range items {
 		byName[it.Name] = it
 	}
-	if !byName["brave"].InUse {
-		t.Errorf("brave should be inUse via plugins.entries: %+v", byName["brave"])
+	if !byName["matrix"].InUse {
+		t.Errorf("matrix should be inUse via plugins.entries: %+v", byName["matrix"])
 	}
 	if !byName["discord"].InUse {
 		t.Errorf("discord should be inUse via channels.discord (npm path): %+v", byName["discord"])
@@ -435,7 +438,7 @@ func TestPluginDepsStatus_FlagsInUseFromConfig(t *testing.T) {
 	// npm extensions live in the talon overlay → uninstallable.
 	// Builtin telegram is a shipped binary (not in the overlay), so
 	// the row is intentionally NOT uninstallable.
-	for _, name := range []string{"brave", "discord", "idle"} {
+	for _, name := range []string{"matrix", "discord", "idle"} {
 		if !byName[name].Uninstallable {
 			t.Errorf("%s should be uninstallable (it's in the talon overlay)", name)
 		}

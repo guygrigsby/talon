@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"strings"
 	"sync"
 
@@ -97,8 +97,8 @@ func (d *ChannelDispatcher) Start(parentCtx context.Context) {
 	go func() {
 		defer close(d.done)
 		if err := d.run(ctx); err != nil && !errors.Is(err, context.Canceled) {
-			log.Printf("[plugin/%s] channel %q stopped: %v",
-				d.inst.Name, d.binding.ChannelName, err)
+			slog.Error("channel dispatcher stopped",
+				"plugin", d.inst.Name, "channel", d.binding.ChannelName, "err", err)
 		}
 		// Wait for in-flight per-message handlers to finish before
 		// declaring done — Stop() needs every reply to be observable.
@@ -186,8 +186,9 @@ func (d *ChannelDispatcher) handle(ctx context.Context, msg *pb.IncomingChannelM
 
 	reply, err := d.runner.RunForSession(ctx, sessionKey, d.binding.AgentID, msg.GetText())
 	if err != nil {
-		log.Printf("[plugin/%s] channel %q agent %q failed: %v",
-			d.inst.Name, d.binding.ChannelName, d.binding.AgentID, err)
+		slog.Error("channel agent run failed",
+			"plugin", d.inst.Name, "channel", d.binding.ChannelName,
+			"agent", d.binding.AgentID, "err", err)
 		return
 	}
 	if strings.TrimSpace(reply) == "" {
@@ -204,8 +205,8 @@ func (d *ChannelDispatcher) handle(ctx context.Context, msg *pb.IncomingChannelM
 		Text:    reply,
 	})
 	if err != nil {
-		log.Printf("[plugin/%s] channel %q SendChannelMessage failed: %v",
-			d.inst.Name, d.binding.ChannelName, err)
+		slog.Error("channel SendChannelMessage failed",
+			"plugin", d.inst.Name, "channel", d.binding.ChannelName, "err", err)
 	}
 }
 

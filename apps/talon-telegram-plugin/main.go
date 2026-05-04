@@ -32,6 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -43,6 +44,7 @@ import (
 
 	"google.golang.org/grpc"
 
+	talonlog "github.com/guygrigsby/talon/internal/log"
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 )
 
@@ -352,7 +354,7 @@ func (s *telegramPlugin) pollLoop(ctx context.Context, token string, allow map[s
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			fmt.Fprintf(os.Stderr, "talon-telegram-plugin: getUpdates error: %v (backing off %s)\n", err, backoff)
+			slog.Warn("telegram getUpdates error", "plugin", "telegram", "err", err, "backoff", backoff)
 			select {
 			case <-time.After(backoff):
 			case <-ctx.Done():
@@ -374,7 +376,8 @@ func (s *telegramPlugin) pollLoop(ctx context.Context, token string, allow map[s
 			}
 			if len(allow) > 0 {
 				if _, ok := allow[msg.GetSenderId()]; !ok {
-					fmt.Fprintf(os.Stderr, "talon-telegram-plugin: dropping message from sender %q (not in allowFrom)\n", msg.GetSenderId())
+					slog.Info("telegram dropping non-allowlisted message",
+					"plugin", "telegram", "sender", msg.GetSenderId())
 					continue
 				}
 			}
@@ -503,18 +506,22 @@ func truncate(s string, n int) string {
 }
 
 func main() {
+	talonlog.Init(talonlog.ParseFormat(os.Getenv("TALON_LOG_FORMAT")))
+	log := slog.With("plugin", "telegram")
+
 	if got := os.Getenv("TALON_PLUGIN_HANDSHAKE"); got != handshakeMagic {
-		fmt.Fprintf(os.Stderr, "talon-telegram-plugin: TALON_PLUGIN_HANDSHAKE=%q, want %q (refusing to start outside the host)\n", got, handshakeMagic)
+		log.Error("handshake env mismatch — refusing to start outside the host",
+			"got", got, "want", handshakeMagic)
 		os.Exit(1)
 	}
 	if os.Getenv("TALON_PLUGIN_AUTH_COOKIE") == "" {
-		fmt.Fprintln(os.Stderr, "talon-telegram-plugin: missing TALON_PLUGIN_AUTH_COOKIE")
+		log.Error("missing TALON_PLUGIN_AUTH_COOKIE")
 		os.Exit(1)
 	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "talon-telegram-plugin: listen: %v\n", err)
+		log.Error("listen failed", "err", err)
 		os.Exit(1)
 	}
 
@@ -525,7 +532,7 @@ func main() {
 	fmt.Printf("1|TCP|%s|grpc\n", listener.Addr().String())
 
 	if err := server.Serve(listener); err != nil {
-		fmt.Fprintf(os.Stderr, "talon-telegram-plugin: serve: %v\n", err)
+		log.Error("grpc serve failed", "err", err)
 		os.Exit(1)
 	}
 }

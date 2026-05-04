@@ -40,10 +40,10 @@ func TestE2E_MultiPluginLoading(t *testing.T) {
 
 	g := StartGateway(t, GatewayOpts{ConfigJSON: cfg, StartupTimeout: 90 * time.Second})
 
-	if _, err := g.WaitForLog("plugin testplugin: loaded", 30*time.Second); err != nil {
+	if _, err := g.WaitForLog(`plugin loaded plugin=testplugin`, 30*time.Second); err != nil {
 		t.Errorf("did not see testplugin load: %v\n--- logs ---\n%s", err, g.LogsString())
 	}
-	if _, err := g.WaitForLog("plugin openclaw-fake: loaded", 30*time.Second); err != nil {
+	if _, err := g.WaitForLog(`plugin loaded plugin=openclaw-fake`, 30*time.Second); err != nil {
 		t.Errorf("did not see shim load: %v\n--- logs ---\n%s", err, g.LogsString())
 	}
 
@@ -85,12 +85,12 @@ func TestE2E_PluginCrashOnLoadDoesNotKillGateway(t *testing.T) {
 	// The gateway must still come up despite the crashing plugin.
 	// (StartGateway already waited for "talon gateway listening" — if
 	// we got the Gateway handle back, that log line fired.)
-	if _, err := g.WaitForLog("plugin crashy: load failed", 30*time.Second); err != nil {
+	if _, err := g.WaitForLog(`plugin load failed plugin=crashy`, 30*time.Second); err != nil {
 		t.Errorf("expected 'load failed' for crashy plugin: %v\n--- logs ---\n%s", err, g.LogsString())
 	}
 
 	// The healthy plugin should still load.
-	if _, err := g.WaitForLog("plugin testplugin: loaded", 30*time.Second); err != nil {
+	if _, err := g.WaitForLog(`plugin loaded plugin=testplugin`, 30*time.Second); err != nil {
 		t.Errorf("healthy plugin should still load alongside crashy one: %v", err)
 	}
 
@@ -121,7 +121,7 @@ func TestE2E_DisabledPluginNotSpawned(t *testing.T) {
 
 	g := StartGateway(t, GatewayOpts{ConfigJSON: cfg, StartupTimeout: 90 * time.Second})
 
-	if _, err := g.WaitForLog("plugin testplugin: loaded", 30*time.Second); err != nil {
+	if _, err := g.WaitForLog(`plugin loaded plugin=testplugin`, 30*time.Second); err != nil {
 		t.Fatalf("enabled plugin failed to load: %v", err)
 	}
 
@@ -155,7 +155,7 @@ func TestE2E_BadPluginCmdLogsAndContinues(t *testing.T) {
 
 	g := StartGateway(t, GatewayOpts{ConfigJSON: cfg, StartupTimeout: 90 * time.Second})
 
-	if _, err := g.WaitForLog("plugin missing-bin: load failed", 15*time.Second); err != nil {
+	if _, err := g.WaitForLog(`plugin load failed plugin=missing-bin`, 15*time.Second); err != nil {
 		t.Errorf("expected load-failed log for missing binary: %v\n--- logs ---\n%s", err, g.LogsString())
 	}
 	if _, err := g.WaitForLog("plugins=0", 5*time.Second); err != nil {
