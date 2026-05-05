@@ -5,7 +5,7 @@
 // works the same as a literal token.
 //
 // Defaults that mirror openclaw's behavior:
-//   - port:       gateway.port (config) || 18790
+//   - port:       gateway.port (config) || 18789
 //   - bind:       gateway.bind (config) || "loopback"
 //   - LAN coerce: lan → loopback for the URL host (browsers refuse
 //                 secure-context features on raw LAN IPs anyway)
@@ -44,7 +44,7 @@ func dashboardCmd() *cobra.Command {
 			}
 			port := int(gjson.GetBytes(merged, "gateway.port").Int())
 			if port == 0 {
-				port = 18790
+				port = 18789
 			}
 			tokenRef := gjson.GetBytes(merged, "gateway.auth.token").Str
 			token := ""

@@ -20,6 +20,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 )
@@ -149,6 +150,90 @@ var builtinWorkflows = []builtinWorkflow{
 		ExtraSeedNodeIDs:     []string{"15"},
 		Description:          "duchaitenPonyReal_v20 + 4 LoRAs (ExpressiveH / Skin Color slider / Disney Princess / Perfect Eyes), two-pass hires fix via Remacri 4x upscaler. Slow (~60s) but high fidelity.",
 	},
+	{
+		// dixar_3d_combo: hyper8 speed pass (8 steps, euler) feeds a
+		// 0.4-denoise polish pass (20 steps, dpmpp_2m) without the
+		// Hyper LoRA, so the polish pulls fidelity back from the
+		// 8-step base.
+		ID:                   "dixar-3d-combo",
+		Label:                "Dixar 3D Combo (hyper8 + polish)",
+		Filename:             "dixar_3d_combo.json",
+		PromptNodeID:         "2",
+		NegativePromptNodeID: "3",
+		SeedNodeID:           "5",
+		ExtraSeedNodeIDs:     []string{"18"},
+		Description:          "dixar_4DixGalore + 3d LoRA + Hyper-SDXL (speed pass) + dpmpp_2m polish pass. Two-pass: 8-step speed → 20-step quality polish.",
+	},
+	{
+		// dixar_character_polish is a base + polish two-pass on the
+		// dixar_4DixGalore checkpoint. Base (deis, 30 steps) generates
+		// 832x1216, polish (dpmpp_2m, 15 steps, denoise 0.35) cleans up.
+		ID:                   "dixar-character-polish",
+		Label:                "Dixar Character + Polish (4x hires)",
+		Filename:             "dixar_character_polish.json",
+		PromptNodeID:         "2",
+		NegativePromptNodeID: "3",
+		SeedNodeID:           "5",
+		ExtraSeedNodeIDs:     []string{"18"},
+		Description:          "dixar_4DixGalore, deis 30 steps base + dpmpp_2m 15-step polish (denoise 0.35). Higher fidelity than dixar-character at the cost of one extra pass.",
+	},
+	{
+		// pony_cyberrealistic_tiled adds a megapixel-tiled skin polish
+		// (denoise 0.3) on top of the standard pony cyberrealistic
+		// base. Uses the dpmpp_2m sampler (matches the corrected base
+		// workflow that dropped _sde).
+		ID:                   "pony-cyberrealistic-tiled",
+		Label:                "Pony — CyberRealistic + Tiled Polish",
+		Filename:             "pony_cyberrealistic_tiled.json",
+		PromptNodeID:         "2",
+		NegativePromptNodeID: "3",
+		SeedNodeID:           "5",
+		ExtraSeedNodeIDs:     []string{"18"},
+		Description:          "cyberrealisticPony_v170 base (30 steps, dpmpp_2m) + megapixel-tiled skin polish pass (20 steps, denoise 0.3). Photoreal output with tiled high-res polish.",
+	},
+	{
+		// vyx_avatar: vyx + IPAdapter conditioning from a reference
+		// avatar image. Same two-pass structure as vyx (50/25 steps).
+		// PromptNodeID/seed match vyx (prompt=6, seed=9, extra=15).
+		// IPAdapter takes the reference image via a separate node not
+		// reflected in the registry's prompt-substitution surface.
+		ID:                   "vyx-avatar",
+		Label:                "VYX + Avatar (IPAdapter)",
+		Filename:             "vyx_avatar.json",
+		PromptNodeID:         "6",
+		NegativePromptNodeID: "7",
+		SeedNodeID:           "9",
+		ExtraSeedNodeIDs:     []string{"15"},
+		Description:          "vyx (duchaitenPonyReal + 4 LoRAs, two-pass hires) plus IPAdapter conditioning from a reference avatar image. Use when you have a face/style reference to anchor the result.",
+	},
+	{
+		// vyx_avatar_tags: vyx + a separate %avatar_tags% prompt node
+		// (id 34) for pre-generated descriptive tags. No IPAdapter
+		// here — text tags only. Tag substitution itself is not yet
+		// supported by this registry's read/patch API; the workflow
+		// runs as-is (with %avatar_tags% literal) until tag wiring
+		// lands.
+		ID:                   "vyx-avatar-tags",
+		Label:                "VYX + Avatar Tags",
+		Filename:             "vyx_avatar_tags.json",
+		PromptNodeID:         "6",
+		NegativePromptNodeID: "7",
+		SeedNodeID:           "9",
+		ExtraSeedNodeIDs:     []string{"15"},
+		Description:          "vyx + a pre-generated avatar-tag prompt block (no IPAdapter image). %avatar_tags% placeholder in node 34 is currently passed through verbatim — wire the tag substitution before relying on it.",
+	},
+	{
+		// vyx_avatar_and_tags: full bells & whistles. IPAdapter image
+		// + %avatar_tags% text. Same prompt/negative/seed wiring.
+		ID:                   "vyx-avatar-and-tags",
+		Label:                "VYX + Avatar (IPAdapter) + Tags",
+		Filename:             "vyx_avatar_and_tags.json",
+		PromptNodeID:         "6",
+		NegativePromptNodeID: "7",
+		SeedNodeID:           "9",
+		ExtraSeedNodeIDs:     []string{"15"},
+		Description:          "vyx + IPAdapter avatar image + %avatar_tags% pre-generated tags. The richest of the vyx variants. Same caveat on %avatar_tags% substitution as vyx-avatar-tags.",
+	},
 }
 
 // findBuiltinWorkflow returns the entry by id, or nil when id is
@@ -198,6 +283,58 @@ type imagesWorkflowEntry struct {
 	// section separators and a "Configure path" link for the user
 	// row.
 	Source string `json:"source"`
+}
+
+// --- images.workflows.get -------------------------------------------------
+
+type imagesWorkflowGetParams struct {
+	// ID matches one of imagesWorkflowEntry.ID values from
+	// images.workflows.list. Empty string means "the user's
+	// config-driven default workflow."
+	ID string `json:"id"`
+}
+
+// handleWorkflowsGet returns the parsed workflow JSON for a given ID
+// so the UI can introspect it (find KSampler nodes, list LoRAs and
+// IPAdapters, read current input values for slider defaults). The
+// payload is the literal node graph; downstream tooling parses it.
+//
+// Why expose the raw graph instead of a curated metadata struct: the
+// UI's needs evolve faster than the server schema would (new node
+// types, new input keys per ComfyUI release). Letting the UI read the
+// graph directly keeps server churn low and the UI flexible.
+func (h *ImagesHandler) handleWorkflowsGet(_ context.Context, _ HandlerCtx, params json.RawMessage) (any, *FrameError) {
+	var p imagesWorkflowGetParams
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &p); err != nil {
+			return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.workflows.get: " + err.Error()}
+		}
+	}
+	cfg, ferr := h.loadComfyUIConfig(p.ID)
+	if ferr != nil {
+		return nil, ferr
+	}
+	var raw []byte
+	if len(cfg.WorkflowJSON) > 0 {
+		raw = cfg.WorkflowJSON
+	} else {
+		var err error
+		raw, err = os.ReadFile(cfg.WorkflowPath)
+		if err != nil {
+			return nil, &FrameError{
+				Code:    ErrCodeBadRequest,
+				Message: "images.workflows.get: " + err.Error(),
+			}
+		}
+	}
+	var graph map[string]any
+	if err := json.Unmarshal(raw, &graph); err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.workflows.get: " + err.Error()}
+	}
+	return map[string]any{
+		"id":    p.ID,
+		"graph": graph,
+	}, nil
 }
 
 // handleWorkflowsList returns the available workflow templates: the

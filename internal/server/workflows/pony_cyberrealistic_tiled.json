@@ -72,7 +72,23 @@
     },
     "class_type": "KSampler",
     "_meta": {
-      "title": "KSampler"
+      "title": "Base pass (832x1216)"
+    }
+  },
+  "6": {
+    "inputs": {
+      "samples": [
+        "5",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ]
+    },
+    "class_type": "VAEDecode",
+    "_meta": {
+      "title": "VAE Decode (base)"
     }
   },
   "10": {
@@ -85,7 +101,7 @@
     },
     "class_type": "CLIPTextEncode",
     "_meta": {
-      "title": "Positive (permanent: Pony score + photoreal anchors)"
+      "title": "Positive (permanent: Pony score + photoreal)"
     }
   },
   "11": {
@@ -114,7 +130,7 @@
     },
     "class_type": "CLIPTextEncode",
     "_meta": {
-      "title": "Negative (permanent: kill anime/cartoon/3D drift)"
+      "title": "Negative (permanent)"
     }
   },
   "13": {
@@ -133,27 +149,119 @@
       "title": "Concat negative"
     }
   },
-  "6": {
+  "14": {
     "inputs": {
-      "samples": [
-        "5",
+      "model_name": "4x-UltraSharp.pth"
+    },
+    "class_type": "UpscaleModelLoader",
+    "_meta": {
+      "title": "Load 4x upscaler"
+    }
+  },
+  "15": {
+    "inputs": {
+      "upscale_model": [
+        "14",
+        0
+      ],
+      "image": [
+        "6",
+        0
+      ]
+    },
+    "class_type": "ImageUpscaleWithModel",
+    "_meta": {
+      "title": "4x model upscale"
+    }
+  },
+  "16": {
+    "inputs": {
+      "upscale_method": "lanczos",
+      "width": 1664,
+      "height": 2432,
+      "crop": "disabled",
+      "image": [
+        "15",
+        0
+      ]
+    },
+    "class_type": "ImageScale",
+    "_meta": {
+      "title": "Resize to 2x (1664x2432, ~4MP)"
+    }
+  },
+  "17": {
+    "inputs": {
+      "pixels": [
+        "16",
         0
       ],
       "vae": [
         "1",
         2
-      ]
+      ],
+      "tile_size": 512
     },
-    "class_type": "VAEDecode",
+    "class_type": "VAEEncodeTiled",
     "_meta": {
-      "title": "VAE Decode"
+      "title": "Tiled VAE Encode"
     }
   },
-  "7": {
+  "18": {
     "inputs": {
-      "filename_prefix": "pony_cyberrealistic/ComfyUI",
+      "seed": "%seed%",
+      "steps": 20,
+      "cfg": 6,
+      "sampler_name": "dpmpp_2m",
+      "scheduler": "karras",
+      "denoise": 0.3,
+      "model": [
+        "1",
+        0
+      ],
+      "positive": [
+        "11",
+        0
+      ],
+      "negative": [
+        "13",
+        0
+      ],
+      "latent_image": [
+        "17",
+        0
+      ]
+    },
+    "class_type": "KSampler",
+    "_meta": {
+      "title": "Skin polish pass (denoise 0.3, dpmpp_3m_sde)"
+    }
+  },
+  "19": {
+    "inputs": {
+      "samples": [
+        "18",
+        0
+      ],
+      "vae": [
+        "1",
+        2
+      ],
+      "tile_size": 512,
+      "overlap": 64,
+      "temporal_size": 64,
+      "temporal_overlap": 8
+    },
+    "class_type": "VAEDecodeTiled",
+    "_meta": {
+      "title": "Tiled VAE Decode"
+    }
+  },
+  "20": {
+    "inputs": {
+      "filename_prefix": "pony_megapixel_tiled/ComfyUI",
       "images": [
-        "6",
+        "19",
         0
       ]
     },

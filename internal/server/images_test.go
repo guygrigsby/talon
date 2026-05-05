@@ -221,6 +221,14 @@ func (s *stubComfyUI) HistoryAll(ctx context.Context, max int) ([]comfyui.Histor
 	return s.historyAll(ctx, max)
 }
 func (s *stubComfyUI) Fetch(ctx context.Context, ref comfyui.ImageRef, preview string) ([]byte, string, error) {
+	if s.fetch == nil {
+		// Tests that don't exercise fetch directly (e.g. the
+		// generate-flow happy path) still have autoSaveImages
+		// running on the final-event path. Return a minimal
+		// PNG signature so callers can write something and the
+		// stub doesn't have to be wired for every test.
+		return []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}, "image/png", nil
+	}
 	return s.fetch(ctx, ref, preview)
 }
 
@@ -649,3 +657,125 @@ func TestImagesFetch_ReturnsBase64AndDataURL(t *testing.T) {
 		t.Errorf("dataUrl missing prefix: %v", m["dataUrl"])
 	}
 }
+
+// --- images.autoSave -------------------------------------------------------
+
+func TestLoadAutoSaveConfig_Defaults(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	h := NewImagesHandler(paths)
+	cfg := h.loadAutoSaveConfig()
+	if !cfg.Enabled {
+		t.Errorf("default Enabled=false, want true")
+	}
+	want := filepath.Join(paths.Talon.Dir, "images", "auto")
+	if cfg.Path != want {
+		t.Errorf("default Path=%q, want %q", cfg.Path, want)
+	}
+}
+
+func TestLoadAutoSaveConfig_Disabled(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	if err := os.WriteFile(paths.Talon.Config, []byte(`{"images":{"autoSave":{"enabled":false}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := NewImagesHandler(paths).loadAutoSaveConfig()
+	if cfg.Enabled {
+		t.Errorf("Enabled should be false when config sets it false")
+	}
+}
+
+func TestLoadAutoSaveConfig_CustomPath(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	custom := filepath.Join(t.TempDir(), "shots")
+	cfgJSON := fmt.Sprintf(`{"images":{"autoSave":{"path":%q}}}`, custom)
+	if err := os.WriteFile(paths.Talon.Config, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := NewImagesHandler(paths).loadAutoSaveConfig()
+	if cfg.Path != custom {
+		t.Errorf("Path=%q, want %q", cfg.Path, custom)
+	}
+}
+
+func TestAutoSaveImages_WritesPNGsAndPreservesSubfolder(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	dst := filepath.Join(t.TempDir(), "shots")
+	cfgJSON := fmt.Sprintf(`{"images":{"autoSave":{"path":%q}}}`, dst)
+	if err := os.WriteFile(paths.Talon.Config, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubComfyUI{
+		fetch: func(_ context.Context, ref comfyui.ImageRef, preview string) ([]byte, string, error) {
+			if preview != "" {
+				return nil, "", fmt.Errorf("autoSave should fetch full-res, got preview=%q", preview)
+			}
+			return []byte("PNG-" + ref.Filename), "image/png", nil
+		},
+	}
+	h := NewImagesHandler(paths).WithDial(func(string) ComfyUIClient { return stub })
+	refs := []comfyui.ImageRef{
+		{Filename: "a.png", Type: "output"},
+		{Filename: "b.png", Subfolder: "nested", Type: "output"},
+	}
+	h.autoSaveImages(t.Context(), stub, refs)
+	if got, err := os.ReadFile(filepath.Join(dst, "a.png")); err != nil || string(got) != "PNG-a.png" {
+		t.Errorf("a.png not written or wrong contents: err=%v body=%q", err, got)
+	}
+	if got, err := os.ReadFile(filepath.Join(dst, "nested", "b.png")); err != nil || string(got) != "PNG-b.png" {
+		t.Errorf("nested b.png not written: err=%v body=%q", err, got)
+	}
+}
+
+func TestAutoSaveImages_DisabledIsNoOp(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	dst := filepath.Join(t.TempDir(), "shots")
+	cfgJSON := fmt.Sprintf(`{"images":{"autoSave":{"enabled":false,"path":%q}}}`, dst)
+	if err := os.WriteFile(paths.Talon.Config, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	called := 0
+	stub := &stubComfyUI{
+		fetch: func(_ context.Context, _ comfyui.ImageRef, _ string) ([]byte, string, error) {
+			called++
+			return []byte("x"), "image/png", nil
+		},
+	}
+	h := NewImagesHandler(paths).WithDial(func(string) ComfyUIClient { return stub })
+	h.autoSaveImages(t.Context(), stub, []comfyui.ImageRef{{Filename: "x.png", Type: "output"}})
+	if called != 0 {
+		t.Errorf("Fetch called %d times when disabled; want 0", called)
+	}
+	if _, err := os.Stat(filepath.Join(dst, "x.png")); !os.IsNotExist(err) {
+		t.Errorf("file should not exist when disabled; stat err=%v", err)
+	}
+}
+
+func TestAutoSaveImages_FetchErrorContinuesBatch(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	dst := filepath.Join(t.TempDir(), "shots")
+	cfgJSON := fmt.Sprintf(`{"images":{"autoSave":{"path":%q}}}`, dst)
+	if err := os.WriteFile(paths.Talon.Config, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stub := &stubComfyUI{
+		fetch: func(_ context.Context, ref comfyui.ImageRef, _ string) ([]byte, string, error) {
+			if ref.Filename == "bad.png" {
+				return nil, "", fmt.Errorf("comfyui says no")
+			}
+			return []byte("ok-" + ref.Filename), "image/png", nil
+		},
+	}
+	h := NewImagesHandler(paths).WithDial(func(string) ComfyUIClient { return stub })
+	refs := []comfyui.ImageRef{
+		{Filename: "bad.png", Type: "output"},
+		{Filename: "good.png", Type: "output"},
+	}
+	h.autoSaveImages(t.Context(), stub, refs)
+	if _, err := os.Stat(filepath.Join(dst, "bad.png")); !os.IsNotExist(err) {
+		t.Errorf("bad.png should not exist after fetch error; stat=%v", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dst, "good.png")); err != nil || string(got) != "ok-good.png" {
+		t.Errorf("good.png should still write; err=%v body=%q", err, got)
+	}
+}
+

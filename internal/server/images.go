@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,6 +106,7 @@ func (h *ImagesHandler) Register(r *Registry) {
 	r.Register("images.list", h.handleList)
 	r.Register("images.delete", h.handleDelete)
 	r.Register("images.workflows.list", h.handleWorkflowsList)
+	r.Register("images.workflows.get", h.handleWorkflowsGet)
 }
 
 // --- images.generate -------------------------------------------------------
@@ -118,6 +121,16 @@ type imagesGenerateParams struct {
 	// "dixar-character"). Empty falls back to the user's
 	// config-driven workflow at images.providers.comfyui.workflow.path.
 	WorkflowID string `json:"workflowId,omitempty"`
+	// NodeOverrides applies arbitrary input patches to the workflow
+	// before submission. Shape: {nodeId: {inputKey: value}}. Used by
+	// the Studio tab to expose every knob (KSampler steps/cfg/sampler,
+	// LoRA strengths, IPAdapter weights, etc.) without hardcoding a
+	// schema for each node type. Validation is loose on purpose —
+	// ComfyUI is the ground truth for what each input accepts; we
+	// just merge the value in as-is. Unknown nodes are silently
+	// dropped (lets the UI send the same override map across
+	// workflows that don't all share the same node ids).
+	NodeOverrides map[string]map[string]any `json:"nodeOverrides,omitempty"`
 }
 
 func (h *ImagesHandler) handleGenerate(_ context.Context, hc HandlerCtx, params json.RawMessage) (any, *FrameError) {
@@ -330,6 +343,11 @@ func (h *ImagesHandler) dispatchEvent(emit func(state string, data map[string]an
 			})
 		}
 		_ = h.appendToImagesIndex(newItems)
+		// Mirror each image into the talon data dir so the user has
+		// a local copy with embedded ComfyUI metadata (prompt +
+		// patched workflow) without going through the browser
+		// download flow. Best-effort, never blocks the emit.
+		h.autoSaveImages(context.Background(), cli, refs)
 		emit("final", map[string]any{
 			"promptId": promptID,
 			"images":   refs,
@@ -672,7 +690,81 @@ type comfyUIConfig struct {
 const (
 	defaultComfyUIBaseURL  = "http://localhost:8188"
 	defaultWorkflowRelPath = "images/comfyui-default.json"
+	// autoSaveDefaultRelPath is the talon-data-dir-relative location
+	// where every generated image lands when images.autoSave.path
+	// isn't overridden. Sibling of the existing index.json.
+	autoSaveDefaultRelPath = "images/auto"
 )
+
+// autoSaveConfig captures the images.autoSave.* settings. Resolved
+// once per generate run rather than per-image so a flag flip during
+// a long batch is consistent within that batch.
+type autoSaveConfig struct {
+	Enabled bool
+	Path    string
+}
+
+// loadAutoSaveConfig reads images.autoSave.{enabled,path}. Defaults
+// match the user-visible promise: every image gets a copy in
+// ~/.talon/images/auto/ unless explicitly disabled.
+func (h *ImagesHandler) loadAutoSaveConfig() autoSaveConfig {
+	cfg := autoSaveConfig{
+		Enabled: true,
+		Path:    filepath.Join(h.paths.Talon.Dir, autoSaveDefaultRelPath),
+	}
+	merged, err := config.MergedBytes(h.paths)
+	if err != nil {
+		return cfg
+	}
+	if v := gjson.GetBytes(merged, "images.autoSave.enabled"); v.Exists() {
+		cfg.Enabled = v.Bool()
+	}
+	if v := gjson.GetBytes(merged, "images.autoSave.path"); v.Exists() && v.Str != "" {
+		cfg.Path = expandHomePath(v.Str)
+	}
+	return cfg
+}
+
+// autoSaveImages writes a copy of every ref into the configured
+// auto-save directory by re-fetching the bytes from ComfyUI. Best-
+// effort: failures are logged and skipped so a write error on one
+// image doesn't take down the run. Subfolder, when set, is preserved
+// as a sub-path under the auto-save dir (matches ComfyUI's own
+// layout for output/temp/input subdirs).
+func (h *ImagesHandler) autoSaveImages(ctx context.Context, cli ComfyUIClient, refs []comfyui.ImageRef) {
+	cfg := h.loadAutoSaveConfig()
+	if !cfg.Enabled || len(refs) == 0 || cfg.Path == "" {
+		return
+	}
+	for _, ref := range refs {
+		dir := cfg.Path
+		if ref.Subfolder != "" {
+			dir = filepath.Join(cfg.Path, ref.Subfolder)
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			slog.Error("images autoSave mkdir failed",
+				"path", dir, "err", err)
+			continue
+		}
+		// Use a per-image timeout so a hung ComfyUI on one file
+		// doesn't stall the rest of the batch's writes.
+		fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		body, _, err := cli.Fetch(fetchCtx, ref, "")
+		cancel()
+		if err != nil {
+			slog.Error("images autoSave fetch failed",
+				"filename", ref.Filename, "err", err)
+			continue
+		}
+		dst := filepath.Join(dir, ref.Filename)
+		if err := os.WriteFile(dst, body, 0o644); err != nil {
+			slog.Error("images autoSave write failed",
+				"path", dst, "err", err)
+			continue
+		}
+		slog.Info("images autoSave wrote", "path", dst, "bytes", len(body))
+	}
+}
 
 // loadComfyUIConfig reads images.providers.comfyui.* from the merged
 // config, applying defaults for the base URL and workflow path. The
@@ -825,6 +917,22 @@ func readAndPatchWorkflow(cfg comfyUIConfig, p imagesGenerateParams) (json.RawMe
 				return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images: extra seed node: " + err.Error()}
 			}
 		}
+	}
+
+	// Apply free-form NodeOverrides last so they win over the
+	// prompt/seed patches above. Lets the Studio tab tweak the same
+	// node's other inputs (e.g. set steps + cfg on the KSampler that
+	// owns the seed) without losing the seed itself.
+	for nodeID, patches := range p.NodeOverrides {
+		inputs, err := nodeInputs(workflow, nodeID)
+		if err != nil {
+			// Silently skip nodes the workflow doesn't have. The UI
+			// may send overrides keyed by ids that exist in some
+			// workflows but not others; refusing here would force
+			// the UI to filter per-workflow before submitting.
+			continue
+		}
+		maps.Copy(inputs, patches)
 	}
 
 	out, err := json.Marshal(workflow)

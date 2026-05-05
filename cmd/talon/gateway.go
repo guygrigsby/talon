@@ -294,7 +294,7 @@ func gatewayRunCmd() *cobra.Command {
 			return srv.Run(ctx)
 		},
 	}
-	c.Flags().IntVar(&port, "port", 18790, "Port for the gateway WebSocket")
+	c.Flags().IntVar(&port, "port", 18789, "Port for the gateway WebSocket")
 	c.Flags().StringVar(&bind, "bind", "", `Bind mode ("loopback"|"lan"|"tailnet"|"auto"|"custom")`)
 	c.Flags().StringVar(&token, "token", "", "Shared token required in connect.params.auth.token")
 	c.Flags().StringVar(&password, "password", "", "Password for auth mode=password")

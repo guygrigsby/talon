@@ -88,7 +88,7 @@ func uiOpenCmd() *cobra.Command {
 func addUIFlags(c *cobra.Command, uiHost, gwHost *string, gwPort *int, token, session, path *string) {
 	c.Flags().StringVar(uiHost, "ui-host", defaultUIHost, "openclaw web UI base URL")
 	c.Flags().StringVar(gwHost, "gateway-host", "localhost", "host the UI should dial for the gateway")
-	c.Flags().IntVar(gwPort, "gateway-port", 18790, "port the UI should dial for the gateway")
+	c.Flags().IntVar(gwPort, "gateway-port", 18789, "port the UI should dial for the gateway")
 	c.Flags().StringVar(token, "token", "", "gateway auth token (for --auth=token gateways)")
 	c.Flags().StringVar(session, "session", "", "session key to open (e.g. main)")
 	c.Flags().StringVar(path, "path", "/chat", "UI route to open (e.g. /chat, /agents)")
