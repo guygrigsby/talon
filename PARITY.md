@@ -20,7 +20,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 | `completion` | ✓ | Cobra built-in (`completion bash|zsh|fish|powershell`) |
 | `config` (6 subs) | ◐ | Layered overlay model (talon-2sv): read merges `~/.talon` over `~/.openclaw`, writes target `~/.talon` only. talon-1oj (set rich modes — Phase B), talon-7vk (whitespace), talon-9ic (tombstones for openclaw-layer deletes) |
 | `configure` (interactive) | ✗ | depends on entire config surface; large port |
-| `cron` (10 subs) | ✗ | talon-3tg, talon-aws |
+| `cron` (10 subs) | ◐ gateway-side service | gateway implements `cron.list` / `add` / `remove` / `run` / `status` / `runs` (talon-8z0). Persistence at `~/.talon/cron/jobs.json` + run log at `~/.talon/cron/runs.jsonl`. Standard 5/6-field cron expressions + descriptors (@hourly etc.). Jobs fire by dispatching back through the WS Registry (any session-agnostic RPC works). CLI wrapping: talon-3tg. Out-of-scope for v1: per-job timezones, jitter, `cron.update` (use remove+add), isolated-agent sessions. |
 | `daemon` (6 subs) | ⊘ | legacy alias for `gateway` service mgmt |
 | `dashboard` | ✓ | Prints + clipboards + opens the gateway URL with token auto-auth in fragment. Token resolved through the secrets resolver (op:// / keychain:// references work). |
 | `devices` (8 subs) | ✗ | talon-job, talon-26v, talon-xk1, talon-aws |

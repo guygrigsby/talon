@@ -70,6 +70,7 @@ type Server struct {
 	chatStore  *ChatStore
 	sessions_  *SessionStore // trailing _ to avoid collision with the field below
 	reads      *ReadHandler
+	cron       *CronHandler
 
 	// sessions tracks active authenticated sessions keyed by
 	// "<clientId>|<instanceId>" (only registered when both are
@@ -143,6 +144,17 @@ func New(cfg Config) *Server {
 		NewImagesHandler(cfg.Paths).Register(s.registry)
 		NewPluginDepsHandler(cfg.Paths).WithHost(cfg.PluginHost).Register(s.registry)
 		NewChannelsSetupHandler(cfg.Paths).Register(s.registry)
+		// Cron scheduler: jobs persist under ~/.talon/cron/, dispatch
+		// fires through the same Registry so any session-agnostic RPC
+		// can be scheduled. Constructor failures (corrupt jobs.json)
+		// are logged and swallowed so a bad on-disk state doesn't
+		// take down the whole gateway.
+		if ch, err := NewCronHandler(cfg.Paths, dispatchFromRegistry(s.registry)); err != nil {
+			slog.Error("cron handler init failed; cron RPCs disabled", "err", err)
+		} else {
+			ch.Register(s.registry)
+			s.cron = ch
+		}
 	}
 	NewSessionsHandler(sessionStore, chatStore).Register(s.registry)
 	NewNodesHandler().Register(s.registry)
@@ -183,6 +195,15 @@ func (s *Server) Run(ctx context.Context) error {
 	}
 	errCh := make(chan error, 1)
 	go func() { errCh <- hs.ListenAndServe() }()
+
+	// Cron scheduler ticks once a second. Granular enough that a job
+	// scheduled for "16:30" fires within the right minute even with
+	// system clock jitter; sparse enough that idle CPU cost is
+	// negligible at the scale of a personal gateway.
+	if s.cron != nil {
+		s.cron.Service().Start(ctx, time.Second)
+		defer s.cron.Service().Stop()
+	}
 
 	select {
 	case <-ctx.Done():
