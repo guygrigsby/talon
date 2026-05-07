@@ -1,7 +1,7 @@
 {
   "1": {
     "inputs": {
-      "ckpt_name": "juggernautXL_juggernautX.safetensors"
+      "ckpt_name": "juggernautXL_ragnarokBy.safetensors"
     },
     "class_type": "CheckpointLoaderSimple",
     "_meta": {
