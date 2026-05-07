@@ -141,6 +141,37 @@ var builtinWorkflows = []workflowEntry{
 		Description:          "illustriousXL10Improved_v30 + Hyper-SDXL 8-step LoRA + sdxl_vae external VAE. ~4x faster, 1024x1024.",
 	},
 	{
+		// sdxl-juggernaut: Juggernaut XL base, recommended settings
+		// from the model author (832x1216 portrait, dpmpp_2m_sde,
+		// karras, 32 steps, cfg 4, baked VAE). No score-tag scaffold
+		// (Juggernaut takes natural-language prompts directly), no
+		// permanent positive/negative concat. Default ckpt_name
+		// points at "juggernautXL_juggernautX.safetensors"; edit the
+		// JSON if the user's downloaded file differs.
+		ID:                   "sdxl-juggernaut",
+		Label:                "SDXL Juggernaut XL (photoreal)",
+		Filename:             "sdxl_juggernaut.json",
+		Source:               workflowSourceBuiltin,
+		PromptNodeID:         "2",
+		NegativePromptNodeID: "3",
+		SeedNodeID:           "5",
+		Description:          "Juggernaut XL — photoreal SDXL base, no score-tag scaffold. Natural-language prompts. 832x1216 portrait, dpmpp_2m_sde/karras, 32 steps, cfg 4. SFW-default behavior; less NSFW-pushing than Pony bases.",
+	},
+	{
+		// img2img-juggernaut: img2img variant of sdxl-juggernaut. UI
+		// uploads source via LoadImage (node 4) → VAEEncode (node 5)
+		// → KSampler (node 6, denoise 0.55 default). Recommended
+		// settings mirror the base; denoise is the slider.
+		ID:                   "img2img-juggernaut",
+		Label:                "Img2Img — Juggernaut XL",
+		Filename:             "img2img_juggernaut.json",
+		Source:               workflowSourceBuiltin,
+		PromptNodeID:         "2",
+		NegativePromptNodeID: "3",
+		SeedNodeID:           "6",
+		Description:          "Image-to-image with Juggernaut XL. Upload a source; denoise (0.3 = subtle restyle, 0.7 = regenerate) drives stylization. Same recommended settings as the base.",
+	},
+	{
 		// img2img-pony: source-image-driven workflow. The Studio UI
 		// uploads an image via images.upload, then submits this
 		// workflow with nodeOverrides setting LoadImage (node 4)'s

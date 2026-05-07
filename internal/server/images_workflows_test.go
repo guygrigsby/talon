@@ -36,6 +36,9 @@ func TestImagesWorkflowsList_ListsBuiltins(t *testing.T) {
 		"pony-real-anime":           false,
 		"illustrious-char":          false,
 		"illustrious-hyper":         false,
+		"img2img-pony":              false,
+		"sdxl-juggernaut":           false,
+		"img2img-juggernaut":        false,
 	}
 	for _, w := range wfs {
 		if _, named := want[w.ID]; named {
@@ -378,6 +381,79 @@ func TestLoadComfyUIConfig_IllustriousBuiltinsLoadCorrectly(t *testing.T) {
 			}
 			if _, ok := parsed["8"].Inputs["tile_size"]; !ok {
 				t.Errorf("%s: VAEDecodeTiled lost tile_size: %+v", c.description, parsed["8"].Inputs)
+			}
+		})
+	}
+}
+
+func TestLoadComfyUIConfig_JuggernautBuiltinsLoadCorrectly(t *testing.T) {
+	// Juggernaut workflows ship with the recommended-author settings:
+	// dpmpp_2m_sde sampler, karras scheduler, 32 steps, cfg 4, 832x1216
+	// portrait. Pin verification + ckpt_name reference + structural
+	// integrity after patch.
+	paths := readFixture(t, "{}")
+	h := NewImagesHandler(paths)
+
+	cases := []struct {
+		id           string
+		seedNode     string
+		isImg2Img    bool
+	}{
+		{"sdxl-juggernaut", "5", false},
+		{"img2img-juggernaut", "6", true},
+	}
+	for _, c := range cases {
+		t.Run(c.id, func(t *testing.T) {
+			cfg, ferr := h.loadComfyUIConfig(c.id)
+			if ferr != nil {
+				t.Fatalf("loadComfyUIConfig: %+v", ferr)
+			}
+			if cfg.PromptNodeID != "2" || cfg.NegativePromptNodeID != "3" || cfg.SeedNodeID != c.seedNode {
+				t.Errorf("pin mismatch (expected 2/3/%s): %+v", c.seedNode, cfg)
+			}
+			if !strings.Contains(string(cfg.WorkflowJSON), "juggernautXL") {
+				t.Errorf("workflow JSON missing juggernautXL ckpt reference")
+			}
+			if !strings.Contains(string(cfg.WorkflowJSON), "dpmpp_2m_sde") {
+				t.Errorf("workflow JSON missing dpmpp_2m_sde sampler")
+			}
+			seed := int64(7)
+			out, ferr := readAndPatchWorkflow(cfg, imagesGenerateParams{
+				Prompt: "p", NegativePrompt: "n", Seed: &seed,
+			})
+			if ferr != nil {
+				t.Fatalf("patch: %+v", ferr)
+			}
+			var parsed map[string]struct {
+				ClassType string         `json:"class_type"`
+				Inputs    map[string]any `json:"inputs"`
+			}
+			if err := json.Unmarshal(out, &parsed); err != nil {
+				t.Fatal(err)
+			}
+			if parsed["2"].Inputs["text"] != "p" {
+				t.Errorf("positive not patched: %+v", parsed["2"].Inputs)
+			}
+			if parsed["3"].Inputs["text"] != "n" {
+				t.Errorf("negative not patched: %+v", parsed["3"].Inputs)
+			}
+			if int64(parsed[c.seedNode].Inputs["seed"].(float64)) != 7 {
+				t.Errorf("seed not patched on node %s", c.seedNode)
+			}
+			// img2img variant: LoadImage → VAEEncode → KSampler chain
+			// must survive (otherwise img2img degrades to t2i with
+			// the wrong latent source).
+			if c.isImg2Img {
+				if parsed["4"].ClassType != "LoadImage" {
+					t.Errorf("img2img: node 4 should be LoadImage, got %q", parsed["4"].ClassType)
+				}
+				if parsed["5"].ClassType != "VAEEncode" {
+					t.Errorf("img2img: node 5 should be VAEEncode, got %q", parsed["5"].ClassType)
+				}
+				li, ok := parsed[c.seedNode].Inputs["latent_image"].([]any)
+				if !ok || len(li) != 2 || li[0] != "5" {
+					t.Errorf("img2img: KSampler latent_image not wired to VAEEncode: %v", parsed[c.seedNode].Inputs["latent_image"])
+				}
 			}
 		})
 	}
