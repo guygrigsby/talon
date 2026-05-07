@@ -663,6 +663,22 @@ func (h *ImagesHandler) handleDelete(_ context.Context, _ HandlerCtx, params jso
 	if err := os.Rename(tmp, h.imagesIndexPath()); err != nil {
 		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.delete: rename: " + err.Error()}
 	}
+	// Best-effort: remove the auto-saved local copy too. The talon
+	// data dir is the only filesystem this server can prune on the
+	// user's behalf — ComfyUI's output dir lives on a different host
+	// and exposes no delete endpoint, so we don't try.
+	autoSaveCfg := h.loadAutoSaveConfig()
+	if autoSaveCfg.Path != "" {
+		dir := autoSaveCfg.Path
+		if p.Subfolder != "" {
+			dir = filepath.Join(autoSaveCfg.Path, p.Subfolder)
+		}
+		path := filepath.Join(dir, p.Filename)
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			slog.Warn("images.delete: autoSave file remove failed",
+				"path", path, "err", err)
+		}
+	}
 	return map[string]any{"ok": true, "removed": removed}, nil
 }
 
@@ -771,11 +787,12 @@ func (h *ImagesHandler) autoSaveImages(ctx context.Context, cli ComfyUIClient, r
 // loopback rewrite mirrors the LM Studio integration so a config of
 // "localhost:8188" Just Works whether talon is local or in Docker.
 //
-// workflowID picks one of the shipped builtin workflows when set; an
-// empty string falls back to the user's config-driven workflow. For
-// builtins, the prompt/negative/seed node ids are taken from the
-// builtin entry rather than config — they're pinned to match the
-// shipped JSON so users don't have to discover/configure them.
+// workflowID picks one of the shipped builtin workflows OR a user-dir
+// workflow under ~/.talon/images/workflows/ when set; an empty string
+// falls back to the user's config-driven workflow. For registry hits
+// (builtin or user-dir), the prompt/negative/seed node ids are taken
+// from the entry rather than config — they're pinned to match the
+// JSON so users don't have to discover/configure them per submission.
 func (h *ImagesHandler) loadComfyUIConfig(workflowID string) (comfyUIConfig, *FrameError) {
 	merged, err := config.MergedBytes(h.paths)
 	if err != nil {
@@ -789,11 +806,12 @@ func (h *ImagesHandler) loadComfyUIConfig(workflowID string) (comfyUIConfig, *Fr
 	}
 	cfg.BaseURL = netutil.RewriteLoopbackForContainer(cfg.BaseURL)
 
-	// Builtin path: look up the entry, load its embedded JSON into
-	// cfg.WorkflowJSON, copy the pinned node ids. WorkflowPath stays
-	// empty so readAndPatchWorkflow uses the in-memory bytes.
-	if entry := findBuiltinWorkflow(workflowID); entry != nil {
-		raw, err := loadBuiltinWorkflowJSON(entry)
+	// Registry path: look up the entry (embed or user-dir), load its
+	// JSON into cfg.WorkflowJSON, copy the pinned node ids.
+	// WorkflowPath stays empty so readAndPatchWorkflow uses the
+	// in-memory bytes.
+	if entry := h.findWorkflow(workflowID); entry != nil {
+		raw, err := loadWorkflowJSON(entry)
 		if err != nil {
 			return comfyUIConfig{}, &FrameError{Code: ErrCodeInternal, Message: "images: " + err.Error()}
 		}

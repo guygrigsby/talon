@@ -77,7 +77,7 @@
   },
   "10": {
     "inputs": {
-      "text": "score_9, score_8_up, score_7_up, source_photo, photorealistic, photo, raw photo, realistic skin texture, detailed skin pores, film grain, sharp focus, dramatic lighting, cinematic, depth of field, bokeh, masterpiece, best quality, ultra detailed, 8k",
+      "text": "score_9, score_8_up, score_7_up, sharp focus, masterpiece, best quality, ultra detailed, 8k",
       "clip": [
         "1",
         1

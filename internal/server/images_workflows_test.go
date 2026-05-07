@@ -29,17 +29,13 @@ func TestImagesWorkflowsList_ListsBuiltins(t *testing.T) {
 	if !ok {
 		t.Fatalf("workflows not a typed slice: %#v", got["workflows"])
 	}
-	// Both shipped builtins surface, with stable ids the UI sends back.
+	// Public-checkpoint builtins surface, with stable ids the UI sends back.
 	want := map[string]bool{
-		"dixar-character":        false,
-		"dixar-character-hyper8": false,
-		"dixar-3d":               false,
-		"dixar-3d-hyper8":        false,
-		"pony-cyberrealistic":    false,
-		"pony-real-anime":        false,
-		"illustrious-char":       false,
-		"illustrious-hyper":      false,
-		"vyx":                    false,
+		"pony-cyberrealistic":       false,
+		"pony-cyberrealistic-tiled": false,
+		"pony-real-anime":           false,
+		"illustrious-char":          false,
+		"illustrious-hyper":         false,
 	}
 	for _, w := range wfs {
 		if _, named := want[w.ID]; named {
@@ -61,8 +57,8 @@ func TestImagesWorkflowsList_ListsBuiltins(t *testing.T) {
 
 func TestImagesWorkflowsList_OmitsUserDefaultWhenFileMissing(t *testing.T) {
 	paths := readFixture(t, "{}")
-	// No workflow file exists at the default path; the user-row
-	// should be elided (only builtins remain).
+	// No workflow file exists at the default path AND no user-dir
+	// workflows; the user-row should be elided (only builtins remain).
 	h := NewImagesHandler(paths)
 	res, ferr := h.handleWorkflowsList(context.Background(), HandlerCtx{}, nil)
 	if ferr != nil {
@@ -99,21 +95,89 @@ func TestImagesWorkflowsList_IncludesUserDefaultWhenFileExists(t *testing.T) {
 	res, _ := h.handleWorkflowsList(context.Background(), HandlerCtx{}, nil)
 	wfs := res.(map[string]any)["workflows"].([]imagesWorkflowEntry)
 
-	var userRow *imagesWorkflowEntry
+	// The legacy default uses ID "" as a sentinel. User-dir entries
+	// (also Source="user") have non-empty IDs, so this test stays
+	// specific to the legacy row even with discovery layered on.
+	var legacyRow *imagesWorkflowEntry
 	for i, w := range wfs {
-		if w.Source == "user" {
-			userRow = &wfs[i]
+		if w.Source == "user" && w.ID == "" {
+			legacyRow = &wfs[i]
 			break
 		}
 	}
-	if userRow == nil {
-		t.Fatalf("expected a user row when default workflow file exists; got %+v", wfs)
+	if legacyRow == nil {
+		t.Fatalf("expected a legacy default user row when default workflow file exists; got %+v", wfs)
 	}
-	if userRow.ID != "" {
-		t.Errorf("user row id should be empty (sentinel), got %q", userRow.ID)
+	if !strings.Contains(legacyRow.Description, wfPath) {
+		t.Errorf("legacy default row should mention the workflow path: %+v", legacyRow)
 	}
-	if !strings.Contains(userRow.Description, wfPath) {
-		t.Errorf("user row should mention the workflow path: %+v", userRow)
+}
+
+func TestImagesWorkflowsList_DiscoversUserDirEntries(t *testing.T) {
+	// User-dir discovery: a workflow JSON paired with a sidecar
+	// .meta.json under ~/.talon/images/workflows/ shows up in the
+	// list as Source=user with the meta-defined id/label/description.
+	paths := readFixture(t, "{}")
+	wfDir := filepath.Join(paths.Talon.Dir, "images", "workflows")
+	if err := os.MkdirAll(wfDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Minimal valid workflow + sidecar — only the registry path is
+	// under test, not workflow patching.
+	if err := os.WriteFile(filepath.Join(wfDir, "myflow.json"),
+		[]byte(`{"6":{"inputs":{"text":"%prompt%"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	meta := []byte(`{"id":"my-flow","label":"My Flow","description":"a test","promptNodeId":"6"}`)
+	if err := os.WriteFile(filepath.Join(wfDir, "myflow.meta.json"), meta, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewImagesHandler(paths)
+	res, ferr := h.handleWorkflowsList(context.Background(), HandlerCtx{}, nil)
+	if ferr != nil {
+		t.Fatalf("list: %+v", ferr)
+	}
+	wfs := res.(map[string]any)["workflows"].([]imagesWorkflowEntry)
+	var hit *imagesWorkflowEntry
+	for i, w := range wfs {
+		if w.ID == "my-flow" {
+			hit = &wfs[i]
+			break
+		}
+	}
+	if hit == nil {
+		t.Fatalf("user-dir workflow my-flow missing from list: %+v", wfs)
+	}
+	if hit.Source != "user" {
+		t.Errorf("user-dir workflow should have Source=user, got %q", hit.Source)
+	}
+	if hit.Label != "My Flow" || hit.Description != "a test" {
+		t.Errorf("user-dir workflow metadata mismatch: %+v", hit)
+	}
+}
+
+func TestImagesWorkflowsList_SkipsUserDirEntryWithoutSidecar(t *testing.T) {
+	// A workflow JSON without its <id>.meta.json is skipped — the
+	// patcher needs the node-id pins, so silently registering the
+	// row would land bogus pins on submit.
+	paths := readFixture(t, "{}")
+	wfDir := filepath.Join(paths.Talon.Dir, "images", "workflows")
+	if err := os.MkdirAll(wfDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(wfDir, "noemeta.json"),
+		[]byte(`{"6":{"inputs":{"text":"%prompt%"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewImagesHandler(paths)
+	res, _ := h.handleWorkflowsList(context.Background(), HandlerCtx{}, nil)
+	wfs := res.(map[string]any)["workflows"].([]imagesWorkflowEntry)
+	for _, w := range wfs {
+		if w.ID == "noemeta" {
+			t.Errorf("workflow without sidecar should be skipped: %+v", w)
+		}
 	}
 }
 
@@ -121,7 +185,7 @@ func TestLoadComfyUIConfig_BuiltinReturnsEmbeddedJSON(t *testing.T) {
 	paths := readFixture(t, "{}")
 	h := NewImagesHandler(paths)
 
-	cfg, ferr := h.loadComfyUIConfig("dixar-character")
+	cfg, ferr := h.loadComfyUIConfig("pony-cyberrealistic")
 	if ferr != nil {
 		t.Fatalf("loadComfyUIConfig builtin: %+v", ferr)
 	}
@@ -131,15 +195,45 @@ func TestLoadComfyUIConfig_BuiltinReturnsEmbeddedJSON(t *testing.T) {
 	if cfg.WorkflowPath != "" {
 		t.Errorf("WorkflowPath should be empty for builtin (got %q)", cfg.WorkflowPath)
 	}
-	// Pinned node ids from the registry should match the dixar JSON's
+	// Pinned node ids from the registry should match the JSON's
 	// CLIPTextEncode + KSampler nodes.
 	if cfg.PromptNodeID != "2" || cfg.NegativePromptNodeID != "3" || cfg.SeedNodeID != "5" {
 		t.Errorf("builtin node ids: %+v", cfg)
 	}
-	// Sanity check: the embedded JSON contains the dixar checkpoint
+	// Sanity check: the embedded JSON contains the checkpoint
 	// reference so a wrong-file mix-up surfaces here, not at runtime.
-	if !strings.Contains(string(cfg.WorkflowJSON), "dixar_4DixGalore") {
-		t.Errorf("dixar checkpoint missing from embedded JSON: %s", cfg.WorkflowJSON)
+	if !strings.Contains(string(cfg.WorkflowJSON), "cyberrealisticPony_v170") {
+		t.Errorf("checkpoint missing from embedded JSON: %s", cfg.WorkflowJSON)
+	}
+}
+
+func TestLoadComfyUIConfig_UserDirEntryReturnsDiskJSON(t *testing.T) {
+	// User-dir entry: loadComfyUIConfig should resolve the id, read
+	// the JSON from disk, and copy the meta-defined pins onto cfg.
+	paths := readFixture(t, "{}")
+	wfDir := filepath.Join(paths.Talon.Dir, "images", "workflows")
+	if err := os.MkdirAll(wfDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"6":{"inputs":{"text":"%prompt%"}},"7":{"inputs":{"text":"%neg%"}},"9":{"inputs":{"seed":"%seed%"}}}`)
+	if err := os.WriteFile(filepath.Join(wfDir, "ud.json"), body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	meta := []byte(`{"id":"ud","label":"UD","promptNodeId":"6","negativePromptNodeId":"7","seedNodeId":"9"}`)
+	if err := os.WriteFile(filepath.Join(wfDir, "ud.meta.json"), meta, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	h := NewImagesHandler(paths)
+	cfg, ferr := h.loadComfyUIConfig("ud")
+	if ferr != nil {
+		t.Fatalf("loadComfyUIConfig user-dir: %+v", ferr)
+	}
+	if len(cfg.WorkflowJSON) == 0 {
+		t.Fatal("WorkflowJSON should be populated for user-dir entry")
+	}
+	if cfg.PromptNodeID != "6" || cfg.NegativePromptNodeID != "7" || cfg.SeedNodeID != "9" {
+		t.Errorf("user-dir pins not loaded: %+v", cfg)
 	}
 }
 
@@ -159,69 +253,10 @@ func TestLoadComfyUIConfig_UnknownBuiltinErrors(t *testing.T) {
 	}
 }
 
-func TestLoadComfyUIConfig_3DBuiltinsLoadCorrectly(t *testing.T) {
-	// The 3D-LoRA variants share the same prompt/negative/seed pins
-	// as the character workflows but add a LoRA stack on top. Verify
-	// the embedded JSON for each loads, the pins resolve, and the
-	// 3d LoRA reference survives — the latter catching any wrong-file
-	// mix-up between the two 3D variants and the character ones.
-	paths := readFixture(t, "{}")
-	h := NewImagesHandler(paths)
-
-	cases := []struct {
-		id          string
-		wantSubstr  string
-		description string
-	}{
-		{"dixar-3d", "3d.safetensors", "30-step 3D"},
-		{"dixar-3d-hyper8", "Hyper-SDXL-8steps-lora.safetensors", "Hyper-8 3D"},
-	}
-	for _, c := range cases {
-		t.Run(c.id, func(t *testing.T) {
-			cfg, ferr := h.loadComfyUIConfig(c.id)
-			if ferr != nil {
-				t.Fatalf("%s: %+v", c.description, ferr)
-			}
-			if len(cfg.WorkflowJSON) == 0 {
-				t.Fatalf("%s: WorkflowJSON empty", c.description)
-			}
-			if cfg.PromptNodeID != "2" || cfg.NegativePromptNodeID != "3" || cfg.SeedNodeID != "5" {
-				t.Errorf("%s: pin mismatch: %+v", c.description, cfg)
-			}
-			if !strings.Contains(string(cfg.WorkflowJSON), c.wantSubstr) {
-				t.Errorf("%s: workflow JSON missing %q", c.description, c.wantSubstr)
-			}
-			// Patch end-to-end so a structural change in the JSON
-			// (e.g. a renamed node) trips this assertion before
-			// shipping.
-			seed := int64(7)
-			out, ferr := readAndPatchWorkflow(cfg, imagesGenerateParams{Prompt: "p", NegativePrompt: "n", Seed: &seed})
-			if ferr != nil {
-				t.Fatalf("%s: patch: %+v", c.description, ferr)
-			}
-			var parsed map[string]struct {
-				Inputs map[string]any `json:"inputs"`
-			}
-			if err := json.Unmarshal(out, &parsed); err != nil {
-				t.Fatal(err)
-			}
-			if parsed["2"].Inputs["text"] != "p" {
-				t.Errorf("%s: positive not patched", c.description)
-			}
-			if parsed["3"].Inputs["text"] != "n" {
-				t.Errorf("%s: negative not patched", c.description)
-			}
-			if int64(parsed["5"].Inputs["seed"].(float64)) != 7 {
-				t.Errorf("%s: seed not patched", c.description)
-			}
-		})
-	}
-}
-
 func TestLoadComfyUIConfig_PonyBuiltinsLoadCorrectly(t *testing.T) {
-	// Pony variants use distinct checkpoints from the dixar set —
-	// verify each loads the right .safetensors so a registry/file
-	// mix-up surfaces here, not in production.
+	// Pony variants ship as public-checkpoint builtins. Verify each
+	// loads the right .safetensors so a registry/file mix-up surfaces
+	// here, not in production.
 	paths := readFixture(t, "{}")
 	h := NewImagesHandler(paths)
 
@@ -283,10 +318,10 @@ func TestLoadComfyUIConfig_PonyBuiltinsLoadCorrectly(t *testing.T) {
 
 func TestLoadComfyUIConfig_IllustriousBuiltinsLoadCorrectly(t *testing.T) {
 	// Illustrious workflows use prompt=6/negative=7/seed=3 (vs.
-	// 2/3/5 for the dixar/pony set). A registry typo would land
-	// the patcher on the wrong nodes and swap prompt/negative
-	// silently — verify the right pins resolve and the right
-	// checkpoint is in the embedded JSON.
+	// 2/3/5 for the pony set). A registry typo would land the
+	// patcher on the wrong nodes and swap prompt/negative silently
+	// — verify the right pins resolve and the right checkpoint is
+	// in the embedded JSON.
 	paths := readFixture(t, "{}")
 	h := NewImagesHandler(paths)
 
@@ -337,7 +372,7 @@ func TestLoadComfyUIConfig_IllustriousBuiltinsLoadCorrectly(t *testing.T) {
 			}
 			// External VAELoader (node 10) and tiled decode (node 8)
 			// must survive — these distinguish Illustrious from the
-			// dixar/pony workflows.
+			// pony workflows.
 			if parsed["10"].Inputs["vae_name"] != "sdxl_vae.safetensors" {
 				t.Errorf("%s: VAELoader lost: %+v", c.description, parsed["10"].Inputs)
 			}
@@ -348,35 +383,36 @@ func TestLoadComfyUIConfig_IllustriousBuiltinsLoadCorrectly(t *testing.T) {
 	}
 }
 
-// TestLoadComfyUIConfig_VyxPatchesAllSeedNodes covers the two-pass
-// hires-fix bug: vyx has TWO KSampler nodes (9 = first pass, 15 =
-// hires refine) and both have inputs.seed templated as "%seed%".
-// Patching only the primary seed leaves the literal string in the
-// second sampler, ComfyUI rejects it as non-numeric, and the run
-// fails with execution_error. Both must be patched to the same
-// seed (deterministic continuity between passes is expected).
-func TestLoadComfyUIConfig_VyxPatchesAllSeedNodes(t *testing.T) {
+// TestLoadComfyUIConfig_TwoPassPatchesAllSeedNodes covers the
+// hires-fix bug: pony-cyberrealistic-tiled has TWO KSampler nodes
+// (5 = base pass, 18 = polish pass) and both have inputs.seed
+// templated as "%seed%". Patching only the primary seed leaves the
+// literal string in the second sampler, ComfyUI rejects it as
+// non-numeric, and the run fails with execution_error. Both must be
+// patched to the same seed (deterministic continuity between passes
+// is expected).
+func TestLoadComfyUIConfig_TwoPassPatchesAllSeedNodes(t *testing.T) {
 	paths := readFixture(t, "{}")
 	h := NewImagesHandler(paths)
 
-	cfg, ferr := h.loadComfyUIConfig("vyx")
+	cfg, ferr := h.loadComfyUIConfig("pony-cyberrealistic-tiled")
 	if ferr != nil {
-		t.Fatalf("loadComfyUIConfig vyx: %+v", ferr)
+		t.Fatalf("loadComfyUIConfig pony-cyberrealistic-tiled: %+v", ferr)
 	}
-	if cfg.PromptNodeID != "6" || cfg.NegativePromptNodeID != "7" {
-		t.Errorf("vyx pin mismatch (expected prompt=6/negative=7): %+v", cfg)
+	if cfg.PromptNodeID != "2" || cfg.NegativePromptNodeID != "3" {
+		t.Errorf("pony-cyberrealistic-tiled pin mismatch (expected prompt=2/negative=3): %+v", cfg)
 	}
-	if cfg.SeedNodeID != "9" {
-		t.Errorf("vyx primary seed pin should be 9 (first KSampler), got %q", cfg.SeedNodeID)
+	if cfg.SeedNodeID != "5" {
+		t.Errorf("pony-cyberrealistic-tiled primary seed pin should be 5 (first KSampler), got %q", cfg.SeedNodeID)
 	}
-	if !strings.Contains(string(cfg.WorkflowJSON), "duchaitenPonyReal_v20") {
-		t.Errorf("vyx workflow JSON missing duchaitenPonyReal_v20 checkpoint")
+	if len(cfg.ExtraSeedNodeIDs) != 1 || cfg.ExtraSeedNodeIDs[0] != "18" {
+		t.Errorf("pony-cyberrealistic-tiled extra seed pin should be [18], got %v", cfg.ExtraSeedNodeIDs)
 	}
 
 	seed := int64(2024)
 	out, ferr := readAndPatchWorkflow(cfg, imagesGenerateParams{Prompt: "a", NegativePrompt: "b", Seed: &seed})
 	if ferr != nil {
-		t.Fatalf("vyx patch: %+v", ferr)
+		t.Fatalf("patch: %+v", ferr)
 	}
 	var parsed map[string]struct {
 		Inputs map[string]any `json:"inputs"`
@@ -385,9 +421,9 @@ func TestLoadComfyUIConfig_VyxPatchesAllSeedNodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Both seed nodes must be numeric (placeholder gone) AND equal:
-	// hires refine uses the primary pass's seed for coherent
+	// hires polish uses the primary pass's seed for coherent
 	// continuity; if they diverge the second pass drifts.
-	for _, nodeID := range []string{"9", "15"} {
+	for _, nodeID := range []string{"5", "18"} {
 		v, ok := parsed[nodeID].Inputs["seed"]
 		if !ok {
 			t.Fatalf("node %s missing inputs.seed: %+v", nodeID, parsed[nodeID].Inputs)
@@ -405,12 +441,11 @@ func TestLoadComfyUIConfig_VyxPatchesAllSeedNodes(t *testing.T) {
 			t.Errorf("node %s seed = %d, want 2024", nodeID, int64(f))
 		}
 	}
-	// Recipe scaffolding must survive: the LoRA stack (2/3/4/5),
-	// the two-pass concat anchors (19/21), and the upscale chain
-	// (11/12/13/14).
-	for _, nodeID := range []string{"2", "3", "4", "5", "19", "21", "11", "12", "13", "14"} {
+	// Permanent-anchor scaffolding (concat nodes 11/13) and the
+	// upscale chain (14/15/16/17/19) must survive.
+	for _, nodeID := range []string{"11", "13", "14", "15", "16", "17", "19"} {
 		if parsed[nodeID].Inputs == nil {
-			t.Errorf("vyx node %s lost during patch", nodeID)
+			t.Errorf("node %s lost during patch", nodeID)
 		}
 	}
 }
@@ -418,7 +453,7 @@ func TestLoadComfyUIConfig_VyxPatchesAllSeedNodes(t *testing.T) {
 func TestReadAndPatchWorkflow_BuiltinPatchesEmbeddedJSON(t *testing.T) {
 	paths := readFixture(t, "{}")
 	h := NewImagesHandler(paths)
-	cfg, ferr := h.loadComfyUIConfig("dixar-character-hyper8")
+	cfg, ferr := h.loadComfyUIConfig("pony-cyberrealistic")
 	if ferr != nil {
 		t.Fatalf("loadComfyUIConfig: %+v", ferr)
 	}
@@ -446,18 +481,18 @@ func TestReadAndPatchWorkflow_BuiltinPatchesEmbeddedJSON(t *testing.T) {
 	if int64(parsed["5"].Inputs["seed"].(float64)) != 123 {
 		t.Errorf("seed not patched: %+v", parsed["5"].Inputs)
 	}
-	// Untouched fields preserved — verify the Hyper LoRA node still
-	// has its lora_name so a regression that destroys the rest of
-	// the workflow surfaces here.
-	if got := parsed["8"].Inputs["lora_name"]; got != "Hyper-SDXL-8steps-lora.safetensors" {
-		t.Errorf("Hyper LoRA node lost: %+v", parsed["8"].Inputs)
+	// Untouched fields preserved — verify the checkpoint loader still
+	// has its ckpt_name so a regression that destroys the rest of the
+	// workflow surfaces here.
+	if got := parsed["1"].Inputs["ckpt_name"]; got != "cyberrealisticPony_v170.safetensors" {
+		t.Errorf("checkpoint loader lost ckpt_name: %+v", parsed["1"].Inputs)
 	}
 }
 
 func TestImagesGenerate_AcceptsWorkflowID(t *testing.T) {
 	// End-to-end: the handler honors p.WorkflowID and builds a cfg
 	// with the embedded JSON. We verify by stubbing Submit and
-	// asserting the submitted workflow has the dixar checkpoint —
+	// asserting the submitted workflow has the pony checkpoint —
 	// confirming the builtin file made it all the way through.
 	paths := readFixture(t, "{}")
 
@@ -498,7 +533,7 @@ func TestImagesGenerate_AcceptsWorkflowID(t *testing.T) {
 	params := imagesGenerateParams{
 		SessionKey: "main|s1",
 		Prompt:     "test",
-		WorkflowID: "dixar-character",
+		WorkflowID: "pony-cyberrealistic",
 	}
 	body, err := json.Marshal(params)
 	if err != nil {
@@ -519,7 +554,7 @@ func TestImagesGenerate_AcceptsWorkflowID(t *testing.T) {
 	mu.Lock()
 	got := submitted
 	mu.Unlock()
-	if !strings.Contains(string(got), "dixar_4DixGalore") {
-		t.Errorf("submitted workflow missing dixar checkpoint: %s", got)
+	if !strings.Contains(string(got), "cyberrealisticPony_v170") {
+		t.Errorf("submitted workflow missing pony checkpoint: %s", got)
 	}
 }

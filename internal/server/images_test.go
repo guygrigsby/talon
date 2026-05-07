@@ -779,3 +779,53 @@ func TestAutoSaveImages_FetchErrorContinuesBatch(t *testing.T) {
 	}
 }
 
+
+func TestImagesDelete_RemovesAutoSavedFile(t *testing.T) {
+	paths := readFixture(t, `{}`)
+	autoDir := filepath.Join(t.TempDir(), "shots")
+	cfgJSON := fmt.Sprintf(`{"images":{"autoSave":{"path":%q}}}`, autoDir)
+	if err := os.WriteFile(paths.Talon.Config, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(autoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(autoDir, "bad.png")
+	if err := os.WriteFile(target, []byte("PNG-data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(paths.Talon.Dir, "images", "index.json")
+	_ = os.MkdirAll(filepath.Dir(indexPath), 0o700)
+	_ = os.WriteFile(indexPath, []byte(`{"items":[{"filename":"bad.png","type":"output"}]}`), 0o600)
+
+	h := NewImagesHandler(paths)
+	if _, ferr := h.handleDelete(t.Context(), HandlerCtx{}, []byte(`{"filename":"bad.png"}`)); ferr != nil {
+		t.Fatalf("delete: %+v", ferr)
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Errorf("auto-saved file should be gone; stat err=%v", err)
+	}
+}
+
+func TestImagesDelete_MissingAutoSavedFileIsNotAnError(t *testing.T) {
+	// File never made it to disk (autoSave was disabled when it was
+	// generated). Delete should still succeed and prune the index.
+	paths := readFixture(t, `{}`)
+	autoDir := filepath.Join(t.TempDir(), "shots")
+	cfgJSON := fmt.Sprintf(`{"images":{"autoSave":{"path":%q}}}`, autoDir)
+	if err := os.WriteFile(paths.Talon.Config, []byte(cfgJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	indexPath := filepath.Join(paths.Talon.Dir, "images", "index.json")
+	_ = os.MkdirAll(filepath.Dir(indexPath), 0o700)
+	_ = os.WriteFile(indexPath, []byte(`{"items":[{"filename":"ghost.png","type":"output"}]}`), 0o600)
+
+	h := NewImagesHandler(paths)
+	res, ferr := h.handleDelete(t.Context(), HandlerCtx{}, []byte(`{"filename":"ghost.png"}`))
+	if ferr != nil {
+		t.Fatalf("delete: %+v", ferr)
+	}
+	if res.(map[string]any)["removed"] != 1 {
+		t.Errorf("removed count: %+v", res)
+	}
+}

@@ -1,25 +1,32 @@
 package server
 
-// Builtin workflow registry. The original images flow had one
+// Builtin + user workflow registry. The original images flow had one
 // workflow at a config-driven path (typically
 // ~/.talon/images/comfyui-default.json) — fine for a single-style
 // setup, but the agent should be able to swap between models/LoRAs
-// without the user editing JSON. This file embeds shipped workflow
-// templates for popular models so they appear as a dropdown in the
-// /images UI alongside the user's custom workflow.
+// without the user editing JSON.
 //
-// Each entry pins the prompt/negative/seed node ids for the
-// corresponding JSON file so readAndPatchWorkflow doesn't have to
-// guess. Adding a new builtin: drop a workflow JSON next to this
-// file (under ./workflows), append an entry here. The shipped JSON
-// uses placeholder strings (%prompt%, %seed%) but they're overwritten
-// by the patcher — values in the file are illustrative only.
+// Two sources merge into the dropdown the /images UI consumes:
+//
+//  1. Embedded builtins under ./workflows. Each entry pins the
+//     prompt/negative/seed node ids for the corresponding JSON file
+//     so readAndPatchWorkflow doesn't have to guess. These ship in
+//     the OSS binary — only generic, public-checkpoint workflows
+//     belong here. Personal LoRA stacks live in the user dir below.
+//
+//  2. User-dir discovery at ~/.talon/images/workflows/<id>.json,
+//     each paired with a sidecar <id>.meta.json carrying the same
+//     node-id pins + label/description as the embed entries. Drop a
+//     workflow + its meta into that directory and it shows up in
+//     the dropdown on the next images.workflows.list call. Lets a
+//     user keep a private workflow stack outside the OSS repo.
 
 import (
 	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,14 +39,29 @@ import (
 //go:embed workflows/*.json
 var builtinWorkflowsFS embed.FS
 
-// builtinWorkflow is one entry in the registry: identity for the
-// dropdown + the node-id pins the patcher needs. Description shows
-// up as a tooltip / sub-line so users can pick by trait without
-// reading the underlying JSON.
-type builtinWorkflow struct {
+// workflowSourceBuiltin / workflowSourceUser tag a workflowEntry by
+// where its JSON lives. Builtins read from the embed FS; user entries
+// read from disk under ~/.talon/images/workflows/. The Source field
+// also flows out on the wire (imagesWorkflowEntry.Source) so the UI
+// can render section separators and per-source affordances.
+const (
+	workflowSourceBuiltin = "builtin"
+	workflowSourceUser    = "user"
+)
+
+// workflowEntry is one row in the registry: identity for the dropdown
+// + the node-id pins the patcher needs. Description shows up as a
+// tooltip / sub-line so users can pick by trait without reading the
+// underlying JSON.
+//
+// For Source=builtin, Filename is a basename relative to the embed's
+// "workflows/" directory. For Source=user, Filename is the absolute
+// disk path. loadWorkflowJSON dispatches on Source.
+type workflowEntry struct {
 	ID                   string
 	Label                string
 	Filename             string
+	Source               string
 	PromptNodeID         string
 	NegativePromptNodeID string
 	SeedNodeID           string
@@ -53,51 +75,17 @@ type builtinWorkflow struct {
 	Description      string
 }
 
-// builtinWorkflows is the source of truth for the dropdown. Order is
-// preserved on the wire so the UI doesn't have to sort. New entries
-// go at the bottom; reordering changes the picker's first-load
-// default for users who haven't picked a workflow yet.
-var builtinWorkflows = []builtinWorkflow{
-	{
-		ID:                   "dixar-character",
-		Label:                "Dixar Character (30 steps)",
-		Filename:             "dixar_character.json",
-		PromptNodeID:         "2",
-		NegativePromptNodeID: "3",
-		SeedNodeID:           "5",
-		Description:          "dixar_4DixGalore checkpoint, deis sampler, 30 steps. Higher quality, slower (~20–30s).",
-	},
-	{
-		ID:                   "dixar-character-hyper8",
-		Label:                "Dixar Character — Hyper-8 (fast)",
-		Filename:             "dixar_character_hyper8.json",
-		PromptNodeID:         "2",
-		NegativePromptNodeID: "3",
-		SeedNodeID:           "5",
-		Description:          "dixar_4DixGalore + Hyper-SDXL 8-step LoRA. ~4x faster, slightly lower fidelity.",
-	},
-	{
-		ID:                   "dixar-3d",
-		Label:                "Dixar 3D LoRA (30 steps)",
-		Filename:             "dixar_3d.json",
-		PromptNodeID:         "2",
-		NegativePromptNodeID: "3",
-		SeedNodeID:           "5",
-		Description:          "dixar_4DixGalore + 3d.safetensors style LoRA, deis sampler, 30 steps. Stylized 3D look.",
-	},
-	{
-		ID:                   "dixar-3d-hyper8",
-		Label:                "Dixar 3D LoRA — Hyper-8 (fast)",
-		Filename:             "dixar_3d_hyper8.json",
-		PromptNodeID:         "2",
-		NegativePromptNodeID: "3",
-		SeedNodeID:           "5",
-		Description:          "dixar_4DixGalore + 3d LoRA + Hyper-SDXL 8-step LoRA. Stylized 3D, ~4x faster.",
-	},
+// builtinWorkflows is the source of truth for the embedded dropdown
+// rows. Order is preserved on the wire so the UI doesn't have to
+// sort. Only generic, public-checkpoint workflows belong here —
+// anything model-specific to a personal stack belongs in the user
+// dir (~/.talon/images/workflows/) so it stays out of the OSS repo.
+var builtinWorkflows = []workflowEntry{
 	{
 		ID:                   "pony-cyberrealistic",
 		Label:                "Pony — CyberRealistic (photoreal)",
 		Filename:             "pony_cyberrealistic.json",
+		Source:               workflowSourceBuiltin,
 		PromptNodeID:         "2",
 		NegativePromptNodeID: "3",
 		SeedNodeID:           "5",
@@ -107,75 +95,11 @@ var builtinWorkflows = []builtinWorkflow{
 		ID:                   "pony-real-anime",
 		Label:                "Pony — Real Anime",
 		Filename:             "pony_real_anime.json",
+		Source:               workflowSourceBuiltin,
 		PromptNodeID:         "2",
 		NegativePromptNodeID: "3",
 		SeedNodeID:           "5",
 		Description:          "realPony_realAnimeNo04 checkpoint, dpmpp_2m_sde/karras, 28 steps. Vibrant anime aesthetic with the Pony score-tag system.",
-	},
-	{
-		// Illustrious uses different node ids than the dixar/pony
-		// set: prompt=6, negative=7, seed=3 (KSampler). VAE is
-		// externalized via VAELoader (sdxl_vae.safetensors) and
-		// decoding goes through VAEDecodeTiled at 1024x1024.
-		ID:                   "illustrious-char",
-		Label:                "SDXL Illustrious — Character (28 steps)",
-		Filename:             "illustrious_char.json",
-		PromptNodeID:         "6",
-		NegativePromptNodeID: "7",
-		SeedNodeID:           "3",
-		Description:          "illustriousXL10Improved_v30 + sdxl_vae external VAE, dpmpp_2m/karras, 28 steps, 1024x1024. Tiled decode.",
-	},
-	{
-		ID:                   "illustrious-hyper",
-		Label:                "SDXL Illustrious — Hyper-8 (fast)",
-		Filename:             "illustrious_hyper.json",
-		PromptNodeID:         "6",
-		NegativePromptNodeID: "7",
-		SeedNodeID:           "3",
-		Description:          "illustriousXL10Improved_v30 + Hyper-SDXL 8-step LoRA + sdxl_vae external VAE. ~4x faster, 1024x1024.",
-	},
-	{
-		// vyx is a two-pass hires-fix workflow on duchaitenPonyReal:
-		// 832x1216 base → Remacri 4x upscale → 1248x1824 downscale →
-		// 0.4-denoise refine. Both KSamplers (9 base, 15 refine)
-		// share the same seed so the refine pass stays coherent.
-		// LoRA stack: ExpressiveH, Skin Color slider (off), Disney
-		// Princess XL (0.4), Perfect Eyes XL (0.5).
-		ID:                   "vyx",
-		Label:                "VYX — duchaitenPonyReal + hires refine",
-		Filename:             "vyx.json",
-		PromptNodeID:         "6",
-		NegativePromptNodeID: "7",
-		SeedNodeID:           "9",
-		ExtraSeedNodeIDs:     []string{"15"},
-		Description:          "duchaitenPonyReal_v20 + 4 LoRAs (ExpressiveH / Skin Color slider / Disney Princess / Perfect Eyes), two-pass hires fix via Remacri 4x upscaler. Slow (~60s) but high fidelity.",
-	},
-	{
-		// dixar_3d_combo: hyper8 speed pass (8 steps, euler) feeds a
-		// 0.4-denoise polish pass (20 steps, dpmpp_2m) without the
-		// Hyper LoRA, so the polish pulls fidelity back from the
-		// 8-step base.
-		ID:                   "dixar-3d-combo",
-		Label:                "Dixar 3D Combo (hyper8 + polish)",
-		Filename:             "dixar_3d_combo.json",
-		PromptNodeID:         "2",
-		NegativePromptNodeID: "3",
-		SeedNodeID:           "5",
-		ExtraSeedNodeIDs:     []string{"18"},
-		Description:          "dixar_4DixGalore + 3d LoRA + Hyper-SDXL (speed pass) + dpmpp_2m polish pass. Two-pass: 8-step speed → 20-step quality polish.",
-	},
-	{
-		// dixar_character_polish is a base + polish two-pass on the
-		// dixar_4DixGalore checkpoint. Base (deis, 30 steps) generates
-		// 832x1216, polish (dpmpp_2m, 15 steps, denoise 0.35) cleans up.
-		ID:                   "dixar-character-polish",
-		Label:                "Dixar Character + Polish (4x hires)",
-		Filename:             "dixar_character_polish.json",
-		PromptNodeID:         "2",
-		NegativePromptNodeID: "3",
-		SeedNodeID:           "5",
-		ExtraSeedNodeIDs:     []string{"18"},
-		Description:          "dixar_4DixGalore, deis 30 steps base + dpmpp_2m 15-step polish (denoise 0.35). Higher fidelity than dixar-character at the cost of one extra pass.",
 	},
 	{
 		// pony_cyberrealistic_tiled adds a megapixel-tiled skin polish
@@ -185,6 +109,7 @@ var builtinWorkflows = []builtinWorkflow{
 		ID:                   "pony-cyberrealistic-tiled",
 		Label:                "Pony — CyberRealistic + Tiled Polish",
 		Filename:             "pony_cyberrealistic_tiled.json",
+		Source:               workflowSourceBuiltin,
 		PromptNodeID:         "2",
 		NegativePromptNodeID: "3",
 		SeedNodeID:           "5",
@@ -192,54 +117,131 @@ var builtinWorkflows = []builtinWorkflow{
 		Description:          "cyberrealisticPony_v170 base (30 steps, dpmpp_2m) + megapixel-tiled skin polish pass (20 steps, denoise 0.3). Photoreal output with tiled high-res polish.",
 	},
 	{
-		// vyx_avatar: vyx + IPAdapter conditioning from a reference
-		// avatar image. Same two-pass structure as vyx (50/25 steps).
-		// PromptNodeID/seed match vyx (prompt=6, seed=9, extra=15).
-		// IPAdapter takes the reference image via a separate node not
-		// reflected in the registry's prompt-substitution surface.
-		ID:                   "vyx-avatar",
-		Label:                "VYX + Avatar (IPAdapter)",
-		Filename:             "vyx_avatar.json",
+		// Illustrious uses different node ids than the pony set:
+		// prompt=6, negative=7, seed=3 (KSampler). VAE is externalized
+		// via VAELoader (sdxl_vae.safetensors) and decoding goes
+		// through VAEDecodeTiled at 1024x1024.
+		ID:                   "illustrious-char",
+		Label:                "SDXL Illustrious — Character (28 steps)",
+		Filename:             "illustrious_char.json",
+		Source:               workflowSourceBuiltin,
 		PromptNodeID:         "6",
 		NegativePromptNodeID: "7",
-		SeedNodeID:           "9",
-		ExtraSeedNodeIDs:     []string{"15"},
-		Description:          "vyx (duchaitenPonyReal + 4 LoRAs, two-pass hires) plus IPAdapter conditioning from a reference avatar image. Use when you have a face/style reference to anchor the result.",
+		SeedNodeID:           "3",
+		Description:          "illustriousXL10Improved_v30 + sdxl_vae external VAE, dpmpp_2m/karras, 28 steps, 1024x1024. Tiled decode.",
 	},
 	{
-		// vyx_avatar_tags: vyx + a separate %avatar_tags% prompt node
-		// (id 34) for pre-generated descriptive tags. No IPAdapter
-		// here — text tags only. Tag substitution itself is not yet
-		// supported by this registry's read/patch API; the workflow
-		// runs as-is (with %avatar_tags% literal) until tag wiring
-		// lands.
-		ID:                   "vyx-avatar-tags",
-		Label:                "VYX + Avatar Tags",
-		Filename:             "vyx_avatar_tags.json",
+		ID:                   "illustrious-hyper",
+		Label:                "SDXL Illustrious — Hyper-8 (fast)",
+		Filename:             "illustrious_hyper.json",
+		Source:               workflowSourceBuiltin,
 		PromptNodeID:         "6",
 		NegativePromptNodeID: "7",
-		SeedNodeID:           "9",
-		ExtraSeedNodeIDs:     []string{"15"},
-		Description:          "vyx + a pre-generated avatar-tag prompt block (no IPAdapter image). %avatar_tags% placeholder in node 34 is currently passed through verbatim — wire the tag substitution before relying on it.",
-	},
-	{
-		// vyx_avatar_and_tags: full bells & whistles. IPAdapter image
-		// + %avatar_tags% text. Same prompt/negative/seed wiring.
-		ID:                   "vyx-avatar-and-tags",
-		Label:                "VYX + Avatar (IPAdapter) + Tags",
-		Filename:             "vyx_avatar_and_tags.json",
-		PromptNodeID:         "6",
-		NegativePromptNodeID: "7",
-		SeedNodeID:           "9",
-		ExtraSeedNodeIDs:     []string{"15"},
-		Description:          "vyx + IPAdapter avatar image + %avatar_tags% pre-generated tags. The richest of the vyx variants. Same caveat on %avatar_tags% substitution as vyx-avatar-tags.",
+		SeedNodeID:           "3",
+		Description:          "illustriousXL10Improved_v30 + Hyper-SDXL 8-step LoRA + sdxl_vae external VAE. ~4x faster, 1024x1024.",
 	},
 }
 
-// findBuiltinWorkflow returns the entry by id, or nil when id is
-// empty / unknown. nil signals "fall through to the user's
-// config-driven default workflow."
-func findBuiltinWorkflow(id string) *builtinWorkflow {
+// userWorkflowMeta is the on-disk sidecar shape. One <id>.meta.json
+// per <id>.json under ~/.talon/images/workflows/. Mirrors the
+// workflowEntry fields the patcher needs; everything else (Source,
+// Filename) is filled in by the loader.
+type userWorkflowMeta struct {
+	ID                   string   `json:"id"`
+	Label                string   `json:"label"`
+	Description          string   `json:"description"`
+	PromptNodeID         string   `json:"promptNodeId"`
+	NegativePromptNodeID string   `json:"negativePromptNodeId"`
+	SeedNodeID           string   `json:"seedNodeId"`
+	ExtraSeedNodeIDs     []string `json:"extraSeedNodeIds,omitempty"`
+}
+
+// userWorkflowsDir returns the discovery root. Sibling of the gallery
+// index.json and the auto-save directory.
+func (h *ImagesHandler) userWorkflowsDir() string {
+	return filepath.Join(h.paths.Talon.Dir, "images", "workflows")
+}
+
+// loadUserWorkflows scans the user dir and returns one entry per
+// (<id>.json, <id>.meta.json) pair. Workflows missing a sidecar are
+// skipped with a warning — the patcher can't run without the node
+// pins, and silently dropping the row would surface as "my workflow
+// disappeared from the dropdown" with no log trail.
+//
+// Errors only on directory-scan failures that aren't "doesn't exist".
+// A missing dir is a normal first-run state; we return an empty slice.
+func (h *ImagesHandler) loadUserWorkflows() ([]workflowEntry, error) {
+	dir := h.userWorkflowsDir()
+	ents, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read user workflows dir %s: %w", dir, err)
+	}
+	out := make([]workflowEntry, 0, len(ents))
+	seen := map[string]struct{}{}
+	for _, ent := range ents {
+		if ent.IsDir() {
+			continue
+		}
+		name := ent.Name()
+		if !strings.HasSuffix(name, ".json") || strings.HasSuffix(name, ".meta.json") {
+			continue
+		}
+		base := strings.TrimSuffix(name, ".json")
+		metaPath := filepath.Join(dir, base+".meta.json")
+		raw, err := os.ReadFile(metaPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				slog.Warn("images user workflow missing sidecar; skipping",
+					"workflow", filepath.Join(dir, name), "expected_meta", metaPath)
+				continue
+			}
+			slog.Warn("images user workflow sidecar unreadable; skipping",
+				"meta", metaPath, "err", err)
+			continue
+		}
+		var meta userWorkflowMeta
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			slog.Warn("images user workflow sidecar invalid JSON; skipping",
+				"meta", metaPath, "err", err)
+			continue
+		}
+		if strings.TrimSpace(meta.ID) == "" || strings.TrimSpace(meta.PromptNodeID) == "" {
+			slog.Warn("images user workflow sidecar missing required fields (id, promptNodeId); skipping",
+				"meta", metaPath)
+			continue
+		}
+		// First-write wins on duplicate IDs — directory order is
+		// stable enough that the warning identifies which file lost.
+		if _, dup := seen[meta.ID]; dup {
+			slog.Warn("images user workflow duplicate id; later entry skipped",
+				"id", meta.ID, "meta", metaPath)
+			continue
+		}
+		seen[meta.ID] = struct{}{}
+		out = append(out, workflowEntry{
+			ID:                   meta.ID,
+			Label:                meta.Label,
+			Filename:             filepath.Join(dir, name),
+			Source:               workflowSourceUser,
+			PromptNodeID:         meta.PromptNodeID,
+			NegativePromptNodeID: meta.NegativePromptNodeID,
+			SeedNodeID:           meta.SeedNodeID,
+			ExtraSeedNodeIDs:     append([]string(nil), meta.ExtraSeedNodeIDs...),
+			Description:          meta.Description,
+		})
+	}
+	return out, nil
+}
+
+// findWorkflow returns the entry matching id from either the embed or
+// the user dir, or nil when id is empty / unknown. Embed takes priority
+// on collision — a user dropping their own "pony-cyberrealistic" into
+// the user dir would be shadowed; that's the right call (drift between
+// the shipped pin set and a user override silently corrupts patching).
+func (h *ImagesHandler) findWorkflow(id string) *workflowEntry {
 	id = strings.TrimSpace(id)
 	if id == "" {
 		return nil
@@ -249,25 +251,47 @@ func findBuiltinWorkflow(id string) *builtinWorkflow {
 			return &builtinWorkflows[i]
 		}
 	}
+	users, err := h.loadUserWorkflows()
+	if err != nil {
+		slog.Warn("images user workflows scan failed",
+			"err", err)
+		return nil
+	}
+	for i := range users {
+		if users[i].ID == id {
+			return &users[i]
+		}
+	}
 	return nil
 }
 
-// loadBuiltinWorkflowJSON reads the shipped JSON for entry. The
-// filename is joined under "workflows/" so callers can't request
-// arbitrary embed paths.
-func loadBuiltinWorkflowJSON(entry *builtinWorkflow) ([]byte, error) {
+// loadWorkflowJSON reads the JSON for entry from whichever source
+// (embed or disk). The embed path joins under "workflows/" so callers
+// can't request arbitrary embed paths; the user path uses the absolute
+// path stored on entry.Filename, which loadUserWorkflows constructed
+// from the discovery root.
+func loadWorkflowJSON(entry *workflowEntry) ([]byte, error) {
 	if entry == nil {
-		return nil, fmt.Errorf("nil builtin workflow")
+		return nil, fmt.Errorf("nil workflow")
 	}
-	path := filepath.ToSlash(filepath.Join("workflows", entry.Filename))
-	raw, err := builtinWorkflowsFS.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read builtin workflow %s: %w", entry.ID, err)
+	var raw []byte
+	switch entry.Source {
+	case workflowSourceUser:
+		b, err := os.ReadFile(entry.Filename)
+		if err != nil {
+			return nil, fmt.Errorf("read user workflow %s: %w", entry.ID, err)
+		}
+		raw = b
+	default:
+		path := filepath.ToSlash(filepath.Join("workflows", entry.Filename))
+		b, err := builtinWorkflowsFS.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("read builtin workflow %s: %w", entry.ID, err)
+		}
+		raw = b
 	}
-	// Validate JSON shape upfront so misconfiguration surfaces here
-	// rather than mid-patch with a less helpful error.
 	if !json.Valid(raw) {
-		return nil, fmt.Errorf("builtin workflow %s: invalid JSON", entry.ID)
+		return nil, fmt.Errorf("workflow %s: invalid JSON", entry.ID)
 	}
 	return raw, nil
 }
@@ -279,9 +303,10 @@ type imagesWorkflowEntry struct {
 	Label       string `json:"label"`
 	Description string `json:"description,omitempty"`
 	// Source distinguishes the user's config-driven default ("user")
-	// from shipped builtins ("builtin"). The UI uses this to render
-	// section separators and a "Configure path" link for the user
-	// row.
+	// from shipped builtins ("builtin"). User-dir discovery rows also
+	// use "user" — same surface from the UI's perspective. The UI uses
+	// this to render section separators and a "Configure path" link
+	// for the legacy default row.
 	Source string `json:"source"`
 }
 
@@ -338,8 +363,9 @@ func (h *ImagesHandler) handleWorkflowsGet(_ context.Context, _ HandlerCtx, para
 }
 
 // handleWorkflowsList returns the available workflow templates: the
-// user's config-driven workflow first (when configured) and every
-// builtin entry. The list is the input to the /images dropdown.
+// user's config-driven legacy default first (when configured), every
+// builtin entry, then every user-dir workflow. The list is the input
+// to the /images dropdown.
 func (h *ImagesHandler) handleWorkflowsList(_ context.Context, _ HandlerCtx, _ json.RawMessage) (any, *FrameError) {
 	out := []imagesWorkflowEntry{}
 	// Surface the user's default workflow only when it actually
@@ -352,7 +378,7 @@ func (h *ImagesHandler) handleWorkflowsList(_ context.Context, _ HandlerCtx, _ j
 			ID:          "",
 			Label:       "Default (configured)",
 			Description: "Your workflow at " + cfg.WorkflowPath,
-			Source:      "user",
+			Source:      workflowSourceUser,
 		})
 	}
 	for _, b := range builtinWorkflows {
@@ -360,7 +386,23 @@ func (h *ImagesHandler) handleWorkflowsList(_ context.Context, _ HandlerCtx, _ j
 			ID:          b.ID,
 			Label:       b.Label,
 			Description: b.Description,
-			Source:      "builtin",
+			Source:      workflowSourceBuiltin,
+		})
+	}
+	users, err := h.loadUserWorkflows()
+	if err != nil {
+		// Don't fail the whole list — embed entries are still
+		// usable. The discovery error is logged inside
+		// loadUserWorkflows for follow-up.
+		slog.Warn("images user workflows scan failed",
+			"err", err)
+	}
+	for _, u := range users {
+		out = append(out, imagesWorkflowEntry{
+			ID:          u.ID,
+			Label:       u.Label,
+			Description: u.Description,
+			Source:      workflowSourceUser,
 		})
 	}
 	return map[string]any{"workflows": out}, nil
