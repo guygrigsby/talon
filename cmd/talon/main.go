@@ -100,6 +100,7 @@ func main() {
 	root.AddCommand(docsCmd())
 	root.AddCommand(secretsCmd())
 	root.AddCommand(dashboardCmd())
+	root.AddCommand(cronCmd())
 
 	// closeSharedRPC is wired as the post-run hook so any RPC client
 	// the command branches lazily opened gets its WS shut cleanly
