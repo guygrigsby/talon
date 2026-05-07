@@ -1,0 +1,94 @@
+{
+  "styles": [
+    {
+      "id": "simpsons",
+      "label": "The Simpsons",
+      "description": "Flat yellow skin, thick black outlines, four-finger hands. Works best with denoise 0.6-0.75.",
+      "promptSuffix": ", in the style of The Simpsons cartoon, simpsons-style, flat yellow cartoon skin, thick black outlines, simple flat colors, 2D animation, four-finger hands",
+      "negativeSuffix": ", photorealistic, photo, 3d render, detailed shading, realistic skin texture",
+      "denoise": 0.65,
+      "baseModel": "Pony"
+    },
+    {
+      "id": "clone-wars",
+      "label": "Star Wars: Clone Wars (animated)",
+      "description": "Genndy/Lucasfilm Animation aesthetic — angular features, cel shading, painterly backgrounds.",
+      "promptSuffix": ", in the style of Star Wars Clone Wars animated series, genndy tartakovsky, cel-shaded animation, angular features, sharp jaw, painterly background, anime cartoon hybrid, hard shadows",
+      "negativeSuffix": ", photorealistic, soft skin, photo, 3d render, photorealism",
+      "denoise": 0.65,
+      "baseModel": "Pony"
+    },
+    {
+      "id": "studio-ghibli",
+      "label": "Studio Ghibli",
+      "description": "Soft watercolor backgrounds, gentle line work, Miyazaki/Takahata aesthetic.",
+      "promptSuffix": ", in the style of Studio Ghibli, miyazaki, ghibli anime, hand-painted watercolor background, soft line art, gentle anime illustration, warm light",
+      "negativeSuffix": ", photorealistic, photo, 3d render, dark, gritty",
+      "denoise": 0.6,
+      "baseModel": "Pony"
+    },
+    {
+      "id": "pixar",
+      "label": "Pixar / 3D Animation",
+      "description": "Pixar/Disney 3D animated film aesthetic — large eyes, soft global illumination, polished render.",
+      "promptSuffix": ", in the style of pixar 3d animated film, pixar character design, disney animation, soft global illumination, polished 3d render, expressive large eyes, smooth subsurface scattering",
+      "negativeSuffix": ", photorealistic, photo, gritty, low quality, flat illustration",
+      "denoise": 0.7,
+      "baseModel": "Pony"
+    },
+    {
+      "id": "watercolor",
+      "label": "Watercolor painting",
+      "description": "Loose watercolor wash, paper texture, gentle pigment bleed.",
+      "promptSuffix": ", watercolor painting, loose wet brush strokes, paper texture, pigment bleed, soft edges, traditional media, fine art illustration",
+      "negativeSuffix": ", photorealistic, photo, 3d render, sharp focus, digital art",
+      "denoise": 0.55,
+      "baseModel": "Pony"
+    },
+    {
+      "id": "oil-painting",
+      "label": "Oil painting",
+      "description": "Classical oil painting, visible brushwork, rich color depth.",
+      "promptSuffix": ", oil painting, visible brush strokes, impasto, canvas texture, classical painting, rich saturated colors, chiaroscuro lighting",
+      "negativeSuffix": ", photorealistic, photo, 3d render, smooth digital",
+      "denoise": 0.6,
+      "baseModel": "Pony"
+    },
+    {
+      "id": "comic-book",
+      "label": "Western comic book",
+      "description": "Inked panel art, halftone shading, bold flat colors.",
+      "promptSuffix": ", western comic book art, inked line art, halftone shading, bold flat colors, dynamic pose, panel illustration, marvel dc style",
+      "negativeSuffix": ", photorealistic, photo, 3d render",
+      "denoise": 0.65,
+      "baseModel": "Pony"
+    },
+    {
+      "id": "manga",
+      "label": "Manga (black and white)",
+      "description": "Black and white manga, screentones, ink line work.",
+      "promptSuffix": ", manga style, black and white, screentone shading, ink line art, monochrome, japanese comic, dynamic panels",
+      "negativeSuffix": ", color, photorealistic, photo, 3d render",
+      "denoise": 0.7,
+      "baseModel": "Pony"
+    },
+    {
+      "id": "low-poly",
+      "label": "Low-poly 3D",
+      "description": "PS1-era / faceted 3D look, flat shading, visible polygons.",
+      "promptSuffix": ", low poly 3d, faceted polygons, flat shaded, ps1 style, n64 style, retro 3d, geometric",
+      "negativeSuffix": ", photorealistic, photo, smooth surfaces, high poly",
+      "denoise": 0.7,
+      "baseModel": "Pony"
+    },
+    {
+      "id": "pixel-art",
+      "label": "Pixel art",
+      "description": "16-bit / 32-bit pixel art aesthetic, limited palette, clean dithering.",
+      "promptSuffix": ", pixel art, 16bit, retro game sprite, limited color palette, clean dithering, sharp pixels, isometric or sidescroller perspective",
+      "negativeSuffix": ", photorealistic, photo, 3d render, smooth shading, antialiased",
+      "denoise": 0.75,
+      "baseModel": "Pony"
+    }
+  ]
+}

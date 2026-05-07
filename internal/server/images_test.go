@@ -198,11 +198,15 @@ func TestImagesFetch_RejectsMissingFilename(t *testing.T) {
 // --- handler happy path with stub client + captured events ----------------
 
 type stubComfyUI struct {
-	submit     func(ctx context.Context, w json.RawMessage, cid string) (*comfyui.SubmitResult, error)
-	events     func(ctx context.Context, cid string) (<-chan comfyui.Event, <-chan error, error)
-	history    func(ctx context.Context, pid string) (*comfyui.HistoryEntry, error)
-	historyAll func(ctx context.Context, max int) ([]comfyui.HistoryListEntry, error)
-	fetch      func(ctx context.Context, ref comfyui.ImageRef, preview string) ([]byte, string, error)
+	submit         func(ctx context.Context, w json.RawMessage, cid string) (*comfyui.SubmitResult, error)
+	events         func(ctx context.Context, cid string) (<-chan comfyui.Event, <-chan error, error)
+	history        func(ctx context.Context, pid string) (*comfyui.HistoryEntry, error)
+	historyAll     func(ctx context.Context, max int) ([]comfyui.HistoryListEntry, error)
+	fetch          func(ctx context.Context, ref comfyui.ImageRef, preview string) ([]byte, string, error)
+	upload         func(ctx context.Context, name string, body []byte, opts comfyui.UploadOptions) (*comfyui.UploadResult, error)
+	objectInfo     func(ctx context.Context) (comfyui.ObjectInfo, error)
+	managerStatus  func(ctx context.Context) (*comfyui.ManagerStatus, error)
+	managerInstall func(ctx context.Context, req comfyui.ManagerInstallRequest) (*comfyui.ManagerInstallResult, error)
 }
 
 func (s *stubComfyUI) Submit(ctx context.Context, w json.RawMessage, cid string) (*comfyui.SubmitResult, error) {
@@ -230,6 +234,30 @@ func (s *stubComfyUI) Fetch(ctx context.Context, ref comfyui.ImageRef, preview s
 		return []byte{0x89, 'P', 'N', 'G', '\r', '\n', 0x1a, '\n'}, "image/png", nil
 	}
 	return s.fetch(ctx, ref, preview)
+}
+func (s *stubComfyUI) Upload(ctx context.Context, name string, body []byte, opts comfyui.UploadOptions) (*comfyui.UploadResult, error) {
+	if s.upload == nil {
+		return &comfyui.UploadResult{Filename: name, Subfolder: opts.Subfolder, Type: "input"}, nil
+	}
+	return s.upload(ctx, name, body, opts)
+}
+func (s *stubComfyUI) ObjectInfo(ctx context.Context) (comfyui.ObjectInfo, error) {
+	if s.objectInfo == nil {
+		return comfyui.ObjectInfo{}, nil
+	}
+	return s.objectInfo(ctx)
+}
+func (s *stubComfyUI) ManagerStatus(ctx context.Context) (*comfyui.ManagerStatus, error) {
+	if s.managerStatus == nil {
+		return &comfyui.ManagerStatus{Present: false}, nil
+	}
+	return s.managerStatus(ctx)
+}
+func (s *stubComfyUI) ManagerInstall(ctx context.Context, req comfyui.ManagerInstallRequest) (*comfyui.ManagerInstallResult, error) {
+	if s.managerInstall == nil {
+		return &comfyui.ManagerInstallResult{OK: true}, nil
+	}
+	return s.managerInstall(ctx, req)
 }
 
 type capturedEvent struct {

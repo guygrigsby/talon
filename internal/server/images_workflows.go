@@ -140,6 +140,22 @@ var builtinWorkflows = []workflowEntry{
 		SeedNodeID:           "3",
 		Description:          "illustriousXL10Improved_v30 + Hyper-SDXL 8-step LoRA + sdxl_vae external VAE. ~4x faster, 1024x1024.",
 	},
+	{
+		// img2img-pony: source-image-driven workflow. The Studio UI
+		// uploads an image via images.upload, then submits this
+		// workflow with nodeOverrides setting LoadImage (node 4)'s
+		// `image` input to the uploaded filename. Denoise (node 6's
+		// inputs.denoise) is the primary slider — 0.3 preserves the
+		// source closely, 0.7+ regenerates substantially.
+		ID:                   "img2img-pony",
+		Label:                "Img2Img — Pony (CyberRealistic)",
+		Filename:             "img2img_pony.json",
+		Source:               workflowSourceBuiltin,
+		PromptNodeID:         "2",
+		NegativePromptNodeID: "3",
+		SeedNodeID:           "6",
+		Description:          "Image-to-image with cyberrealisticPony_v170. Upload a source image; denoise (0.3 = subtle restyle, 0.7 = regenerate) drives how much the output diverges. Composition follows the source.",
+	},
 }
 
 // userWorkflowMeta is the on-disk sidecar shape. One <id>.meta.json

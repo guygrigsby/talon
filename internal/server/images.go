@@ -72,6 +72,10 @@ type ComfyUIClient interface {
 	History(ctx context.Context, promptID string) (*comfyui.HistoryEntry, error)
 	HistoryAll(ctx context.Context, max int) ([]comfyui.HistoryListEntry, error)
 	Fetch(ctx context.Context, ref comfyui.ImageRef, preview string) ([]byte, string, error)
+	Upload(ctx context.Context, filename string, body []byte, opts comfyui.UploadOptions) (*comfyui.UploadResult, error)
+	ObjectInfo(ctx context.Context) (comfyui.ObjectInfo, error)
+	ManagerStatus(ctx context.Context) (*comfyui.ManagerStatus, error)
+	ManagerInstall(ctx context.Context, req comfyui.ManagerInstallRequest) (*comfyui.ManagerInstallResult, error)
 }
 
 // NewImagesHandler returns a handler bound to paths. The default dial
@@ -103,10 +107,14 @@ func (h *ImagesHandler) WithEmit(e func(sess *Session, runID, sessionKey, state 
 func (h *ImagesHandler) Register(r *Registry) {
 	r.Register("images.generate", h.handleGenerate)
 	r.Register("images.fetch", h.handleFetch)
+	r.Register("images.upload", h.handleUpload)
 	r.Register("images.list", h.handleList)
 	r.Register("images.delete", h.handleDelete)
 	r.Register("images.workflows.list", h.handleWorkflowsList)
 	r.Register("images.workflows.get", h.handleWorkflowsGet)
+	r.Register("images.objectInfo", h.handleObjectInfo)
+	r.Register("images.manager.status", h.handleManagerStatus)
+	r.Register("images.manager.install", h.handleManagerInstall)
 }
 
 // --- images.generate -------------------------------------------------------
@@ -435,6 +443,173 @@ func (h *ImagesHandler) handleFetch(_ context.Context, _ HandlerCtx, params json
 		"size":        len(body),
 		"base64":      base64.StdEncoding.EncodeToString(body),
 		"dataUrl":     "data:" + ctype + ";base64," + base64.StdEncoding.EncodeToString(body),
+	}, nil
+}
+
+// --- images.upload ---------------------------------------------------------
+
+type imagesUploadParams struct {
+	// Filename is the target name on ComfyUI's side. ComfyUI may
+	// auto-suffix to avoid collisions; the resolved name comes back
+	// in the response. Required.
+	Filename string `json:"filename"`
+	// Subfolder under the chosen Type. Empty places at the root.
+	Subfolder string `json:"subfolder,omitempty"`
+	// Type selects "input" (default, for img2img source images),
+	// "temp", or "output". img2img workflows reference uploads via
+	// LoadImage which reads from the input dir.
+	Type string `json:"type,omitempty"`
+	// ContentType is forwarded to the multipart part header so
+	// ComfyUI stores the file with the right extension. Defaults to
+	// application/octet-stream.
+	ContentType string `json:"contentType,omitempty"`
+	// Base64-encoded image bytes. Required.
+	Base64 string `json:"base64"`
+	// Overwrite=true asks ComfyUI to clobber a same-named file
+	// rather than auto-suffix.
+	Overwrite bool `json:"overwrite,omitempty"`
+}
+
+// handleUpload proxies ComfyUI's /upload/image so the Studio UI can
+// drop image bytes onto the gateway and reference them in workflows
+// via their resolved filename. The upload path is a sibling of the
+// generate flow: the UI uploads, gets the filename back, then submits
+// a workflow whose LoadImage node carries that filename via
+// nodeOverrides. No persistent state is added on talon's side — the
+// uploaded bytes live in ComfyUI's input dir, indexed by name only.
+func (h *ImagesHandler) handleUpload(_ context.Context, _ HandlerCtx, params json.RawMessage) (any, *FrameError) {
+	var p imagesUploadParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.upload: " + err.Error()}
+	}
+	if strings.TrimSpace(p.Filename) == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.upload: filename is required"}
+	}
+	if strings.TrimSpace(p.Base64) == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.upload: base64 body is required"}
+	}
+	body, err := base64.StdEncoding.DecodeString(p.Base64)
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.upload: base64 decode: " + err.Error()}
+	}
+	cfg, ferr := h.loadComfyUIConfig("")
+	if ferr != nil {
+		return nil, ferr
+	}
+	cli := h.dial(cfg.BaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	out, err := cli.Upload(ctx, p.Filename, body, comfyui.UploadOptions{
+		Subfolder:   p.Subfolder,
+		Type:        p.Type,
+		ContentType: p.ContentType,
+		Overwrite:   p.Overwrite,
+	})
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.upload: " + err.Error()}
+	}
+	return map[string]any{
+		"filename":  out.Filename,
+		"subfolder": out.Subfolder,
+		"type":      out.Type,
+	}, nil
+}
+
+// --- images.objectInfo -----------------------------------------------------
+
+// handleObjectInfo proxies ComfyUI's /object_info, the source-of-truth
+// for which checkpoints/LoRAs/samplers/etc. are installed on the
+// remote box. The Studio UI uses this to filter the style-preset
+// dropdown to the LoRAs the user actually has, and to surface
+// install hints for missing ones.
+//
+// The response is large (multiple MB on a fully-loaded ComfyUI), so
+// callers should cache. We don't cache server-side because the
+// payload is opaque to us — extensions add new node classes
+// dynamically and the UI's parsing logic evolves faster than the
+// server's.
+func (h *ImagesHandler) handleObjectInfo(_ context.Context, _ HandlerCtx, _ json.RawMessage) (any, *FrameError) {
+	cfg, ferr := h.loadComfyUIConfig("")
+	if ferr != nil {
+		return nil, ferr
+	}
+	cli := h.dial(cfg.BaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	info, err := cli.ObjectInfo(ctx)
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.objectInfo: " + err.Error()}
+	}
+	return map[string]any{"objectInfo": info}, nil
+}
+
+// --- images.manager.status -------------------------------------------------
+
+// handleManagerStatus probes the active ComfyUI for the Manager
+// extension. Used by the Studio UI to gate the "click to install"
+// surface — when the manager isn't present, the UI falls back to
+// rendering an external download link instead.
+func (h *ImagesHandler) handleManagerStatus(_ context.Context, _ HandlerCtx, _ json.RawMessage) (any, *FrameError) {
+	cfg, ferr := h.loadComfyUIConfig("")
+	if ferr != nil {
+		return nil, ferr
+	}
+	cli := h.dial(cfg.BaseURL)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	st, err := cli.ManagerStatus(ctx)
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.manager.status: " + err.Error()}
+	}
+	return map[string]any{
+		"present":  st.Present,
+		"endpoint": st.Endpoint,
+	}, nil
+}
+
+// --- images.manager.install ------------------------------------------------
+
+type imagesManagerInstallParams struct {
+	Type     string `json:"type"`
+	URL      string `json:"url"`
+	Filename string `json:"filename,omitempty"`
+	SavePath string `json:"savePath,omitempty"`
+}
+
+// handleManagerInstall posts an install request to ComfyUI-Manager.
+// The manager queues the install asynchronously; OK=true confirms
+// receipt, not completion. Studio UI follows up with images.objectInfo
+// to detect when the file is actually present.
+func (h *ImagesHandler) handleManagerInstall(_ context.Context, _ HandlerCtx, params json.RawMessage) (any, *FrameError) {
+	var p imagesManagerInstallParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.manager.install: " + err.Error()}
+	}
+	if strings.TrimSpace(p.Type) == "" || strings.TrimSpace(p.URL) == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.manager.install: type and url are required"}
+	}
+	cfg, ferr := h.loadComfyUIConfig("")
+	if ferr != nil {
+		return nil, ferr
+	}
+	cli := h.dial(cfg.BaseURL)
+	// Long timeout: the manager may stream the download synchronously
+	// before responding on some versions. Five minutes covers anything
+	// up to a multi-GB checkpoint on a slow link.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	res, err := cli.ManagerInstall(ctx, comfyui.ManagerInstallRequest{
+		Type:     p.Type,
+		URL:      p.URL,
+		Filename: p.Filename,
+		SavePath: p.SavePath,
+	})
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "images.manager.install: " + err.Error()}
+	}
+	return map[string]any{
+		"ok":      res.OK,
+		"message": res.Message,
 	}, nil
 }
 

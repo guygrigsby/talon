@@ -174,6 +174,123 @@ func TestEvents_StreamsServerFrames(t *testing.T) {
 	}
 }
 
+func TestUpload_PostsMultipartAndReturnsResolvedFilename(t *testing.T) {
+	var (
+		gotMethod, gotPath, gotContentType string
+		gotImageBytes                      []byte
+		gotImageFilename                   string
+		gotImagePartCT                     string
+		gotSubfolder, gotType, gotOverwrite string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		gotContentType = r.Header.Get("Content-Type")
+		// Parse the multipart form to mirror what ComfyUI does.
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			t.Fatalf("parse multipart: %v", err)
+		}
+		gotSubfolder = r.FormValue("subfolder")
+		gotType = r.FormValue("type")
+		gotOverwrite = r.FormValue("overwrite")
+		fhs := r.MultipartForm.File["image"]
+		if len(fhs) != 1 {
+			t.Fatalf("expected one image file, got %d", len(fhs))
+		}
+		gotImageFilename = fhs[0].Filename
+		gotImagePartCT = fhs[0].Header.Get("Content-Type")
+		f, err := fhs[0].Open()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		buf := make([]byte, fhs[0].Size)
+		if _, err := f.Read(buf); err != nil && err.Error() != "EOF" {
+			t.Fatal(err)
+		}
+		gotImageBytes = buf
+
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"src (1).png","subfolder":"uploads","type":"input"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	body := []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a, 'p', 'a', 'y'}
+	res, err := c.Upload(t.Context(), "src.png", body, UploadOptions{
+		Subfolder:   "uploads",
+		Type:        "input",
+		ContentType: "image/png",
+		Overwrite:   true,
+	})
+	if err != nil {
+		t.Fatalf("Upload: %v", err)
+	}
+	if res.Filename != "src (1).png" {
+		t.Errorf("Filename: %q", res.Filename)
+	}
+	if res.Subfolder != "uploads" || res.Type != "input" {
+		t.Errorf("response fields: %+v", res)
+	}
+
+	if gotMethod != http.MethodPost || gotPath != "/upload/image" {
+		t.Errorf("request: %s %s", gotMethod, gotPath)
+	}
+	if !strings.HasPrefix(gotContentType, "multipart/form-data; boundary=") {
+		t.Errorf("content-type: %q", gotContentType)
+	}
+	if gotImageFilename != "src.png" {
+		t.Errorf("part filename: %q", gotImageFilename)
+	}
+	if gotImagePartCT != "image/png" {
+		t.Errorf("part content-type: %q", gotImagePartCT)
+	}
+	if string(gotImageBytes) != string(body) {
+		t.Errorf("part body bytes mismatch")
+	}
+	if gotSubfolder != "uploads" || gotType != "input" || gotOverwrite != "true" {
+		t.Errorf("form fields: subfolder=%q type=%q overwrite=%q", gotSubfolder, gotType, gotOverwrite)
+	}
+}
+
+func TestUpload_RejectsEmptyFilenameOrBody(t *testing.T) {
+	c := New("http://unused")
+	if _, err := c.Upload(t.Context(), "", []byte("x"), UploadOptions{}); err == nil {
+		t.Error("expected error for empty filename")
+	}
+	if _, err := c.Upload(t.Context(), "x.png", nil, UploadOptions{}); err == nil {
+		t.Error("expected error for empty body")
+	}
+}
+
+func TestObjectInfo_DecodesNodeMap(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/object_info" {
+			t.Errorf("path: %s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"LoraLoader":{"input":{"required":{"lora_name":[["a.safetensors","b.safetensors"]]}}}}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL)
+	info, err := c.ObjectInfo(t.Context())
+	if err != nil {
+		t.Fatalf("ObjectInfo: %v", err)
+	}
+	if _, ok := info["LoraLoader"]; !ok {
+		t.Errorf("expected LoraLoader entry, got keys %v", keys(info))
+	}
+}
+
+func keys(m ObjectInfo) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	return out
+}
+
 func TestHTTPToWS(t *testing.T) {
 	cases := map[string]string{
 		"http://x:1/p":  "ws://x:1/p",

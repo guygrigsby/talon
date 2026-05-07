@@ -10,11 +10,14 @@
 package comfyui
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
+	"net/textproto"
 	"net/url"
 	"strconv"
 	"strings"
@@ -307,6 +310,153 @@ func (c *Client) Fetch(ctx context.Context, ref ImageRef, preview string) ([]byt
 		return nil, "", fmt.Errorf("comfyui fetch: http %d: %s", resp.StatusCode, truncate(string(body), 256))
 	}
 	return body, resp.Header.Get("Content-Type"), nil
+}
+
+// UploadResult mirrors the /upload/image response. ComfyUI returns
+// the resolved filename (which may differ from the requested name if a
+// collision was detected and `overwrite` was false), the subfolder it
+// was placed in, and the type ("input"/"temp"/"output"). The same
+// triple is what LoadImage nodes consume in a workflow graph.
+type UploadResult struct {
+	Filename  string `json:"name"`
+	Subfolder string `json:"subfolder"`
+	Type      string `json:"type"`
+}
+
+// Upload posts image bytes to ComfyUI's /upload/image endpoint.
+// filename is the target name on the ComfyUI side; ComfyUI may add a
+// numeric suffix to avoid clobbering a prior upload (the resolved
+// name comes back in UploadResult.Filename). subfolder is optional;
+// imageType selects "input" (default for img2img sources), "temp", or
+// "output". contentType is forwarded to the multipart Content-Type
+// header — pass "image/png" / "image/jpeg" / "image/webp" so ComfyUI
+// stores the file with the right extension. Empty defaults to
+// application/octet-stream which ComfyUI will accept but the file
+// extension may be wrong.
+func (c *Client) Upload(ctx context.Context, filename string, body []byte, opts UploadOptions) (*UploadResult, error) {
+	if filename == "" {
+		return nil, fmt.Errorf("comfyui upload: filename is required")
+	}
+	if len(body) == 0 {
+		return nil, fmt.Errorf("comfyui upload: body is empty")
+	}
+	imageType := opts.Type
+	if imageType == "" {
+		imageType = "input"
+	}
+	contentType := opts.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+
+	var buf bytes.Buffer
+	w := multipart.NewWriter(&buf)
+	// "image" is the field ComfyUI's /upload/image handler reads from
+	// (named after the canonical web UI form). Set the per-part
+	// Content-Type explicitly so a JPEG goes through as image/jpeg
+	// rather than the generic application/octet-stream the default
+	// CreateFormFile shorthand would produce.
+	hdr := make(textproto.MIMEHeader)
+	hdr.Set("Content-Disposition", fmt.Sprintf(`form-data; name="image"; filename=%q`, filename))
+	hdr.Set("Content-Type", contentType)
+	part, err := w.CreatePart(hdr)
+	if err != nil {
+		return nil, fmt.Errorf("comfyui upload: build form: %w", err)
+	}
+	if _, err := part.Write(body); err != nil {
+		return nil, fmt.Errorf("comfyui upload: write body: %w", err)
+	}
+	if opts.Subfolder != "" {
+		if err := w.WriteField("subfolder", opts.Subfolder); err != nil {
+			return nil, fmt.Errorf("comfyui upload: write subfolder: %w", err)
+		}
+	}
+	if err := w.WriteField("type", imageType); err != nil {
+		return nil, fmt.Errorf("comfyui upload: write type: %w", err)
+	}
+	if opts.Overwrite {
+		if err := w.WriteField("overwrite", "true"); err != nil {
+			return nil, fmt.Errorf("comfyui upload: write overwrite: %w", err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("comfyui upload: close form: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/upload/image", &buf)
+	if err != nil {
+		return nil, fmt.Errorf("comfyui upload: build request: %w", err)
+	}
+	req.Header.Set("Content-Type", w.FormDataContentType())
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("comfyui upload: %w", err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("comfyui upload: read body: %w", err)
+	}
+	if resp.StatusCode/100 != 2 {
+		return nil, fmt.Errorf("comfyui upload: http %d: %s", resp.StatusCode, truncate(string(raw), 256))
+	}
+	var out UploadResult
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return nil, fmt.Errorf("comfyui upload: decode: %w (body=%s)", err, truncate(string(raw), 256))
+	}
+	if out.Filename == "" {
+		return nil, fmt.Errorf("comfyui upload: empty filename in response (body=%s)", truncate(string(raw), 256))
+	}
+	return &out, nil
+}
+
+// UploadOptions is the parameter envelope for Client.Upload.
+// Subfolder is optional ("" places the file at the root of the
+// selected type's directory); Type defaults to "input" when empty;
+// ContentType defaults to application/octet-stream; Overwrite=true
+// asks ComfyUI to clobber a same-named file rather than auto-suffix.
+type UploadOptions struct {
+	Subfolder   string
+	Type        string
+	ContentType string
+	Overwrite   bool
+}
+
+// ObjectInfo is the (huge) response shape from ComfyUI's /object_info
+// endpoint, which describes every node class the server knows about
+// plus the value enums for each input. Talon mainly uses it to
+// enumerate installed LoRAs (LoraLoader.input.required.lora_name)
+// and checkpoints (CheckpointLoaderSimple.input.required.ckpt_name)
+// without parsing the underlying filesystem. The shape is loosely
+// typed because ComfyUI extensions extend the node graph
+// dynamically; consumers index by node class name and traverse the
+// nested input descriptors as needed.
+type ObjectInfo map[string]json.RawMessage
+
+// ObjectInfo fetches /object_info. Used to detect installed
+// loras/checkpoints/etc. Cheap to call but the payload is multiple
+// MB on a fully-loaded ComfyUI; callers should cache the result if
+// they need it more than once per minute.
+func (c *Client) ObjectInfo(ctx context.Context) (ObjectInfo, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+"/object_info", nil)
+	if err != nil {
+		return nil, fmt.Errorf("comfyui object_info: build request: %w", err)
+	}
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("comfyui object_info: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		raw, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("comfyui object_info: http %d: %s", resp.StatusCode, truncate(string(raw), 256))
+	}
+	var out ObjectInfo
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("comfyui object_info: decode: %w", err)
+	}
+	return out, nil
 }
 
 // httpToWS rewrites http(s)://… to ws(s)://… so the WS dial reuses the
