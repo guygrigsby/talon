@@ -4,20 +4,28 @@ import (
 	"context"
 	"io"
 	"log"
+	"log/slog"
 	"strings"
 	"testing"
 
 	"github.com/guygrigsby/talon/internal/provider"
 )
 
-// silenceLogs muzzles the global logger for the duration of a
-// benchmark so the chat.timing log line (one per turn) doesn't
-// pollute -bench output. Restored via b.Cleanup.
+// silenceLogs muzzles both log and slog for the duration of a
+// benchmark so the per-turn timing log line doesn't inflate ns/op.
+// slog is set to a handler with a prohibitively high level so
+// Enabled() returns false and slog.Info skips record allocation
+// entirely. Restored via b.Cleanup.
 func silenceLogs(b *testing.B) {
 	b.Helper()
 	prev := log.Writer()
 	log.SetOutput(io.Discard)
-	b.Cleanup(func() { log.SetOutput(prev) })
+	prevSlog := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.Level(100)})))
+	b.Cleanup(func() {
+		log.SetOutput(prev)
+		slog.SetDefault(prevSlog)
+	})
 }
 
 // instantProvider emits a fixed sequence of deltas and closes,
