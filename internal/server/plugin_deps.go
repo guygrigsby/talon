@@ -447,13 +447,18 @@ var builtinPlugins = []builtinPlugin{
 // the gateway's plugin-spec parser) fall through to a sane default
 // when an enabled entry has no explicit cmd in config.
 //
-// The returned path is the prod-image absolute path; the spawn-time
-// resolver in internal/plugin remaps to a sibling-of-talon or PATH
-// hit when the absolute path is missing.
+// The command is self-referential: [<talon-binary>, "plugin", "run",
+// name]. No separate plugin binary is required — the running talon
+// binary handles all bundled plugins via 'talon plugin run <name>'.
+// If os.Executable fails, "talon" is used as a PATH fallback.
 func BuiltinPluginCmd(name string) []string {
 	for _, b := range builtinPlugins {
 		if b.EntryName == name {
-			return []string{b.BinaryPath}
+			exe, err := os.Executable()
+			if err != nil {
+				exe = "talon"
+			}
+			return []string{exe, "plugin", "run", name}
 		}
 	}
 	return nil

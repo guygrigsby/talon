@@ -368,7 +368,6 @@ func configureTelegram(in io.Reader, out io.Writer) error {
 		{[]string{"channels", "telegram", "agentId"}, "main"},
 		{[]string{"plugins", "entries", "telegram"}, map[string]any{
 			"enabled": true,
-			"cmd":     []any{"/usr/local/bin/talon-telegram-plugin"},
 		}},
 	}
 	for _, w := range writes {
@@ -512,7 +511,6 @@ func configureBluebubbles(in io.Reader, out io.Writer) error {
 		{[]string{"channels", "bluebubbles", "agentId"}, "main"},
 		{[]string{"plugins", "entries", "bluebubbles"}, map[string]any{
 			"enabled": true,
-			"cmd":     []any{"/usr/local/bin/talon-bluebubbles-plugin"},
 		}},
 	}
 	for _, w := range writes {

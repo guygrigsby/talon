@@ -47,7 +47,7 @@ type ChannelsSetupHandler struct {
 func NewChannelsSetupHandler(paths openclaw.Paths) *ChannelsSetupHandler {
 	return &ChannelsSetupHandler{
 		paths:     paths,
-		pluginCmd: []string{"/usr/local/bin/talon-telegram-plugin"},
+		pluginCmd: nil, // nil → use BuiltinPluginCmd fallback at spawn time
 	}
 }
 

@@ -102,6 +102,7 @@ func main() {
 	root.AddCommand(dashboardCmd())
 	root.AddCommand(cronCmd())
 	root.AddCommand(imagesCmd())
+	root.AddCommand(pluginCmd())
 
 	// closeSharedRPC is wired as the post-run hook so any RPC client
 	// the command branches lazily opened gets its WS shut cleanly
