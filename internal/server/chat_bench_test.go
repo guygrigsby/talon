@@ -21,7 +21,7 @@ func silenceLogs(b *testing.B) {
 	prev := log.Writer()
 	log.SetOutput(io.Discard)
 	prevSlog := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.Level(100)})))
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelInfo})))
 	b.Cleanup(func() {
 		log.SetOutput(prev)
 		slog.SetDefault(prevSlog)

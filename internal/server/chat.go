@@ -588,7 +588,7 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 		if finalEmitEnd.IsZero() {
 			return // returned via error path; skip
 		}
-		slog.Info("chat timing",
+		slog.Debug("chat timing",
 			"run", emit.runID,
 			"agent", agentID,
 			"iters", seq,
