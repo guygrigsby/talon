@@ -37,9 +37,10 @@ func secretsCmd() *cobra.Command {
 		Use:   "secrets",
 		Short: "Inspect and migrate on-disk secrets",
 	}
-	c.AddCommand(secretsLsCmd())
+	c.AddCommand(secretsAuditCmd())
 	c.AddCommand(secretsMigrateCmd())
 	c.AddCommand(secretsKeychainBootstrapCmd())
+	c.AddCommand(secretsReloadCmd())
 	return c
 }
 
@@ -53,21 +54,21 @@ type secretsAuditEntry struct {
 	Note  string `json:"note,omitempty"`
 }
 
-func secretsLsCmd() *cobra.Command {
-	return &cobra.Command{
-		Use:   "ls",
-		Short: "List sensitive paths in the merged config (literal vs reference)",
-		RunE: func(cmd *cobra.Command, args []string) error {
+func secretsAuditCmd() *cobra.Command {
+	var check bool
+	var allowExec bool
+	c := &cobra.Command{
+		Use:     "audit",
+		Aliases: []string{"ls"},
+		Short:   "Audit plaintext secrets, unresolved refs, and precedence drift",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_ = allowExec // op:// / keychain:// resolution is always enabled; flag accepted for parity
 			paths := resolvePaths()
 			merged, err := config.MergedBytes(paths)
 			if err != nil {
 				return fmt.Errorf("read merged config: %w", err)
 			}
 			entries := auditSecrets(merged)
-			// Also walk known openclaw-layer JSON files (auth-
-			// profiles per agent, identity / paired devices,
-			// exec-approvals). These don't surface in the
-			// merged config but DO contain credentials.
 			entries = append(entries, auditFileSecrets(paths.Openclaw.Dir)...)
 			if flagJSON {
 				out, _ := json.MarshalIndent(entries, "", "  ")
@@ -96,8 +97,32 @@ func secretsLsCmd() *cobra.Command {
 				fmt.Fprintln(cmd.OutOrStdout(), "Plaintext secrets detected. To migrate:")
 				fmt.Fprintln(cmd.OutOrStdout(), "  1) talon secrets keychain-bootstrap   (one time, sets up 1P service-account token in keychain)")
 				fmt.Fprintln(cmd.OutOrStdout(), "  2) talon secrets migrate <path>       (one secret at a time)")
-				fmt.Fprintln(cmd.OutOrStdout(), "  (migrate + keychain-bootstrap subcommands ship in the next commit)")
+				if check {
+					return fmt.Errorf("secrets audit: plaintext secrets found")
+				}
 			}
+			return nil
+		},
+	}
+	c.Flags().BoolVar(&check, "check", false, "exit non-zero when findings are present")
+	c.Flags().BoolVar(&allowExec, "allow-exec", false, "allow exec SecretRef resolution during audit (accepted for parity; always enabled)")
+	return c
+}
+
+func secretsReloadCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "reload",
+		Short: "Re-resolve secret references and atomically swap runtime snapshot",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			payload, err := runRPC("secrets.reload", nil)
+			if err != nil {
+				return err
+			}
+			if flagJSON {
+				emit(payload)
+				return nil
+			}
+			fmt.Println("✓ secrets reloaded")
 			return nil
 		},
 	}

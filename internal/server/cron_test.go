@@ -204,17 +204,72 @@ func TestCronRun_UnknownJobIsBadRequest(t *testing.T) {
 	}
 }
 
-func TestCronStatus_FiltersByID(t *testing.T) {
+func TestCronStatus_ReturnsSchedulerMetadata(t *testing.T) {
+	_, r := cronTestHandler(t)
+	callRPC(t, r, "cron.add", map[string]any{"id": "a", "expression": "* * * * *", "method": "test.noop"}, nil)
+	callRPC(t, r, "cron.add", map[string]any{"id": "b", "expression": "* * * * *", "method": "test.noop", "enabled": false}, nil)
+
+	var st cronpkg.SchedulerStatus
+	callRPC(t, r, "cron.status", map[string]any{}, &st)
+	if st.JobCount != 2 {
+		t.Errorf("jobCount: got %d want 2", st.JobCount)
+	}
+	if st.EnabledCount != 1 {
+		t.Errorf("enabledCount: got %d want 1", st.EnabledCount)
+	}
+}
+
+func TestCronShow_ReturnsSingleJob(t *testing.T) {
 	_, r := cronTestHandler(t)
 	callRPC(t, r, "cron.add", map[string]any{"id": "a", "expression": "* * * * *", "method": "test.noop"}, nil)
 	callRPC(t, r, "cron.add", map[string]any{"id": "b", "expression": "* * * * *", "method": "test.noop"}, nil)
 
 	var resp struct {
+		Job cronpkg.Job `json:"job"`
+	}
+	callRPC(t, r, "cron.show", map[string]any{"id": "a"}, &resp)
+	if resp.Job.ID != "a" {
+		t.Errorf("show: got id %q want %q", resp.Job.ID, "a")
+	}
+}
+
+func TestCronEnableDisable(t *testing.T) {
+	_, r := cronTestHandler(t)
+	callRPC(t, r, "cron.add", map[string]any{"id": "x", "expression": "* * * * *", "method": "test.noop"}, nil)
+
+	var resp struct {
+		Job cronpkg.Job `json:"job"`
+	}
+	callRPC(t, r, "cron.disable", map[string]any{"id": "x"}, &resp)
+	if resp.Job.Enabled {
+		t.Error("disable: job should be disabled")
+	}
+
+	callRPC(t, r, "cron.enable", map[string]any{"id": "x"}, &resp)
+	if !resp.Job.Enabled {
+		t.Error("enable: job should be enabled")
+	}
+}
+
+func TestCronList_FiltersByEnabledByDefault(t *testing.T) {
+	_, r := cronTestHandler(t)
+	callRPC(t, r, "cron.add", map[string]any{"id": "on", "expression": "* * * * *", "method": "test.noop"}, nil)
+	callRPC(t, r, "cron.add", map[string]any{"id": "off", "expression": "* * * * *", "method": "test.noop", "enabled": false}, nil)
+
+	var filtered struct {
 		Jobs []cronpkg.Job `json:"jobs"`
 	}
-	callRPC(t, r, "cron.status", map[string]any{"id": "a"}, &resp)
-	if len(resp.Jobs) != 1 || resp.Jobs[0].ID != "a" {
-		t.Errorf("status filtered: %+v", resp.Jobs)
+	callRPC(t, r, "cron.list", map[string]any{}, &filtered)
+	if len(filtered.Jobs) != 1 || filtered.Jobs[0].ID != "on" {
+		t.Errorf("default list should exclude disabled: %+v", filtered.Jobs)
+	}
+
+	var all struct {
+		Jobs []cronpkg.Job `json:"jobs"`
+	}
+	callRPC(t, r, "cron.list", map[string]any{"all": true}, &all)
+	if len(all.Jobs) != 2 {
+		t.Errorf("--all should include disabled: got %d", len(all.Jobs))
 	}
 }
 

@@ -20,7 +20,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 | `completion` | ✓ | Cobra built-in (`completion bash|zsh|fish|powershell`) |
 | `config` (6 subs) | ◐ | Layered overlay model (talon-2sv): read merges `~/.talon` over `~/.openclaw`, writes target `~/.talon` only. talon-1oj (set rich modes — Phase B), talon-7vk (whitespace), talon-9ic (tombstones for openclaw-layer deletes) |
 | `configure` (interactive) | ✗ | depends on entire config surface; large port |
-| `cron` (10 subs) | ◐ list/add/remove/run/status/runs | gateway implements `cron.*` RPCs (talon-8z0). CLI wraps as `talon cron list/add/remove/run/status/runs` (talon-3tg). Persistence at `~/.talon/cron/jobs.json` + run log at `~/.talon/cron/runs.jsonl`. Standard 5/6-field cron expressions + descriptors (@hourly etc.). Jobs fire by dispatching back through the WS Registry (any session-agnostic RPC works). Out-of-scope for v1: per-job timezones, jitter, `cron disable` / `cron edit` (use remove+add), isolated-agent sessions. |
+| `cron` (10 subs) | ◐ list/add/remove/rm/run/status/show/enable/disable/runs | gateway implements `cron.*` RPCs (talon-8z0). CLI wraps as `talon cron list/add/remove/run/status/show/enable/disable/runs` (talon-3tg). `remove` aliases `rm` to match openclaw. `list` filters to enabled jobs by default; `--all` includes disabled. `status` returns scheduler metadata (running, jobCount, enabledCount, nextRunMs). `show <id>` returns a single job. `enable`/`disable` toggle the enabled flag. Persistence at `~/.talon/cron/jobs.json` + run log at `~/.talon/cron/runs.jsonl`. Standard 5/6-field cron expressions + descriptors (@hourly etc.). Out-of-scope for v1: per-job timezones, jitter, `cron edit` (use remove+add), isolated-agent sessions. |
 | `daemon` (6 subs) | ⊘ | legacy alias for `gateway` service mgmt |
 | `dashboard` | ✓ | Prints + clipboards + opens the gateway URL with token auto-auth in fragment. Token resolved through the secrets resolver (op:// / keychain:// references work). |
 | `devices` (8 subs) | ✗ | talon-job, talon-26v, talon-xk1, talon-aws |
@@ -29,7 +29,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 | `docs` | ◐ | URL + search-link surface (no MCP shell-out yet — that's the openclaw runtime dep we'd rather not take on). Args render `https://docs.openclaw.ai/?q=<query>`. |
 | `doctor` | ✗ | talon-uyp |
 | `exec-policy` (3 subs) | ✗ | talon-aws (host approvals integration) |
-| `gateway` (12 subs) | ◐ 6/12 | see below |
+| `gateway` (14 subs) | ◐ 6/14 | see below |
 | `health` | ✓ | RPC `health` (was bug `health.get`, fixed in talon-a3h) |
 | `help` | ✓ | Cobra default |
 | `hooks` (7 subs) | ✗ | talon-aws, hook runtime |
@@ -48,7 +48,7 @@ Source-of-truth tracking for `talon-01s` (drop-in alias). Generated against
 | `qr` | ✗ | depends on talon-xk1 (proper device pairing) |
 | `reset` | ✗ | talon-aws (state to reset) |
 | `sandbox` (3 subs) | ✗ | sandbox runtime |
-| `secrets` (4 subs) | ◐ ls/migrate/keychain-bootstrap | `talon secrets ls` audits the merged config (literal/ref/empty). `migrate <path> [--vault Personal --field credential]` moves one literal into 1Password, replaces with `op://...`, round-trips a verify. `keychain-bootstrap` stores the OP service-account token in the macOS keychain so `talon-op-plugin` auths non-interactively from a fresh shell. References resolved via `talon-op-plugin` / `talon-keychain-plugin`. talon-ekv tracks remaining surface (configure/get/audit). |
+| `secrets` (4 subs) | ◐ audit/migrate/keychain-bootstrap/reload | `talon secrets audit` (alias `ls`) audits the merged config (literal/ref/empty) with `--check` (exit non-zero on findings) and `--allow-exec` (parity flag). `migrate <path> [--vault Personal --field credential]` moves one literal into 1Password, replaces with `op://...`, round-trips a verify. `keychain-bootstrap` stores the OP service-account token in the macOS keychain so `talon-op-plugin` auths non-interactively from a fresh shell. `reload` calls `secrets.reload` RPC to hot-swap the gateway's runtime snapshot. openclaw's `apply` (apply a secrets plan from file) is not yet ported — talon-ekv. `configure` is interactive and out of scope. |
 | `security` (1 sub: `audit`) | ✗ | talon-ekv (config audit) |
 | `sessions` (1 sub: `cleanup`) | ✗ | talon-c0b, talon-8lr |
 | `setup` | ✗ | talon-aws |

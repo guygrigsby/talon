@@ -59,13 +59,34 @@ func (h *CronHandler) Register(r *Registry) {
 	r.Register("cron.remove", h.handleRemove)
 	r.Register("cron.run", h.handleRun)
 	r.Register("cron.status", h.handleStatus)
+	r.Register("cron.show", h.handleShow)
+	r.Register("cron.enable", h.handleEnable)
+	r.Register("cron.disable", h.handleDisable)
 	r.Register("cron.runs", h.handleRuns)
 }
 
 // --- cron.list ------------------------------------------------------------
 
-func (h *CronHandler) handleList(_ context.Context, _ HandlerCtx, _ json.RawMessage) (any, *FrameError) {
-	return map[string]any{"jobs": h.svc.List()}, nil
+type cronListParams struct {
+	All bool `json:"all,omitempty"`
+}
+
+func (h *CronHandler) handleList(_ context.Context, _ HandlerCtx, raw json.RawMessage) (any, *FrameError) {
+	var p cronListParams
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &p)
+	}
+	jobs := h.svc.List()
+	if !p.All {
+		enabled := jobs[:0]
+		for _, j := range jobs {
+			if j.Enabled {
+				enabled = append(enabled, j)
+			}
+		}
+		jobs = enabled
+	}
+	return map[string]any{"jobs": jobs}, nil
 }
 
 // --- cron.add -------------------------------------------------------------
@@ -163,26 +184,74 @@ func (h *CronHandler) handleRun(ctx context.Context, _ HandlerCtx, raw json.RawM
 }
 
 // --- cron.status ----------------------------------------------------------
+// Returns scheduler-level metadata (running, job counts, next fire).
+// Use cron.show to inspect a specific job by id.
 
-type cronStatusParams struct {
-	ID string `json:"id,omitempty"`
+func (h *CronHandler) handleStatus(_ context.Context, _ HandlerCtx, _ json.RawMessage) (any, *FrameError) {
+	return h.svc.Status(), nil
 }
 
-func (h *CronHandler) handleStatus(_ context.Context, _ HandlerCtx, raw json.RawMessage) (any, *FrameError) {
-	var p cronStatusParams
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &p); err != nil {
-			return nil, &FrameError{Code: ErrCodeBadRequest, Message: "cron.status: " + err.Error()}
-		}
+// --- cron.show ------------------------------------------------------------
+
+type cronShowParams struct {
+	ID string `json:"id"`
+}
+
+func (h *CronHandler) handleShow(_ context.Context, _ HandlerCtx, raw json.RawMessage) (any, *FrameError) {
+	var p cronShowParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "cron.show: " + err.Error()}
 	}
-	if p.ID != "" {
-		j, ok := h.svc.Get(p.ID)
-		if !ok {
-			return nil, &FrameError{Code: ErrCodeBadRequest, Message: fmt.Sprintf("cron.status: unknown job id %q", p.ID)}
-		}
-		return map[string]any{"jobs": []cronpkg.Job{j}}, nil
+	if strings.TrimSpace(p.ID) == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "cron.show: id is required"}
 	}
-	return map[string]any{"jobs": h.svc.List()}, nil
+	j, ok := h.svc.Get(p.ID)
+	if !ok {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: fmt.Sprintf("cron.show: unknown job id %q", p.ID)}
+	}
+	return map[string]any{"job": j}, nil
+}
+
+// --- cron.enable / cron.disable -------------------------------------------
+
+type cronEnableParams struct {
+	ID string `json:"id"`
+}
+
+func (h *CronHandler) handleEnable(_ context.Context, _ HandlerCtx, raw json.RawMessage) (any, *FrameError) {
+	var p cronEnableParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "cron.enable: " + err.Error()}
+	}
+	if strings.TrimSpace(p.ID) == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "cron.enable: id is required"}
+	}
+	j, err := h.svc.SetEnabled(p.ID, true)
+	if err != nil {
+		if isUnknownJob(err) {
+			return nil, &FrameError{Code: ErrCodeBadRequest, Message: "cron.enable: " + err.Error()}
+		}
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "cron.enable: " + err.Error()}
+	}
+	return map[string]any{"job": j}, nil
+}
+
+func (h *CronHandler) handleDisable(_ context.Context, _ HandlerCtx, raw json.RawMessage) (any, *FrameError) {
+	var p cronEnableParams
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "cron.disable: " + err.Error()}
+	}
+	if strings.TrimSpace(p.ID) == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "cron.disable: id is required"}
+	}
+	j, err := h.svc.SetEnabled(p.ID, false)
+	if err != nil {
+		if isUnknownJob(err) {
+			return nil, &FrameError{Code: ErrCodeBadRequest, Message: "cron.disable: " + err.Error()}
+		}
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "cron.disable: " + err.Error()}
+	}
+	return map[string]any{"job": j}, nil
 }
 
 // --- cron.runs ------------------------------------------------------------

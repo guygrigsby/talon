@@ -382,6 +382,58 @@ func (s *Service) RunNow(ctx context.Context, id string) (Run, error) {
 	return last, nil
 }
 
+// SetEnabled toggles a job's enabled state without replacing the whole
+// job. Returns the updated Job, or an error when the id is unknown.
+func (s *Service) SetEnabled(id string, enabled bool) (Job, error) {
+	s.mu.Lock()
+	j, ok := s.jobs[id]
+	if !ok {
+		s.mu.Unlock()
+		return Job{}, fmt.Errorf("cron: unknown job id %q", id)
+	}
+	j.Enabled = enabled
+	if enabled {
+		if next, err := nextAfter(j.Expression, s.now()); err == nil {
+			j.NextRunMs = next.UnixMilli()
+		}
+	}
+	if err := s.persistLocked(); err != nil {
+		s.mu.Unlock()
+		return Job{}, fmt.Errorf("cron: persist: %w", err)
+	}
+	out := *j
+	s.mu.Unlock()
+	return out, nil
+}
+
+// SchedulerStatus holds snapshot metadata about the running scheduler.
+type SchedulerStatus struct {
+	Running      bool  `json:"running"`
+	JobCount     int   `json:"jobCount"`
+	EnabledCount int   `json:"enabledCount"`
+	NextRunMs    int64 `json:"nextRunMs,omitempty"`
+}
+
+// Status returns a point-in-time snapshot of the scheduler state.
+func (s *Service) Status() SchedulerStatus {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	st := SchedulerStatus{
+		Running:  s.cancel != nil,
+		JobCount: len(s.jobs),
+	}
+	for _, j := range s.jobs {
+		if !j.Enabled {
+			continue
+		}
+		st.EnabledCount++
+		if j.NextRunMs > 0 && (st.NextRunMs == 0 || j.NextRunMs < st.NextRunMs) {
+			st.NextRunMs = j.NextRunMs
+		}
+	}
+	return st
+}
+
 // Runs returns up to limit recent runs, optionally filtered by jobID.
 // limit<=0 means "all"; capped to 1000 internally so the response
 // stays bounded.

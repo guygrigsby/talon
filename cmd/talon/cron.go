@@ -53,29 +53,41 @@ func cronCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "cron",
 		Short: "Manage scheduled jobs in the talon gateway",
-		// Bare `cron` prints the job list, matching openclaw's habit
-		// of "the parent command shows the most-asked-for view".
-		RunE: cronListRun,
+		RunE:  func(_ *cobra.Command, _ []string) error { return cronListRun(false) },
 	}
 	c.AddCommand(cronListCmd())
 	c.AddCommand(cronAddCmd())
-	c.AddCommand(cronRemoveCmd())
+	cronRemove := cronRemoveCmd()
+	cronRemove.Aliases = []string{"rm"}
+	c.AddCommand(cronRemove)
 	c.AddCommand(cronRunCmd())
 	c.AddCommand(cronStatusCmd())
+	c.AddCommand(cronShowCmd())
+	c.AddCommand(cronEnableCmd())
+	c.AddCommand(cronDisableCmd())
 	c.AddCommand(cronRunsCmd())
 	return c
 }
 
 func cronListCmd() *cobra.Command {
-	return &cobra.Command{
+	var all bool
+	c := &cobra.Command{
 		Use:   "list",
-		Short: "List all scheduled jobs",
-		RunE:  cronListRun,
+		Short: "List scheduled jobs (enabled only by default)",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			return cronListRun(all)
+		},
 	}
+	c.Flags().BoolVar(&all, "all", false, "include disabled jobs")
+	return c
 }
 
-func cronListRun(_ *cobra.Command, _ []string) error {
-	payload, err := runRPC("cron.list", nil)
+func cronListRun(all bool) error {
+	var body any
+	if all {
+		body = map[string]any{"all": true}
+	}
+	payload, err := runRPC("cron.list", body)
 	if err != nil {
 		return err
 	}
@@ -223,15 +235,44 @@ func cronRunCmd() *cobra.Command {
 
 func cronStatusCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "status [id]",
-		Short: "Show one or all jobs (alias for `list` when no id given)",
-		Args:  cobra.MaximumNArgs(1),
-		RunE: func(_ *cobra.Command, args []string) error {
-			body := map[string]any{}
-			if len(args) == 1 {
-				body["id"] = args[0]
+		Use:   "status",
+		Short: "Show cron scheduler status (running, job counts, next fire)",
+		RunE: func(_ *cobra.Command, _ []string) error {
+			payload, err := runRPC("cron.status", nil)
+			if err != nil {
+				return err
 			}
-			payload, err := runRPC("cron.status", body)
+			if flagJSON {
+				emit(payload)
+				return nil
+			}
+			var st struct {
+				Running      bool  `json:"running"`
+				JobCount     int   `json:"jobCount"`
+				EnabledCount int   `json:"enabledCount"`
+				NextRunMs    int64 `json:"nextRunMs"`
+			}
+			if err := json.Unmarshal(payload, &st); err != nil {
+				return fmt.Errorf("decode cron.status: %w", err)
+			}
+			state := "stopped"
+			if st.Running {
+				state = "running"
+			}
+			fmt.Printf("scheduler: %s  jobs: %d  enabled: %d  next: %s\n",
+				state, st.JobCount, st.EnabledCount, formatMs(st.NextRunMs))
+			return nil
+		},
+	}
+}
+
+func cronShowCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "show <id>",
+		Short: "Show a scheduled job by id",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			payload, err := runRPC("cron.show", map[string]any{"id": args[0]})
 			if err != nil {
 				return err
 			}
@@ -240,12 +281,54 @@ func cronStatusCmd() *cobra.Command {
 				return nil
 			}
 			var r struct {
-				Jobs []cronJob `json:"jobs"`
+				Job cronJob `json:"job"`
 			}
 			if err := json.Unmarshal(payload, &r); err != nil {
-				return fmt.Errorf("decode cron.status: %w", err)
+				return fmt.Errorf("decode cron.show: %w", err)
 			}
-			renderJobs(r.Jobs)
+			renderJobs([]cronJob{r.Job})
+			return nil
+		},
+	}
+}
+
+func cronEnableCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "enable <id>",
+		Short: "Enable a scheduled job",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			payload, err := runRPC("cron.enable", map[string]any{"id": args[0]})
+			if err != nil {
+				return err
+			}
+			if flagJSON {
+				emit(payload)
+				return nil
+			}
+			fmt.Printf("✓ enabled %s\n", args[0])
+			_ = payload
+			return nil
+		},
+	}
+}
+
+func cronDisableCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "disable <id>",
+		Short: "Disable a scheduled job",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(_ *cobra.Command, args []string) error {
+			payload, err := runRPC("cron.disable", map[string]any{"id": args[0]})
+			if err != nil {
+				return err
+			}
+			if flagJSON {
+				emit(payload)
+				return nil
+			}
+			fmt.Printf("✓ disabled %s\n", args[0])
+			_ = payload
 			return nil
 		},
 	}
