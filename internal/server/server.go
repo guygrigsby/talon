@@ -46,6 +46,10 @@ type Config struct {
 	// /plugins UI's "Loaded plugins" section empty without breaking
 	// anything else.
 	PluginHost *plugin.Host
+	// ImageProviderFactory, when set, lets images.generate route to a
+	// plugin-served image provider before falling back to the built-in
+	// ComfyUI client. Optional — nil keeps the existing ComfyUI path.
+	ImageProviderFactory ImageProviderFactory
 }
 
 // SubagentRunner is the indirection the tool registry uses to dispatch
@@ -141,7 +145,11 @@ func New(cfg Config) *Server {
 	if cfg.Paths.Talon.Dir != "" {
 		s.reads = NewReadHandler(cfg.Paths)
 		s.reads.Register(s.registry)
-		NewImagesHandler(cfg.Paths).Register(s.registry)
+		ih := NewImagesHandler(cfg.Paths)
+		if cfg.ImageProviderFactory != nil {
+			ih.WithImageFactory(cfg.ImageProviderFactory)
+		}
+		ih.Register(s.registry)
 		NewStylesHandler(cfg.Paths).Register(s.registry)
 		NewPluginDepsHandler(cfg.Paths).WithHost(cfg.PluginHost).Register(s.registry)
 		NewChannelsSetupHandler(cfg.Paths).Register(s.registry)

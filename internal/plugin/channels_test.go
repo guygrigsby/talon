@@ -91,6 +91,9 @@ func (c *channelPluginClient) SendChannelMessage(ctx context.Context, in *pb.Sen
 	}
 	return &pb.SendChannelMessageResponse{Ok: true}, nil
 }
+func (c *channelPluginClient) StreamImageGeneration(context.Context, *pb.StreamImageGenerationRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[pb.ImageDelta], error) {
+	return nil, errors.New("not used")
+}
 
 // recordingRunner is a SessionRunner that captures every call and
 // returns a canned reply per agent. Used by the dispatcher tests to

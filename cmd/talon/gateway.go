@@ -196,15 +196,16 @@ func gatewayRunCmd() *cobra.Command {
 			defer pluginHost.Shutdown()
 
 			srv := server.New(server.Config{
-				Addr:              addr,
-				WebDir:            webDir,
-				Auth:              server.AuthConfig{Mode: authMode, Token: token},
-				AgentResolver:     resolver,
-				ProviderFactory:   &agentProviderFactory{paths: paths, host: pluginHost},
-				WorkspaceResolver: resolver,
-				ToolRunnerFor:     newToolRunnerFactory(pluginHost, paths),
-				Paths:             paths,
-				PluginHost:        pluginHost,
+				Addr:                 addr,
+				WebDir:               webDir,
+				Auth:                 server.AuthConfig{Mode: authMode, Token: token},
+				AgentResolver:        resolver,
+				ProviderFactory:      &agentProviderFactory{paths: paths, host: pluginHost},
+				WorkspaceResolver:    resolver,
+				ToolRunnerFor:        newToolRunnerFactory(pluginHost, paths),
+				Paths:                paths,
+				PluginHost:           pluginHost,
+				ImageProviderFactory: &agentImageProviderFactory{host: pluginHost},
 			})
 
 			// Now that the WS server has built its handlers, wire the

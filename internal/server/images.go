@@ -20,8 +20,18 @@ import (
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/netutil"
 	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/provider"
 	"github.com/tidwall/gjson"
 )
+
+// ImageProviderFactory resolves an image provider by name. The server calls
+// ForImage on every images.generate request; if a provider is returned the
+// plugin path runs, otherwise the built-in ComfyUI path handles it.
+// Returning ErrProviderUnavailable signals "no plugin for this name; fall
+// through to ComfyUI". Any other error is surfaced to the caller.
+type ImageProviderFactory interface {
+	ForImage(name string) (provider.ImageProvider, error)
+}
 
 // ImagesHandler serves images.generate (async) and images.fetch (sync).
 //
@@ -44,6 +54,11 @@ import (
 // the source of truth for models, samplers, dimensions, LoRAs.
 type ImagesHandler struct {
 	paths openclaw.Paths
+
+	// imageFactory, when non-nil, is consulted on images.generate before
+	// the built-in ComfyUI path. Returning ErrProviderUnavailable falls
+	// through to ComfyUI; any other error is surfaced to the caller.
+	imageFactory ImageProviderFactory
 
 	// dial returns a fresh ComfyUI client given a base URL. Default
 	// wraps comfyui.New; tests inject a stub to avoid network IO.
@@ -88,6 +103,14 @@ func NewImagesHandler(paths openclaw.Paths) *ImagesHandler {
 		runs:  map[string]string{},
 	}
 	h.emit = h.defaultEmit
+	return h
+}
+
+// WithImageFactory sets the optional plugin image provider factory.
+// When ForImage returns ErrProviderUnavailable, handleGenerate falls
+// through to the built-in ComfyUI path.
+func (h *ImagesHandler) WithImageFactory(f ImageProviderFactory) *ImagesHandler {
+	h.imageFactory = f
 	return h
 }
 
@@ -150,16 +173,6 @@ func (h *ImagesHandler) handleGenerate(_ context.Context, hc HandlerCtx, params 
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "images.generate: sessionKey and prompt are required"}
 	}
 
-	cfg, ferr := h.loadComfyUIConfig(p.WorkflowID)
-	if ferr != nil {
-		return nil, ferr
-	}
-
-	workflow, ferr := readAndPatchWorkflow(cfg, p)
-	if ferr != nil {
-		return nil, ferr
-	}
-
 	runID := p.IdempotencyKey
 	if runID == "" {
 		fresh, err := newImagesRunID()
@@ -177,8 +190,104 @@ func (h *ImagesHandler) handleGenerate(_ context.Context, hc HandlerCtx, params 
 	h.runs[runKey] = runID
 	h.runsMu.Unlock()
 
+	// Plugin path: if a loaded plugin offers an image provider, prefer
+	// it over the built-in ComfyUI client. ErrProviderUnavailable means
+	// "fall through"; any other error is a real failure.
+	if h.imageFactory != nil {
+		prov, err := h.imageFactory.ForImage("comfyui")
+		if err == nil {
+			req := provider.ImageRequest{
+				Prompt:         p.Prompt,
+				NegativePrompt: p.NegativePrompt,
+				WorkflowID:     p.WorkflowID,
+				Seed:           p.Seed,
+				NodeOverrides:  p.NodeOverrides,
+			}
+			go h.runGeneratePlugin(prov, hc.Session, runID, p.SessionKey, req, runKey)
+			return map[string]any{"runId": runID}, nil
+		}
+		if !errors.Is(err, ErrProviderUnavailable) {
+			h.runsMu.Lock()
+			delete(h.runs, runKey)
+			h.runsMu.Unlock()
+			return nil, &FrameError{Code: ErrCodeInternal, Message: "images.generate: " + err.Error()}
+		}
+		// ErrProviderUnavailable → fall through to ComfyUI
+	}
+
+	cfg, ferr := h.loadComfyUIConfig(p.WorkflowID)
+	if ferr != nil {
+		h.runsMu.Lock()
+		delete(h.runs, runKey)
+		h.runsMu.Unlock()
+		return nil, ferr
+	}
+
+	workflow, ferr := readAndPatchWorkflow(cfg, p)
+	if ferr != nil {
+		h.runsMu.Lock()
+		delete(h.runs, runKey)
+		h.runsMu.Unlock()
+		return nil, ferr
+	}
+
 	go h.runGenerate(hc.Session, runID, p.SessionKey, cfg, workflow, runKey)
 	return map[string]any{"runId": runID}, nil
+}
+
+// runGeneratePlugin is the plugin-backed counterpart to runGenerate. It
+// calls the plugin's StreamImageGeneration and translates ImageDelta events
+// to talon session events. No ComfyUI history or auto-save logic applies —
+// those are the plugin's responsibility.
+func (h *ImagesHandler) runGeneratePlugin(prov provider.ImageProvider, sess *Session, runID, sessionKey string, req provider.ImageRequest, runKey string) {
+	defer func() {
+		h.runsMu.Lock()
+		delete(h.runs, runKey)
+		h.runsMu.Unlock()
+	}()
+
+	emit := func(state string, data map[string]any) {
+		_ = h.emit(sess, runID, sessionKey, state, data)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	ch, err := prov.StreamImageGeneration(ctx, req)
+	if err != nil {
+		emit("error", map[string]any{"errorMessage": err.Error()})
+		return
+	}
+
+	for delta := range ch {
+		switch delta.Kind {
+		case provider.ImageDeltaProgress:
+			if delta.Progress != nil {
+				emit("progress", map[string]any{
+					"value": delta.Progress.Step,
+					"max":   delta.Progress.Total,
+					"node":  delta.Progress.Node,
+				})
+			}
+		case provider.ImageDeltaResult:
+			if delta.Result == nil {
+				continue
+			}
+			payload := map[string]any{"ref": delta.Result.Ref}
+			if len(delta.Result.Data) > 0 {
+				payload["dataUrl"] = "data:" + delta.Result.MimeType + ";base64," + base64.StdEncoding.EncodeToString(delta.Result.Data)
+			}
+			emit("final", payload)
+			return
+		case provider.ImageDeltaError:
+			msg := "plugin image provider error"
+			if delta.Err != nil {
+				msg = delta.Err.Error()
+			}
+			emit("error", map[string]any{"errorMessage": msg})
+			return
+		}
+	}
 }
 
 // runGenerate is the async background goroutine that submits the
