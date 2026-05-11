@@ -98,9 +98,14 @@ func ClassifyReload(segments []string) ReloadClass {
 			return ReloadRestart
 		}
 	}
-	// plugins.entries.<name>.enabled — plugin loading is at startup.
-	if len(segments) == 4 && segments[0] == "plugins" && segments[1] == "entries" && segments[3] == "enabled" {
-		return ReloadRestart
+	// plugins.entries.<name>.{enabled,cmd,args} are consumed at gateway
+	// startup during plugin spawn. Deeper paths (e.g. .config.*) are
+	// per-plugin runtime config and can be hot-reloaded next-rpc.
+	if len(segments) == 4 && segments[0] == "plugins" && segments[1] == "entries" {
+		switch segments[3] {
+		case "enabled", "cmd", "args":
+			return ReloadRestart
+		}
 	}
 	// HUP entries: none yet (Phase 2).
 	return ReloadNextRPC
