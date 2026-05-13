@@ -25,9 +25,6 @@ talon is a Go port focused on three things:
   All overrides live in a separate overlay that you can wipe without touching
   the upstream install (see [Layered config](#layered-config-the-defining-feature)).
 
-talon ships under the name `talon-01s` as a drop-in alias, so existing
-openclaw clients that exec the binary by name keep working.
-
 ## When to use talon
 
 - You want to run openclaw-compatible agents on a machine where installing
