@@ -13,7 +13,12 @@ WEB_DIST ?= ../openclaw/dist/control-ui
 
 GO_SRC := $(shell find cmd internal -name '*.go' 2>/dev/null)
 
-PLUGINS := deepseek telegram brave whisper op keychain bluebubbles mac-notify
+# First-party Go plugins (deepseek, telegram, brave, whisper,
+# bluebubbles, mac-notify) ship inside the talon binary and run via
+# `talon plugin run <name>` — no per-plugin binary to build. PLUGINS
+# only lists the standalone helper CLIs (op for 1Password, keychain
+# for macOS Keychain) that exist as independent processes.
+PLUGINS := op keychain
 PLUGIN_BINS := $(addprefix bin/talon-,$(addsuffix -plugin,$(PLUGINS)))
 
 .PHONY: build all install run gateway-run gateway-run-with-ui plugins test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop docker-bounce docker-logs proto proto-tools
@@ -25,11 +30,9 @@ all: build web-build
 $(BIN): $(GO_SRC) go.mod go.sum
 	$(GO) build -ldflags '$(LDFLAGS)' -o $(BIN) $(PKG)
 
-# plugins builds every first-party plugin binary into bin/, alongside
-# the talon binary. The spawn resolver (internal/plugin/spawn.go) falls
-# back to a sibling-of-talon lookup when the configured cmd path is
-# missing, so a `make build && make plugins` checkout works without
-# editing config.
+# plugins builds the standalone helper CLIs (op, keychain) into bin/.
+# First-party Go plugins are in the talon binary; no per-plugin build
+# step is needed for them.
 plugins: $(PLUGIN_BINS)
 
 bin/talon-%-plugin: $(GO_SRC) go.mod go.sum

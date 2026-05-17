@@ -5,8 +5,8 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/guygrigsby/talon/internal/plugin/native"
 	"github.com/guygrigsby/talon/internal/plugin/pb"
-	"github.com/guygrigsby/talon/internal/pluginrun"
 	"github.com/guygrigsby/talon/internal/plugins/bluebubbles"
 	"github.com/guygrigsby/talon/internal/plugins/brave"
 	deepseekplug "github.com/guygrigsby/talon/internal/plugins/deepseek"
@@ -57,8 +57,8 @@ TALON_PLUGIN_HANDSHAKE and TALON_PLUGIN_AUTH_COOKIE env vars.`,
 			if err != nil {
 				return fmt.Errorf("plugin %s: init failed: %w", name, err)
 			}
-			pluginrun.Serve(name, srv)
-			return nil // unreachable; Serve exits on completion
+			native.Serve(name, srv)
+			return nil // unreachable; Serve never returns
 		},
 	}
 }
