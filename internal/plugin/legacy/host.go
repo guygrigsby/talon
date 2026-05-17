@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
+	"github.com/guygrigsby/talon/internal/plugin/pkgutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -262,21 +263,6 @@ func (h *Host) Shutdown() {
 // Capability interceptor
 // =============================================================================
 
-// methodCapability is the gRPC-method-name → required-capability map. The
-// interceptor refuses Host-service calls whose method isn't in this map
-// (closed set; new methods MUST add themselves explicitly so a
-// capability never accidentally ships ungated).
-var methodCapability = map[string]pb.Capability{
-	"/talon.plugin.v1.Host/GetConfig":        pb.Capability_CAPABILITY_READ_CONFIG,
-	"/talon.plugin.v1.Host/ListAgents":       pb.Capability_CAPABILITY_LIST_AGENTS,
-	"/talon.plugin.v1.Host/GetAgentIdentity": pb.Capability_CAPABILITY_READ_AGENT_IDENTITY,
-	"/talon.plugin.v1.Host/ListModels":       pb.Capability_CAPABILITY_LIST_MODELS,
-	"/talon.plugin.v1.Host/ListSessions":     pb.Capability_CAPABILITY_LIST_SESSIONS,
-	"/talon.plugin.v1.Host/GetChatHistory":   pb.Capability_CAPABILITY_READ_CHAT_HISTORY,
-	"/talon.plugin.v1.Host/AppendMemory":     pb.Capability_CAPABILITY_APPEND_MEMORY,
-	"/talon.plugin.v1.Host/RunSubagent":      pb.Capability_CAPABILITY_RUN_SUBAGENT,
-}
-
 // callerInstance resolves the calling plugin from gRPC metadata. Returns
 // the instance + nil on success; ("", err) status when the cookie is
 // missing or unknown. Called by both unary and stream interceptors.
@@ -298,20 +284,10 @@ func (h *Host) callerInstance(ctx context.Context) (*Instance, error) {
 	return inst, nil
 }
 
-// permits reports whether the manifest's effective capability set
-// includes cap. Today that's just manifest.needs; the contract leaves
-// room to layer user grants/denies on top in a follow-up
-// (Host.SetGrants(...) or similar) without changing the interceptor.
+// permits is a thin shim over pkgutil.Permits kept for call-site
+// brevity inside this package's interceptors.
 func permits(m *pb.Manifest, c pb.Capability) bool {
-	if m == nil {
-		return false
-	}
-	for _, n := range m.Needs {
-		if n == c {
-			return true
-		}
-	}
-	return false
+	return pkgutil.Permits(m, c)
 }
 
 // UnaryInterceptor returns a grpc.UnaryServerInterceptor that
@@ -323,7 +299,7 @@ func (h *Host) UnaryInterceptor() grpc.UnaryServerInterceptor {
 		if err != nil {
 			return nil, err
 		}
-		need, ok := methodCapability[info.FullMethod]
+		need, ok := pkgutil.MethodCapability[info.FullMethod]
 		if !ok {
 			// Closed set: an unmapped method must not pass — that's a
 			// programming error worth failing loudly.
@@ -350,7 +326,7 @@ func (h *Host) StreamInterceptor() grpc.StreamServerInterceptor {
 		if err != nil {
 			return err
 		}
-		need, ok := methodCapability[info.FullMethod]
+		need, ok := pkgutil.MethodCapability[info.FullMethod]
 		if !ok {
 			return status.Errorf(codes.Internal, "plugin: method %s has no capability mapping", info.FullMethod)
 		}
