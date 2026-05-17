@@ -81,6 +81,7 @@ Don't load these unless your task touches the area. Each file is self-contained.
 | The gateway client (`internal/gateway/client.go`) or connect handshake quirks | `docs/protocol.md` |
 | Config loading or dot-path edits (`internal/config/*`) | `docs/architecture.md` § Config |
 | Adding a new `gateway` subcommand or wiring an unwired flag | `docs/architecture.md` § CLI layer + `PARITY.md` |
+| Plugin host (spawn/handshake/lifecycle, native or legacy) or a new first-party plugin | `docs/architecture.md` § Plugin layer |
 | Anything beads-related beyond the basics above | the beads slash commands or `bd help` |
 
 If your task touches multiple areas, load only the sections you need — these

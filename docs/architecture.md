@@ -63,3 +63,16 @@ Thin WebSocket client. Pairs with the embedded server's framing. Key bits:
 - The client requests broad scopes by default (`operator.admin`, `read`, `write`, `approvals`, `pairing`). Per-command scope reduction isn't wired today.
 
 For the wire format and handshake sequence, see `protocol.md`.
+
+## Plugin layer (`internal/plugin/`)
+
+talon spawns plugins as subprocesses over a gRPC wire defined in `internal/plugin/pb/plugin.proto` (Plugin service host→plugin, Host service plugin→host, capability-gated). Two transports coexist:
+
+- **Native (`internal/plugin/native/`)** — hashicorp/go-plugin with AutoMTLS for first-party Go plugins shipped inside `bin/talon`. `talon plugin run <name>` is the dispatch entry point; the gateway's `BuiltinPluginCmd` returns `[<talon-bin>, plugin, run, <name>]` so one binary covers everything. Plugin→host callbacks ride a `GRPCBroker` channel over the existing gRPC connection (no separate listener), gated by `native.NewCapabilityInterceptor` against a per-plugin `ManifestHolder` that swaps in the real manifest after `Initialize` returns.
+- **Legacy (`internal/plugin/legacy/`)** — the bespoke spawn/handshake/host code used today only by the openclaw Node shim path (bundled JS extensions). Plugins authenticate via an env-supplied cookie and dial a separate loopback gRPC listener for Host callbacks. Identity flows through `legacy.Host.UnaryInterceptor` via the cookie in gRPC metadata.
+
+`internal/plugin/pkgutil/` is the only place that holds the `MethodCapability` map and the cmd-resolution fallback (`ResolvePluginCmd` — try the configured path, then sibling-of-talon, then `$PATH`). Both transports read from it so capability gating can't drift.
+
+`gateway_chat.go:parsePluginSpecs` tags each spec with `kind`: explicit `cmd:` or `bundled:` → `kindLegacy`; first-party builtin fallback → `kindNative`. `loadConfiguredPlugins` dispatches accordingly; both paths register their `*legacy.Instance` into the shared `legacy.Host` registry so all downstream consumers (`agentProviderFactory`, `channel` dispatch, tool runner) see a single namespace.
+
+If you add a new bundled plugin: add it to `internal/server/plugin_deps.go:builtinPlugins`, add a constructor entry to `cmd/talon/plugin_run.go:pluginConstructors`, and implement `pb.PluginServer` under `internal/plugins/<name>/`. No standalone binary needed.
