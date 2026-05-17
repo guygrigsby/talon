@@ -29,6 +29,30 @@ type Instance struct {
 	stop func()
 }
 
+// InstanceFields is the constructor input for NewInstance. Lets
+// external packages (notably internal/plugin/native) build a fully
+// formed *Instance without reaching into the unexported stop field.
+type InstanceFields struct {
+	Name     string
+	Cookie   string // optional; native-spawned instances leave empty
+	Manifest *pb.Manifest
+	Client   pb.PluginClient
+	Stop     func() // invoked once by Instance.Stop; set to nil after
+}
+
+// NewInstance assembles an Instance from external fields. Use this
+// instead of a struct literal when the caller lives outside the
+// legacy package.
+func NewInstance(f InstanceFields) *Instance {
+	return &Instance{
+		Name:     f.Name,
+		Cookie:   f.Cookie,
+		Manifest: f.Manifest,
+		Client:   f.Client,
+		stop:     f.Stop,
+	}
+}
+
 // Stop closes the plugin's connection and (when applicable) terminates
 // its subprocess. Idempotent.
 func (i *Instance) Stop() {
@@ -165,6 +189,30 @@ func (h *Host) Unregister(name string) {
 	delete(h.byCookie, inst.Cookie)
 	h.mu.Unlock()
 	inst.Stop()
+}
+
+// RegisterInstance adds an already-initialized Instance to the
+// registry without going through the spawn/handshake/Initialize
+// flow. Used by the native (go-plugin) host to publish first-party
+// plugins into the shared lookup table that all consumers
+// (agentProviderFactory, toolRunnerFactory, channel dispatch, etc.)
+// read through. Cookie is optional: native instances leave it empty
+// because their Host-service identity comes from the broker
+// connection, not gRPC metadata.
+func (h *Host) RegisterInstance(inst *Instance) error {
+	if inst == nil || inst.Name == "" {
+		return fmt.Errorf("plugin: RegisterInstance requires non-nil Instance with Name")
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if _, exists := h.byName[inst.Name]; exists {
+		return fmt.Errorf("plugin %s: already registered", inst.Name)
+	}
+	h.byName[inst.Name] = inst
+	if inst.Cookie != "" {
+		h.byCookie[inst.Cookie] = inst
+	}
+	return nil
 }
 
 // Get returns the plugin registered under name, or nil if absent.

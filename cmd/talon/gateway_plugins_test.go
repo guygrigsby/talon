@@ -89,6 +89,42 @@ func TestParsePluginSpecs_AutoFillsFromBuiltinRegistry(t *testing.T) {
 	}
 }
 
+func TestParsePluginSpecs_KindDispatch(t *testing.T) {
+	// First-party entries (no cmd/bundled) should land as kindNative
+	// so the dispatcher routes them through native.Spawn. Entries with
+	// an explicit cmd or a bundled extension stay kindLegacy.
+	body := []byte(`{
+		"plugins": {
+			"bundled": {"paths": ["/some/extensions"]},
+			"entries": {
+				"deepseek":  {"enabled": true},
+				"telegram":  {"enabled": true},
+				"explicit":  {"enabled": true, "cmd": ["/usr/local/bin/talon-thirdparty"]},
+				"bundled1":  {"enabled": true, "bundled": "anthropic"}
+			}
+		}
+	}`)
+	got := parsePluginSpecs(body, pluginParseDefaults{})
+	byName := map[string]specKind{}
+	for _, s := range got {
+		byName[s.name] = s.kind
+	}
+	if byName["deepseek"] != kindNative {
+		t.Errorf("deepseek kind = %v, want kindNative", byName["deepseek"])
+	}
+	if byName["telegram"] != kindNative {
+		t.Errorf("telegram kind = %v, want kindNative", byName["telegram"])
+	}
+	if byName["explicit"] != kindLegacy {
+		t.Errorf("explicit-cmd kind = %v, want kindLegacy", byName["explicit"])
+	}
+	// bundled1 may not appear if resolveBundledDir misses; tolerate
+	// either outcome but verify if-present.
+	if k, present := byName["bundled1"]; present && k != kindLegacy {
+		t.Errorf("bundled1 kind = %v, want kindLegacy", k)
+	}
+}
+
 func TestParsePluginSpecs_NoEntriesSection(t *testing.T) {
 	got := parsePluginSpecs([]byte(`{}`), pluginParseDefaults{})
 	if len(got) != 0 {

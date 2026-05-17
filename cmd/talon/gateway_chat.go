@@ -12,6 +12,7 @@ import (
 	"github.com/guygrigsby/talon/internal/netutil"
 	"github.com/guygrigsby/talon/internal/openclaw"
 	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
+	"github.com/guygrigsby/talon/internal/plugin/native"
 	"github.com/guygrigsby/talon/internal/provider"
 	"github.com/guygrigsby/talon/internal/provider/deepseek"
 	"github.com/guygrigsby/talon/internal/provider/openai"
@@ -98,6 +99,21 @@ func newToolRunnerFactory(host *plugin.Host, paths openclaw.Paths) func(workspac
 	}
 }
 
+// specKind selects which plugin host transport handles the spawn.
+type specKind int
+
+const (
+	// kindLegacy is the bespoke spawn/handshake/host in
+	// internal/plugin/legacy. Used for openclaw Node-shim bundled
+	// extensions and third-party plugins with an explicit cmd that
+	// expects the bespoke wire (auth_cookie env, hostAddr dial).
+	kindLegacy specKind = iota
+	// kindNative is the hashicorp/go-plugin transport in
+	// internal/plugin/native. Used for first-party Go plugins
+	// dispatched via 'talon plugin run <name>'.
+	kindNative
+)
+
 // pluginSpec is one parsed plugins.entries.<name> entry that talon
 // should spawn (enabled=true with a non-empty cmd array).
 type pluginSpec struct {
@@ -109,7 +125,8 @@ type pluginSpec struct {
 	// config) plus auto-translated from legacy openclaw config
 	// paths the native plugins replace (e.g. plugins.entries.
 	// brave.config.webSearch.apiKey → BRAVE_API_KEY_REF).
-	env []string
+	env  []string
+	kind specKind
 }
 
 // defaultPluginDefaults probes the runtime for the bundled-extension
@@ -189,7 +206,7 @@ func parsePluginSpecs(merged []byte, defaults pluginParseDefaults) []pluginSpec 
 		}
 		env := buildPluginEnv(nameKey.Str, entry)
 		if cmd := stringArray(entry.Get("cmd")); len(cmd) > 0 {
-			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd, env: env})
+			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd, env: env, kind: kindLegacy})
 			return true
 		}
 		if extName := entry.Get("bundled").Str; extName != "" {
@@ -200,17 +217,16 @@ func parsePluginSpecs(merged []byte, defaults pluginParseDefaults) []pluginSpec 
 				return true
 			}
 			fullCmd := append(append([]string(nil), shimCmd...), extDir)
-			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: fullCmd, env: env})
+			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: fullCmd, env: env, kind: kindLegacy})
 			return true
 		}
 		// No explicit cmd or bundled — fall back to the first-party
-		// builtin registry. The spawn-time resolver in internal/plugin
-		// remaps the registry's absolute prod path to a sibling-of-talon
-		// or PATH hit when the absolute path is missing on disk, so the
-		// dev workflow (`make build && make plugins`) works without
-		// config edits.
+		// builtin registry. BuiltinPluginCmd returns [talon-bin, plugin,
+		// run, <name>]; the spawn-time resolver in pkgutil rewrites the
+		// path to a sibling-of-talon or $PATH hit when needed. These
+		// run on the native (go-plugin) transport.
 		if cmd := server.BuiltinPluginCmd(nameKey.Str); len(cmd) > 0 {
-			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd, env: env})
+			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd, env: env, kind: kindNative})
 			return true
 		}
 		return true
@@ -333,28 +349,64 @@ func stringArray(v gjson.Result) []string {
 }
 
 // loadConfiguredPlugins reads the merged config, parses the spawn-able
-// plugin entries, and asks host to LoadPlugin each one. Each load logs
-// one line. Failures don't abort the gateway — they just leave the
-// plugin un-registered (a broken plugin shouldn't take down chat).
-func loadConfiguredPlugins(ctx context.Context, host *plugin.Host, paths openclaw.Paths) {
+// plugin entries, and dispatches each one through the right transport:
+// kindNative goes through native.Spawn (go-plugin / AutoMTLS),
+// kindLegacy through host.LoadPlugin (bespoke handshake + cookie).
+// Both register their *legacy.Instance into the unified host registry
+// so all downstream consumers (agentProviderFactory, channel
+// dispatch, etc.) see a single namespace. Failures log + skip; a
+// broken plugin shouldn't take down chat.
+func loadConfiguredPlugins(
+	ctx context.Context,
+	host *plugin.Host,
+	paths openclaw.Paths,
+	nativeFactory native.HostServerFactory,
+) {
 	merged, err := config.MergedBytes(paths)
 	if err != nil {
 		slog.Error("plugins read merged config failed", "err", err)
 		return
 	}
 	for _, spec := range parsePluginSpecs(merged, defaultPluginDefaults(paths)) {
-		inst, err := host.LoadPlugin(ctx, spec.name, plugin.LoadOptions{Cmd: spec.cmd, Env: spec.env})
+		var (
+			inst *plugin.Instance
+			err  error
+		)
+		switch spec.kind {
+		case kindNative:
+			inst, err = native.Spawn(ctx, spec.name, nativeFactory,
+				native.LoadOptions{Cmd: spec.cmd, Env: spec.env},
+				host.Unregister)
+			if err == nil {
+				if regErr := host.RegisterInstance(inst); regErr != nil {
+					inst.Stop()
+					err = regErr
+				}
+			}
+		case kindLegacy:
+			inst, err = host.LoadPlugin(ctx, spec.name,
+				plugin.LoadOptions{Cmd: spec.cmd, Env: spec.env})
+		}
 		if err != nil {
-			slog.Error("plugin load failed", "plugin", spec.name, "err", err)
+			slog.Error("plugin load failed",
+				"plugin", spec.name, "kind", specKindLabel(spec.kind), "err", err)
 			continue
 		}
 		slog.Info("plugin loaded",
 			"plugin", spec.name,
+			"kind", specKindLabel(spec.kind),
 			"tools", len(inst.Manifest.GetOffersTools()),
 			"providers", len(inst.Manifest.GetOffersProviders()),
 			"channels", len(inst.Manifest.GetOffersChannels()),
 		)
 	}
+}
+
+func specKindLabel(k specKind) string {
+	if k == kindNative {
+		return "native"
+	}
+	return "legacy"
 }
 
 // pluginChannelOffer is one (plugin name, channel name) pair drawn

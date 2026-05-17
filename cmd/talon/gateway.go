@@ -16,6 +16,7 @@ import (
 
 	"github.com/guygrigsby/talon/internal/config"
 	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
+	"github.com/guygrigsby/talon/internal/plugin/native"
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 	"github.com/guygrigsby/talon/internal/secrets"
 	"github.com/guygrigsby/talon/internal/server"
@@ -229,7 +230,17 @@ func gatewayRunCmd() *cobra.Command {
 			// Load plugins AFTER the host service is serving so any
 			// back-channel call from the plugin during early life
 			// hits a live endpoint rather than connection-refused.
-			loadConfiguredPlugins(ctx, pluginHost, paths)
+			//
+			// Native (go-plugin) plugins use a different transport
+			// for the Host service (broker over the same gRPC
+			// connection, not the loopback listener above). The
+			// factory hands the SAME hostService to each plugin so
+			// they see the same view; per-plugin capability gating
+			// happens in native.NewCapabilityInterceptor.
+			nativeFactory := func(string, *native.ManifestHolder) pb.HostServer {
+				return hostService
+			}
+			loadConfiguredPlugins(ctx, pluginHost, paths, nativeFactory)
 			pluginNames := pluginHost.List()
 
 			// Channel dispatchers wire each plugin-offered channel
