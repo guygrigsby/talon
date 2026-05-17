@@ -3,11 +3,16 @@ package native
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"os/exec"
 	"sync"
+	"time"
 
 	goplugin "github.com/hashicorp/go-plugin"
+	"google.golang.org/grpc"
 
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
+	"github.com/guygrigsby/talon/internal/plugin/pkgutil"
 )
 
 // Instance is a registered, running first-party plugin. Mirrors
@@ -70,14 +75,123 @@ type LoadOptions struct {
 	Env []string
 }
 
-// LoadPlugin spawns name via go-plugin, waits for handshake + mTLS,
-// stands up a per-plugin Host gRPC server on the broker, calls
-// Initialize, registers the instance, and starts the lifecycle
-// watcher. Implementation lands in Task 6.
+// LoadPlugin spawns name via go-plugin (AutoMTLS on), waits for
+// handshake, stands up a per-plugin Host gRPC server on the broker,
+// runs Initialize, registers the instance, and starts the lifecycle
+// watcher that unregisters on plugin exit.
 func (h *Host) LoadPlugin(ctx context.Context, name string, opts LoadOptions) (*Instance, error) {
-	_ = ctx
-	_ = opts
-	return nil, fmt.Errorf("plugin %s: native.LoadPlugin not yet implemented (talon-e4h Task 6)", name)
+	if len(opts.Cmd) == 0 {
+		return nil, fmt.Errorf("plugin %s: empty Cmd", name)
+	}
+	resolved, err := pkgutil.ResolvePluginCmd(name, opts.Cmd)
+	if err != nil {
+		return nil, err
+	}
+
+	gp := &grpcPlugin{} // host side — Impl stays nil, GRPCClient fills hostBroker
+	cmd := exec.Command(resolved[0], resolved[1:]...)
+	cmd.Env = append(cmd.Env, opts.Env...)
+
+	logger := slog.With("plugin", name)
+	client := goplugin.NewClient(&goplugin.ClientConfig{
+		HandshakeConfig:  Handshake,
+		VersionedPlugins: map[int]goplugin.PluginSet{1: {PluginMapKey: gp}},
+		Cmd:              cmd,
+		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
+		AutoMTLS:         true,
+		Logger:           newHCLogAdapter(logger),
+	})
+
+	rpc, err := client.Client()
+	if err != nil {
+		client.Kill()
+		return nil, fmt.Errorf("plugin %s: client start: %w", name, err)
+	}
+	raw, err := rpc.Dispense(PluginMapKey)
+	if err != nil {
+		client.Kill()
+		return nil, fmt.Errorf("plugin %s: dispense: %w", name, err)
+	}
+	pluginClient, ok := raw.(pb.PluginClient)
+	if !ok {
+		client.Kill()
+		return nil, fmt.Errorf("plugin %s: dispense returned %T, want pb.PluginClient", name, raw)
+	}
+
+	if gp.hostBroker == nil {
+		client.Kill()
+		return nil, fmt.Errorf("plugin %s: GRPCClient ran without populating broker (go-plugin internals changed?)", name)
+	}
+
+	// Stand up the per-plugin Host service on the broker BEFORE
+	// Initialize so the plugin can call back during init without
+	// racing. Manifest is empty at first (so any init-time call is
+	// rejected); Initialize's response swaps in the real manifest
+	// via the holder. The interceptor reads holder.Get() per-call,
+	// so the swap takes effect without re-serving.
+	holder := NewManifestHolder(nil)
+	brokerID := gp.hostBroker.NextId()
+	hostSvc := h.factory(name, holder.Get())
+	interceptor := NewCapabilityInterceptor(name, holder)
+	go gp.hostBroker.AcceptAndServe(brokerID, func(serverOpts []grpc.ServerOption) *grpc.Server {
+		serverOpts = append(serverOpts, grpc.UnaryInterceptor(interceptor))
+		s := grpc.NewServer(serverOpts...)
+		pb.RegisterHostServer(s, hostSvc)
+		return s
+	})
+
+	resp, err := pluginClient.Initialize(ctx, &pb.InitializeRequest{
+		HostBrokerId: int64(brokerID),
+	})
+	if err != nil {
+		client.Kill()
+		return nil, fmt.Errorf("plugin %s: initialize: %w", name, err)
+	}
+	manifest := resp.GetManifest()
+	if manifest == nil {
+		client.Kill()
+		return nil, fmt.Errorf("plugin %s: Initialize returned no manifest", name)
+	}
+	holder.Set(manifest)
+
+	inst := &Instance{
+		Name:     name,
+		Manifest: manifest,
+		Client:   pluginClient,
+		client:   client,
+		stop: func() {
+			shutCtx, shutCancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer shutCancel()
+			_, _ = pluginClient.Shutdown(shutCtx, &pb.ShutdownRequest{})
+			client.Kill()
+		},
+	}
+
+	h.mu.Lock()
+	if _, exists := h.byName[name]; exists {
+		h.mu.Unlock()
+		inst.Stop()
+		return nil, fmt.Errorf("plugin %s: already registered", name)
+	}
+	h.byName[name] = inst
+	h.mu.Unlock()
+
+	// Lifecycle: poll client.Exited() (go-plugin has no done channel)
+	// and unregister on transition. 1s cadence is fine — plugin
+	// crashes are rare, and the unregister itself is only needed to
+	// permit a re-LoadPlugin to take the name.
+	go func() {
+		t := time.NewTicker(time.Second)
+		defer t.Stop()
+		for range t.C {
+			if client.Exited() {
+				h.Unregister(name)
+				return
+			}
+		}
+	}()
+
+	return inst, nil
 }
 
 // Unregister removes name from the registry. Called both by user

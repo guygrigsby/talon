@@ -739,13 +739,22 @@ func (x *Usage) GetReasoningTokens() int32 {
 
 type InitializeRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Auth cookie negotiated during the subprocess handshake. Plugins
-	// pass this back on every Host-service call so the host can identify
-	// which manifest to enforce.
+	// Auth cookie negotiated during the subprocess handshake. DEPRECATED
+	// — only populated on the legacy (openclaw Node shim) path. The
+	// native go-plugin host uses connection identity captured at
+	// GRPCBroker.AcceptAndServe time instead.
+	//
+	// Deprecated: Marked as deprecated in plugin.proto.
 	AuthCookie string `protobuf:"bytes,1,opt,name=auth_cookie,json=authCookie,proto3" json:"auth_cookie,omitempty"`
-	// Address (host:port) of the host's Host-service. Plugins dial this
-	// when they need to call back into talon.
-	HostAddress   string `protobuf:"bytes,2,opt,name=host_address,json=hostAddress,proto3" json:"host_address,omitempty"`
+	// Address (host:port) of the host's Host-service. DEPRECATED — see
+	// above. Native plugins dial back via host_broker_id.
+	//
+	// Deprecated: Marked as deprecated in plugin.proto.
+	HostAddress string `protobuf:"bytes,2,opt,name=host_address,json=hostAddress,proto3" json:"host_address,omitempty"`
+	// GRPCBroker id the plugin dials back to reach the host's Host
+	// service over the existing gRPC connection. Populated by the
+	// native host (talon-e4h); zero on the legacy path.
+	HostBrokerId  int64 `protobuf:"varint,3,opt,name=host_broker_id,json=hostBrokerId,proto3" json:"host_broker_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -780,6 +789,7 @@ func (*InitializeRequest) Descriptor() ([]byte, []int) {
 	return file_plugin_proto_rawDescGZIP(), []int{7}
 }
 
+// Deprecated: Marked as deprecated in plugin.proto.
 func (x *InitializeRequest) GetAuthCookie() string {
 	if x != nil {
 		return x.AuthCookie
@@ -787,11 +797,19 @@ func (x *InitializeRequest) GetAuthCookie() string {
 	return ""
 }
 
+// Deprecated: Marked as deprecated in plugin.proto.
 func (x *InitializeRequest) GetHostAddress() string {
 	if x != nil {
 		return x.HostAddress
 	}
 	return ""
+}
+
+func (x *InitializeRequest) GetHostBrokerId() int64 {
+	if x != nil {
+		return x.HostBrokerId
+	}
+	return 0
 }
 
 type InitializeResponse struct {
@@ -2509,11 +2527,12 @@ const file_plugin_proto_rawDesc = "" +
 	"\x05Usage\x12!\n" +
 	"\finput_tokens\x18\x01 \x01(\x05R\vinputTokens\x12#\n" +
 	"\routput_tokens\x18\x02 \x01(\x05R\foutputTokens\x12)\n" +
-	"\x10reasoning_tokens\x18\x03 \x01(\x05R\x0freasoningTokens\"W\n" +
-	"\x11InitializeRequest\x12\x1f\n" +
-	"\vauth_cookie\x18\x01 \x01(\tR\n" +
-	"authCookie\x12!\n" +
-	"\fhost_address\x18\x02 \x01(\tR\vhostAddress\"K\n" +
+	"\x10reasoning_tokens\x18\x03 \x01(\x05R\x0freasoningTokens\"\x85\x01\n" +
+	"\x11InitializeRequest\x12#\n" +
+	"\vauth_cookie\x18\x01 \x01(\tB\x02\x18\x01R\n" +
+	"authCookie\x12%\n" +
+	"\fhost_address\x18\x02 \x01(\tB\x02\x18\x01R\vhostAddress\x12$\n" +
+	"\x0ehost_broker_id\x18\x03 \x01(\x03R\fhostBrokerId\"K\n" +
 	"\x12InitializeResponse\x125\n" +
 	"\bmanifest\x18\x01 \x01(\v2\x19.talon.plugin.v1.ManifestR\bmanifest\"\x11\n" +
 	"\x0fShutdownRequest\"\x12\n" +

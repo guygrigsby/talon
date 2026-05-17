@@ -180,13 +180,18 @@ service Plugin {
 }
 
 message InitializeRequest {
-  // Auth cookie negotiated during the subprocess handshake. Plugins
-  // pass this back on every Host-service call so the host can identify
-  // which manifest to enforce.
-  string auth_cookie = 1;
-  // Address (host:port) of the host's Host-service. Plugins dial this
-  // when they need to call back into talon.
-  string host_address = 2;
+  // Auth cookie negotiated during the subprocess handshake. DEPRECATED
+  // — only populated on the legacy (openclaw Node shim) path. The
+  // native go-plugin host uses connection identity captured at
+  // GRPCBroker.AcceptAndServe time instead.
+  string auth_cookie = 1 [deprecated = true];
+  // Address (host:port) of the host's Host-service. DEPRECATED — see
+  // above. Native plugins dial back via host_broker_id.
+  string host_address = 2 [deprecated = true];
+  // GRPCBroker id the plugin dials back to reach the host's Host
+  // service over the existing gRPC connection. Populated by the
+  // native host (talon-e4h); zero on the legacy path.
+  int64 host_broker_id = 3;
 }
 
 message InitializeResponse {
