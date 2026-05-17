@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/guygrigsby/talon/internal/plugin"
+	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
 	"github.com/guygrigsby/talon/internal/provider"
 	"github.com/guygrigsby/talon/internal/server"
 )

@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
-	"github.com/guygrigsby/talon/internal/plugin"
+	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 	"github.com/guygrigsby/talon/internal/secrets"
 	"github.com/guygrigsby/talon/internal/server"

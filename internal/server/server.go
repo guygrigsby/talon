@@ -12,7 +12,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/guygrigsby/talon/internal/openclaw"
-	"github.com/guygrigsby/talon/internal/plugin"
+	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
 )
 
 const serverVersion = "0.1.0-dev"

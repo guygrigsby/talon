@@ -26,7 +26,7 @@
 //
 // Subsequent stdout lines are forwarded to talon's logs as
 // "[plugin/<name>] <line>" so plugin authors can debug-print.
-package plugin
+package legacy
 
 import (
 	"crypto/rand"

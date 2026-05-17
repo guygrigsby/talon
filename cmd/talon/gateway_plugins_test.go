@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/guygrigsby/talon/internal/openclaw"
-	"github.com/guygrigsby/talon/internal/plugin"
+	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
 	"github.com/guygrigsby/talon/internal/provider"
 	"github.com/guygrigsby/talon/internal/server"
 )

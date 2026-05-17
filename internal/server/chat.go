@@ -13,7 +13,7 @@ import (
 	"time"
 
 	"github.com/guygrigsby/talon/internal/agentcontext"
-	"github.com/guygrigsby/talon/internal/plugin"
+	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
 	"github.com/guygrigsby/talon/internal/provider"
 )
 
