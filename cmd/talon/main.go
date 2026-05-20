@@ -101,7 +101,6 @@ func main() {
 	root.AddCommand(secretsCmd())
 	root.AddCommand(dashboardCmd())
 	root.AddCommand(cronCmd())
-	root.AddCommand(imagesCmd())
 	root.AddCommand(pluginCmd())
 
 	// closeSharedRPC is wired as the post-run hook so any RPC client

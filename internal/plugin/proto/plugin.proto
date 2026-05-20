@@ -72,7 +72,7 @@ message Manifest {
   repeated ToolSpec offers_tools = 10;
   repeated ProviderSpec offers_providers = 11;
   repeated string offers_channels = 12;  // e.g. ["telegram"]
-  repeated ProviderSpec offers_image_providers = 13;
+  reserved 13; // was offers_image_providers; image generation moved out (see ~/projects/stable-diff)
 
   // What this plugin NEEDS from the host. The host gates each Host-side
   // method against this list (intersected with user grants/denies).
@@ -170,13 +170,6 @@ service Plugin {
   // plugin's responsibility.
   rpc StartChannel(StartChannelRequest) returns (stream IncomingChannelMessage);
   rpc SendChannelMessage(SendChannelMessageRequest) returns (SendChannelMessageResponse);
-
-  // Image-generation capability. StreamImageGeneration accepts a prompt
-  // + generation options and returns a stream of ImageDelta events:
-  // progress ticks while generating, a single ImageResult on success,
-  // or an ImageError on failure. The stream closes after the first
-  // terminal event (result or error).
-  rpc StreamImageGeneration(StreamImageGenerationRequest) returns (stream ImageDelta);
 }
 
 message InitializeRequest {
@@ -257,67 +250,6 @@ message SendChannelMessageRequest {
 
 message SendChannelMessageResponse {
   bool ok = 1;
-}
-
-// =============================================================================
-// Image generation — StreamImageGeneration request + response events
-// =============================================================================
-
-message StreamImageGenerationRequest {
-  string prompt = 1;
-  string negative_prompt = 2;
-  // Model WITHOUT the provider prefix. Empty means "use the provider
-  // default" (common for single-model backends like a local ComfyUI).
-  string model = 3;
-  // workflow_id selects a named builtin workflow (e.g.
-  // "sdxl-juggernaut"). Empty falls back to the provider default.
-  string workflow_id = 4;
-  // workflow is an optional JSON override for the full workflow. When
-  // non-empty the provider should use it verbatim (after patching
-  // prompt/seed/etc. per the other fields).
-  bytes workflow = 5;
-  // input_image carries raw image bytes for img2img / inpainting.
-  // Empty means text-to-image.
-  bytes input_image = 6;
-  optional int64 seed = 10;
-  int32 width = 11;
-  int32 height = 12;
-  int32 steps = 13;
-  // node_overrides is a JSON-encoded map[string]map[string]any: outer
-  // key is node id, inner map is {inputKey: value}. Providers that
-  // don't understand node-level overrides may ignore this field.
-  bytes node_overrides = 14;
-}
-
-// ImageDelta is one event in a StreamImageGeneration response stream.
-// Exactly one of the oneof fields is set per message. The stream closes
-// after the first terminal event (result or error).
-message ImageDelta {
-  oneof kind {
-    ImageProgress progress = 1;
-    ImageResult result = 2;
-    string error = 3;
-  }
-}
-
-message ImageProgress {
-  int32 step = 1;
-  int32 total = 2;
-  // node is the provider-specific identifier of the currently-executing
-  // stage (e.g. a ComfyUI node id). Optional — omit when not meaningful.
-  string node = 3;
-}
-
-message ImageResult {
-  // ref is the provider-specific reference to the generated image:
-  // a file path, a ComfyUI /view query string, a URL, etc. The host
-  // uses this to fetch the bytes via images.fetch or an equivalent RPC.
-  string ref = 1;
-  // data carries the raw image bytes inline. Providers that can do so
-  // efficiently should populate this to avoid a round-trip fetch.
-  // May be empty.
-  bytes data = 2;
-  string mime_type = 3;
 }
 
 // =============================================================================

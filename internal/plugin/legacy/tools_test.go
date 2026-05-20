@@ -61,9 +61,6 @@ func (c *stubPluginClient) StartChannel(context.Context, *pb.StartChannelRequest
 func (c *stubPluginClient) SendChannelMessage(context.Context, *pb.SendChannelMessageRequest, ...grpc.CallOption) (*pb.SendChannelMessageResponse, error) {
 	return nil, errors.New("not implemented")
 }
-func (c *stubPluginClient) StreamImageGeneration(context.Context, *pb.StreamImageGenerationRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[pb.ImageDelta], error) {
-	return nil, errors.New("not implemented")
-}
 
 // regHostWith creates a Host with stub registered under "testplug" so
 // each test doesn't repeat the wiring boilerplate.

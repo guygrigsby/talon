@@ -206,7 +206,6 @@ func gatewayRunCmd() *cobra.Command {
 				ToolRunnerFor:        newToolRunnerFactory(pluginHost, paths),
 				Paths:                paths,
 				PluginHost:           pluginHost,
-				ImageProviderFactory: &agentImageProviderFactory{host: pluginHost},
 			})
 
 			// Now that the WS server has built its handlers, wire the

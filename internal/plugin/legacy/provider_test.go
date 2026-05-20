@@ -252,9 +252,6 @@ func (c *fakeReturnerClient) StartChannel(context.Context, *pb.StartChannelReque
 func (c *fakeReturnerClient) SendChannelMessage(context.Context, *pb.SendChannelMessageRequest, ...grpc.CallOption) (*pb.SendChannelMessageResponse, error) {
 	return nil, errors.New("not used")
 }
-func (c *fakeReturnerClient) StreamImageGeneration(context.Context, *pb.StreamImageGenerationRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[pb.ImageDelta], error) {
-	return nil, errors.New("not used")
-}
 
 // --- ProviderByName / ChannelByName --------------------------------
 

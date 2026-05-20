@@ -1,6 +1,10 @@
 
 # Build outputs
 /bin/
+# Stray test artifacts at repo root (older Go versions sometimes leave
+# these from `go test` runs invoked outside a package dir).
+/pb.test
+/talon
 
 # Beads / Dolt files (added by bd init)
 .dolt/

@@ -253,24 +253,6 @@ func (h *Host) ProviderByName(name string) *Instance {
 	return nil
 }
 
-// ImageProviderByName returns the plugin instance whose manifest offers
-// an image provider by the given key, or nil if no loaded plugin
-// advertises it. Symmetric to ProviderByName.
-func (h *Host) ImageProviderByName(name string) *Instance {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for _, inst := range h.byName {
-		if inst == nil || inst.Manifest == nil {
-			continue
-		}
-		for _, ps := range inst.Manifest.OffersImageProviders {
-			if ps.GetName() == name {
-				return inst
-			}
-		}
-	}
-	return nil
-}
 
 // ChannelByName returns the plugin instance whose manifest offers a
 // channel by the given name, or nil if no loaded plugin advertises it.

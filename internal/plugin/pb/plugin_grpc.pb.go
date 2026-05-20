@@ -44,13 +44,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Plugin_Initialize_FullMethodName            = "/talon.plugin.v1.Plugin/Initialize"
-	Plugin_Shutdown_FullMethodName              = "/talon.plugin.v1.Plugin/Shutdown"
-	Plugin_RunTool_FullMethodName               = "/talon.plugin.v1.Plugin/RunTool"
-	Plugin_StreamCompletion_FullMethodName      = "/talon.plugin.v1.Plugin/StreamCompletion"
-	Plugin_StartChannel_FullMethodName          = "/talon.plugin.v1.Plugin/StartChannel"
-	Plugin_SendChannelMessage_FullMethodName    = "/talon.plugin.v1.Plugin/SendChannelMessage"
-	Plugin_StreamImageGeneration_FullMethodName = "/talon.plugin.v1.Plugin/StreamImageGeneration"
+	Plugin_Initialize_FullMethodName         = "/talon.plugin.v1.Plugin/Initialize"
+	Plugin_Shutdown_FullMethodName           = "/talon.plugin.v1.Plugin/Shutdown"
+	Plugin_RunTool_FullMethodName            = "/talon.plugin.v1.Plugin/RunTool"
+	Plugin_StreamCompletion_FullMethodName   = "/talon.plugin.v1.Plugin/StreamCompletion"
+	Plugin_StartChannel_FullMethodName       = "/talon.plugin.v1.Plugin/StartChannel"
+	Plugin_SendChannelMessage_FullMethodName = "/talon.plugin.v1.Plugin/SendChannelMessage"
 )
 
 // PluginClient is the client API for Plugin service.
@@ -71,12 +70,6 @@ type PluginClient interface {
 	// plugin's responsibility.
 	StartChannel(ctx context.Context, in *StartChannelRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[IncomingChannelMessage], error)
 	SendChannelMessage(ctx context.Context, in *SendChannelMessageRequest, opts ...grpc.CallOption) (*SendChannelMessageResponse, error)
-	// Image-generation capability. StreamImageGeneration accepts a prompt
-	// + generation options and returns a stream of ImageDelta events:
-	// progress ticks while generating, a single ImageResult on success,
-	// or an ImageError on failure. The stream closes after the first
-	// terminal event (result or error).
-	StreamImageGeneration(ctx context.Context, in *StreamImageGenerationRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ImageDelta], error)
 }
 
 type pluginClient struct {
@@ -165,25 +158,6 @@ func (c *pluginClient) SendChannelMessage(ctx context.Context, in *SendChannelMe
 	return out, nil
 }
 
-func (c *pluginClient) StreamImageGeneration(ctx context.Context, in *StreamImageGenerationRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ImageDelta], error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &Plugin_ServiceDesc.Streams[2], Plugin_StreamImageGeneration_FullMethodName, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	x := &grpc.GenericClientStream[StreamImageGenerationRequest, ImageDelta]{ClientStream: stream}
-	if err := x.ClientStream.SendMsg(in); err != nil {
-		return nil, err
-	}
-	if err := x.ClientStream.CloseSend(); err != nil {
-		return nil, err
-	}
-	return x, nil
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Plugin_StreamImageGenerationClient = grpc.ServerStreamingClient[ImageDelta]
-
 // PluginServer is the server API for Plugin service.
 // All implementations must embed UnimplementedPluginServer
 // for forward compatibility.
@@ -202,12 +176,6 @@ type PluginServer interface {
 	// plugin's responsibility.
 	StartChannel(*StartChannelRequest, grpc.ServerStreamingServer[IncomingChannelMessage]) error
 	SendChannelMessage(context.Context, *SendChannelMessageRequest) (*SendChannelMessageResponse, error)
-	// Image-generation capability. StreamImageGeneration accepts a prompt
-	// + generation options and returns a stream of ImageDelta events:
-	// progress ticks while generating, a single ImageResult on success,
-	// or an ImageError on failure. The stream closes after the first
-	// terminal event (result or error).
-	StreamImageGeneration(*StreamImageGenerationRequest, grpc.ServerStreamingServer[ImageDelta]) error
 	mustEmbedUnimplementedPluginServer()
 }
 
@@ -235,9 +203,6 @@ func (UnimplementedPluginServer) StartChannel(*StartChannelRequest, grpc.ServerS
 }
 func (UnimplementedPluginServer) SendChannelMessage(context.Context, *SendChannelMessageRequest) (*SendChannelMessageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SendChannelMessage not implemented")
-}
-func (UnimplementedPluginServer) StreamImageGeneration(*StreamImageGenerationRequest, grpc.ServerStreamingServer[ImageDelta]) error {
-	return status.Error(codes.Unimplemented, "method StreamImageGeneration not implemented")
 }
 func (UnimplementedPluginServer) mustEmbedUnimplementedPluginServer() {}
 func (UnimplementedPluginServer) testEmbeddedByValue()                {}
@@ -354,17 +319,6 @@ func _Plugin_SendChannelMessage_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Plugin_StreamImageGeneration_Handler(srv interface{}, stream grpc.ServerStream) error {
-	m := new(StreamImageGenerationRequest)
-	if err := stream.RecvMsg(m); err != nil {
-		return err
-	}
-	return srv.(PluginServer).StreamImageGeneration(m, &grpc.GenericServerStream[StreamImageGenerationRequest, ImageDelta]{ServerStream: stream})
-}
-
-// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
-type Plugin_StreamImageGenerationServer = grpc.ServerStreamingServer[ImageDelta]
-
 // Plugin_ServiceDesc is the grpc.ServiceDesc for Plugin service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -398,11 +352,6 @@ var Plugin_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "StartChannel",
 			Handler:       _Plugin_StartChannel_Handler,
-			ServerStreams: true,
-		},
-		{
-			StreamName:    "StreamImageGeneration",
-			Handler:       _Plugin_StreamImageGeneration_Handler,
 			ServerStreams: true,
 		},
 	},
