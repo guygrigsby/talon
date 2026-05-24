@@ -440,6 +440,14 @@ var builtinPlugins = []builtinPlugin{
 		Kind:        "plugin",
 		Label:       "Mac Notify",
 	},
+	{
+		EntryName:   "mac-open",
+		BinaryPath:  "/usr/local/bin/talon-mac-open-plugin",
+		Description: "Launch macOS apps and open URLs/files in specific apps via the `open` command (mac_open tool)",
+		Version:     "0.1.0",
+		Kind:        "plugin",
+		Label:       "Mac Open",
+	},
 }
 
 // BuiltinPluginCmd returns the default spawn cmd for a first-party

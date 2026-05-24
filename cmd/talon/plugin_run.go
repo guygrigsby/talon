@@ -11,6 +11,7 @@ import (
 	"github.com/guygrigsby/talon/internal/plugins/brave"
 	deepseekplug "github.com/guygrigsby/talon/internal/plugins/deepseek"
 	"github.com/guygrigsby/talon/internal/plugins/macnotify"
+	"github.com/guygrigsby/talon/internal/plugins/macopen"
 	"github.com/guygrigsby/talon/internal/plugins/telegram"
 	"github.com/guygrigsby/talon/internal/plugins/whisper"
 )
@@ -25,6 +26,7 @@ var pluginConstructors = map[string]func() (pb.PluginServer, error){
 	"whisper":     whisper.New,
 	"bluebubbles": bluebubbles.New,
 	"mac-notify":  macnotify.New,
+	"mac-open":    macopen.New,
 }
 
 func pluginCmd() *cobra.Command {
