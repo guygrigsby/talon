@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"log/slog"
 	"net/http"
+	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +16,7 @@ import (
 	"github.com/coder/websocket"
 	"github.com/guygrigsby/talon/internal/openclaw"
 	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
+	"github.com/guygrigsby/talon/web"
 )
 
 const serverVersion = "0.1.0-dev"
@@ -157,6 +161,8 @@ func New(cfg Config) *Server {
 	}
 	NewSessionsHandler(sessionStore, chatStore).Register(s.registry)
 	NewNodesHandler().Register(s.registry)
+	NewCommandsHandler().Register(s.registry)
+	NewModelsAuthStatusHandler(cfg.Paths).Register(s.registry)
 	s.routes()
 	return s
 }
@@ -165,21 +171,65 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
 	s.mux.HandleFunc("/ws", s.handleWS)
 
+	staticFS, spaFallback := s.resolveStaticFS()
 	var staticHandler http.Handler
-	if s.cfg.WebDir != "" {
-		staticHandler = http.FileServer(http.Dir(s.cfg.WebDir))
+	if staticFS != nil {
+		staticHandler = http.FileServer(http.FS(staticFS))
 	}
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if isWebSocketUpgrade(r) {
 			s.handleWS(w, r)
 			return
 		}
-		if staticHandler != nil {
-			staticHandler.ServeHTTP(w, r)
+		if staticHandler == nil {
+			http.NotFound(w, r)
 			return
 		}
-		http.NotFound(w, r)
+		if spaFallback && shouldServeSPAFallback(staticFS, r) {
+			r2 := r.Clone(r.Context())
+			r2.URL.Path = "/"
+			staticHandler.ServeHTTP(w, r2)
+			return
+		}
+		staticHandler.ServeHTTP(w, r)
 	})
+}
+
+// resolveStaticFS picks the FS that backs the static handler.
+//
+// Priority: explicit --web <dir> (operator override) → embedded SvelteKit
+// build (default in a freshly-built binary) → nil (no UI shipped). The SPA
+// fallback flag is only enabled for the embedded build, since an arbitrary
+// --web directory may not be an SPA.
+func (s *Server) resolveStaticFS() (fs.FS, bool) {
+	if s.cfg.WebDir != "" {
+		return os.DirFS(s.cfg.WebDir), false
+	}
+	if web.HasIndex() {
+		return web.Assets(), true
+	}
+	return nil, false
+}
+
+// shouldServeSPAFallback returns true when the request looks like a
+// client-side route (no file extension, GET) and the embedded FS has no
+// matching file. In that case the SPA's index.html is served instead so
+// SvelteKit's client router can take over.
+func shouldServeSPAFallback(staticFS fs.FS, r *http.Request) bool {
+	if r.Method != http.MethodGet {
+		return false
+	}
+	p := strings.TrimPrefix(r.URL.Path, "/")
+	if p == "" {
+		return false
+	}
+	if strings.Contains(path.Base(p), ".") {
+		return false
+	}
+	if _, err := fs.Stat(staticFS, p); err == nil {
+		return false
+	}
+	return true
 }
 
 func isWebSocketUpgrade(r *http.Request) bool {

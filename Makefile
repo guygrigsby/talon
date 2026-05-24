@@ -4,24 +4,28 @@ BIN    := bin/$(BINARY)
 
 LDFLAGS := -s -w
 
-GO  ?= go
-NPM ?= npm
+GO   ?= go
+NPM  ?= npm
+PNPM ?= pnpm
 
-# External openclaw control-ui (sibling repo). Override if your layout differs.
-WEB_DIR  ?= ../openclaw/ui
-WEB_DIST ?= ../openclaw/dist/control-ui
+# First-party talon web frontend (SvelteKit + Vite). Override to point at
+# a different build (legacy openclaw control-ui lived at ../openclaw/ui).
+WEB_DIR  ?= web
+WEB_DIST ?= web/build
 
-GO_SRC := $(shell find cmd internal -name '*.go' 2>/dev/null)
+GO_SRC := $(shell find cmd internal web -name '*.go' 2>/dev/null)
 
 # First-party Go plugins (deepseek, telegram, brave, whisper,
 # bluebubbles, mac-notify) ship inside the talon binary and run via
 # `talon plugin run <name>` — no per-plugin binary to build. PLUGINS
-# only lists the standalone helper CLIs (op for 1Password, keychain
-# for macOS Keychain) that exist as independent processes.
-PLUGINS := op keychain
+# only lists the standalone helper CLIs that exist as independent
+# processes. Currently just op (1Password CLI wrapper) — the keychain
+# resolver was inlined into the talon binary so one-binary installs
+# can resolve keychain:// refs without a sidecar.
+PLUGINS := op
 PLUGIN_BINS := $(addprefix bin/talon-,$(addsuffix -plugin,$(PLUGINS)))
 
-.PHONY: build all install run gateway-run gateway-run-with-ui plugins test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop docker-bounce docker-logs proto proto-tools
+.PHONY: build all install run dev gateway-run gateway-run-with-ui plugins test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop docker-bounce docker-logs proto proto-tools smoke
 
 build: $(BIN) plugins
 
@@ -29,6 +33,12 @@ all: build web-build
 
 $(BIN): $(GO_SRC) go.mod go.sum
 	$(GO) build -ldflags '$(LDFLAGS)' -o $(BIN) $(PKG)
+	@# Self-healing symlink at the project root so `./talon` always
+	@# points at the freshly built binary. Avoids the trap where a
+	@# bare `go build ./cmd/talon` (or some other ancient build) left
+	@# a stale ./talon next to ./bin/talon and the user runs the
+	@# wrong one.
+	@ln -sf $(BIN) $(BINARY)
 
 # plugins builds the standalone helper CLIs (op, keychain) into bin/.
 # First-party Go plugins are in the talon binary; no per-plugin build
@@ -47,6 +57,19 @@ run: build
 gateway-run: build
 	$(BIN) gateway run $(ARGS)
 
+# dev runs the talon gateway and the Vite dev server side-by-side. The
+# Vite server proxies /ws and /healthz to the gateway (vite.config.ts),
+# so visit http://127.0.0.1:5173 — not the gateway port — while iterating.
+# Ctrl-C kills both processes via the EXIT trap.
+dev: build
+	@echo "talon dev loop:"
+	@echo "  gateway: http://127.0.0.1:18789 (WS at /ws)"
+	@echo "  ui:      http://127.0.0.1:5173"
+	@trap 'kill 0' EXIT INT TERM; \
+	  $(BIN) gateway run $(ARGS) & \
+	  $(MAKE) web-dev & \
+	  wait
+
 gateway-run-with-ui: build web-build
 	$(BIN) gateway run --web $(WEB_DIST) $(ARGS)
 
@@ -60,6 +83,18 @@ test:
 # loops where you don't need the gate.
 test-fast:
 	$(GO) test -short ./...
+
+# smoke is the fastest verification path: vets everything (catches
+# build breaks across the tree) and runs a small set of pure-Go
+# dispatch / naming unit tests that don't touch the filesystem,
+# network, or sub-processes. Suitable after a single handler edit
+# when you want a "did I break wiring?" check without paying the
+# full server-package compile + 189-test runtime.
+smoke:
+	$(GO) vet ./...
+	$(GO) test -count=1 -timeout=15s \
+	    -run '^Test(NodeList|CommandsList|ModelsAuthStatus|Health|KeychainServiceForPath|MigratePlan|WriteFileRef|ParseFileRef|PluginConstructors)' \
+	    ./internal/server ./cmd/talon
 
 # End-to-end tests boot talon-gateway in a Docker container via
 # testcontainers-go and exercise the full plugin lifecycle. Requires
@@ -95,13 +130,13 @@ clean:
 	rm -rf bin
 
 web-install:
-	cd $(WEB_DIR) && $(NPM) install
+	cd $(WEB_DIR) && $(PNPM) install
 
 web-dev:
-	cd $(WEB_DIR) && $(NPM) run dev
+	cd $(WEB_DIR) && $(PNPM) run dev
 
 web-build:
-	cd $(WEB_DIR) && $(NPM) run build
+	cd $(WEB_DIR) && $(PNPM) run build
 
 web: web-build
 
@@ -169,6 +204,19 @@ proto:
 	       --go-grpc_out=$(PROTO_OUT) --go-grpc_opt=paths=source_relative \
 	       -I$(PROTO_DIR) \
 	       $(PROTO_DIR)/plugin.proto
+
+# ---- connect api ------------------------------------------------------
+# Regenerates the talon.v1.* Connect stubs from proto/talon/v1/*.proto.
+# Distinct from `proto` above: that one builds the gRPC plugin protocol
+# shipped to plugins; this one builds the gateway's outward-facing
+# Connect API consumed by web/ and any future Go SDK (talon-y6v).
+# Requires the `buf` CLI (brew install bufbuild/buf/buf) and the
+# protoc-gen-connect-go plugin (run `make connect-tools`).
+connect:
+	buf generate
+
+connect-tools:
+	$(GO) install connectrpc.com/connect/cmd/protoc-gen-connect-go@latest
 
 proto-tools:
 	$(GO) install google.golang.org/protobuf/cmd/protoc-gen-go@latest
