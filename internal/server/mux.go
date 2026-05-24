@@ -32,3 +32,10 @@ func (s *Server) UptimeMs() int64 { return s.uptimeMs() }
 // Version returns the server's version string. Lets Connect's
 // InfraService.Health match the WS health payload exactly.
 func (s *Server) Version() string { return serverVersion }
+
+// Auth returns the server's auth config so the Connect path's auth
+// interceptor can mirror the WS handshake's Authorize call without
+// the connectapi package needing to know how cfg is wired. Returned
+// by value — AuthConfig is small and immutable for a server's
+// lifetime, so a copy is safe and avoids exposing the inner cfg.
+func (s *Server) Auth() AuthConfig { return s.cfg.Auth }
