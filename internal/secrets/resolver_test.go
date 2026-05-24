@@ -58,14 +58,13 @@ func TestResolver_LiteralPassthrough(t *testing.T) {
 	}
 }
 
-func TestResolver_DispatchesToPlugin(t *testing.T) {
-	// Drop a fake plugin on PATH that echoes its arg back. Verifies
-	// the dispatch routes op:// → talon-op-plugin and the resolver
-	// strips the trailing newline `op` (and our fake) emits.
+func TestResolver_DispatchesOpToPlugin(t *testing.T) {
+	// Drop a fake talon-op-plugin on PATH that echoes its arg back.
+	// Verifies op:// still routes through the plugin (it has
+	// bootstrap state that earns process isolation). Trailing
+	// newline trimming is part of the resolver contract.
 	dir := t.TempDir()
-	for _, scheme := range []string{"op", "keychain"} {
-		mkFakePlugin(t, dir, "talon-"+scheme+"-plugin", "echo \"resolved-$1\"")
-	}
+	mkFakePlugin(t, dir, "talon-op-plugin", "echo \"resolved-$1\"")
 	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
 
 	r := NewResolver()
@@ -76,13 +75,30 @@ func TestResolver_DispatchesToPlugin(t *testing.T) {
 	if got != "resolved-op://Personal/foo/credential" {
 		t.Errorf("op resolve: got %q, want resolved-op://Personal/foo/credential", got)
 	}
+}
 
-	got, err = r.Resolve(context.Background(), "keychain://my-service")
-	if err != nil {
-		t.Fatalf("keychain resolve errored: %v", err)
+func TestSplitKeychainTarget(t *testing.T) {
+	cases := []struct {
+		in       string
+		service  string
+		account  string
+	}{
+		{"my-service", "my-service", ""},
+		{"my-service/me", "my-service", "me"},
+		{"talon.gateway.auth.token", "talon.gateway.auth.token", ""},
+		{"talon.gateway.auth.token/guygrigsby", "talon.gateway.auth.token", "guygrigsby"},
+		// Multiple slashes — only the last is the account separator.
+		// Lets keychain service names that legitimately contain
+		// slashes (rare but legal) survive parsing.
+		{"a/b/c", "a/b", "c"},
+		{"", "", ""},
 	}
-	if got != "resolved-keychain://my-service" {
-		t.Errorf("keychain resolve: got %q, want resolved-keychain://my-service", got)
+	for _, c := range cases {
+		gotSvc, gotAcc := splitKeychainTarget(c.in)
+		if gotSvc != c.service || gotAcc != c.account {
+			t.Errorf("splitKeychainTarget(%q) = (%q, %q), want (%q, %q)",
+				c.in, gotSvc, gotAcc, c.service, c.account)
+		}
 	}
 }
 
@@ -100,6 +116,38 @@ func TestResolver_MissingPluginErrors(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "talon-op-plugin") {
 		t.Errorf("error should mention missing plugin name: %v", err)
+	}
+}
+
+func TestPluginSearchPaths_IncludesExeDirAndBinSubdir(t *testing.T) {
+	// pluginSearchPaths must probe both the directory containing
+	// the running binary AND its bin/ subdirectory. The two dev
+	// layouts to cover:
+	//   - canonical: ./bin/talon launches → plugin at ./bin/<name>
+	//   - project-root: ./talon launches  → plugin at ./bin/<name>
+	// os.Executable() in `go test` resolves to the compiled test
+	// binary's path. We just need both shapes to appear in the
+	// returned list — the actual values depend on test layout.
+	// op:// is the only remaining plugin-routed scheme; keychain
+	// was inlined. Test the search paths via that binary name.
+	paths := pluginSearchPaths("talon-op-plugin")
+	if len(paths) < 2 {
+		t.Fatalf("expected ≥2 probe paths, got %d: %v", len(paths), paths)
+	}
+	var sawSameDir, sawBinSubdir bool
+	for _, p := range paths {
+		base := filepath.Base(filepath.Dir(p))
+		if base == "bin" {
+			sawBinSubdir = true
+		} else if !strings.HasPrefix(p, "/usr/local/") && !strings.HasPrefix(p, "/opt/homebrew/") {
+			sawSameDir = true
+		}
+	}
+	if !sawSameDir {
+		t.Errorf("missing same-dir probe (./<binary>): %v", paths)
+	}
+	if !sawBinSubdir {
+		t.Errorf("missing bin/ subdir probe (./bin/<binary>): %v", paths)
 	}
 }
 

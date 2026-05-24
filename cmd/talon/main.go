@@ -13,6 +13,7 @@ import (
 	"github.com/guygrigsby/talon/internal/gateway"
 	talonlog "github.com/guygrigsby/talon/internal/log"
 	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/secrets"
 	"github.com/spf13/cobra"
 )
 
@@ -206,6 +207,20 @@ func dialWith(ctx context.Context, urlOverride, tokenOverride string) (*gateway.
 	token := cfg.Gateway.Auth.Token
 	if tokenOverride != "" {
 		token = tokenOverride
+	}
+	// Resolve op:// / keychain:// references so the auth handshake
+	// gets the cleartext token, not the raw reference string. Same
+	// pattern as gateway.go (server-side resolution at startup) and
+	// dashboard.go — every place that reads gateway.auth.token from
+	// config needs this. Literals pass through unchanged.
+	if token != "" {
+		resolveCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		resolved, rerr := secrets.NewResolver().Resolve(resolveCtx, token)
+		cancel()
+		if rerr != nil {
+			return nil, nil, fmt.Errorf("resolve gateway.auth.token: %w", rerr)
+		}
+		token = resolved
 	}
 	cli := gateway.NewClient(url, token)
 	if err := cli.Connect(ctx); err != nil {

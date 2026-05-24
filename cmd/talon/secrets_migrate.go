@@ -1,31 +1,36 @@
-// Package main — `talon secrets migrate <path>` and
+// Package main — `talon secrets migrate` and
 // `talon secrets keychain-bootstrap`.
 //
-// migrate is the workhorse: takes a dotted config path, reads the
-// literal value, creates (or updates) a 1Password item with that
-// value, replaces the literal in config with the corresponding
-// op:// reference, and round-trips a read through the resolver to
-// confirm the new reference works. Aborts (and leaves config
-// unchanged) on any step that fails — never strands the user with
-// a non-functional config.
+// migrate is the bulk sweep: walks the merged config and per-agent
+// JSON files, identifies every literal sensitive value, and moves
+// each into the macOS keychain as a keychain://talon.<dotted-path>
+// reference. Dry-run by default; --apply commits the writes.
 //
-// keychain-bootstrap is the one-time setup: stores a 1Password
-// service-account token in the macOS keychain at the well-known
-// service name talon-op-plugin pulls from. Lets the op CLI auth
-// non-interactively from a fresh shell.
+// The job here is "get plaintext off disk" — no path arg, no
+// vault/item flags, no per-secret interaction. Users with existing
+// op:// or keychain:// refs are left alone (already migrated);
+// only Kind=="literal" rows from `secrets audit` are touched.
+//
+// keychain-bootstrap stays in this file because it's the sibling
+// "store this one credential" command: it puts the 1Password
+// service-account token in the macOS keychain so talon-op-plugin
+// can resolve op:// references non-interactively. Lives next to
+// migrate because they share the macOS-only + `security` CLI
+// preconditions.
 
 package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
@@ -44,217 +49,287 @@ const keychainServiceForOPToken = "talon.opAccessToken"
 
 func secretsMigrateCmd() *cobra.Command {
 	var (
-		vault       string
-		field       string
-		itemName    string
-		dryRun      bool
-		yes         bool
+		apply   bool
+		account string
+		filter  string
 	)
 	c := &cobra.Command{
-		Use:   "migrate <path>",
-		Short: "Move a plaintext secret at <path> into 1Password and replace it with an op:// reference",
-		Long: `Migrates one config secret from disk into 1Password:
+		Use:   "migrate",
+		Short: "Move every plaintext secret on disk into the macOS keychain",
+		Long: `Walks the merged config and per-agent auth files, identifies
+every literal sensitive value, and migrates each into the macOS
+keychain as keychain://talon.<dotted-path>.
 
-  1. Read the literal value at <path> from the merged config.
-  2. Create (or update) a 1Password item named after the path.
-  3. Replace the literal in the talon overlay with op://...
-  4. Round-trip a read through the resolver to confirm.
+DEFAULT IS DRY-RUN — pass --apply to actually write to the keychain
+and rewrite config. The dry-run plan prints one row per literal so
+you can review naming and scope before committing.
 
-<path> uses the same dotted syntax as 'talon config get' / 'config
-set'. Run 'talon secrets ls' first to see candidates.
+Already-migrated refs (op://, keychain://) are skipped — this command
+only converts literal plaintext.
 
 Examples:
-  talon secrets migrate gateway.auth.token
-  talon secrets migrate channels.telegram.botToken --vault Personal`,
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			path := args[0]
-			paths := resolvePaths()
-
-			// Dispatch on path shape:
-			//   file://<rel>:<key>  → openclaw-layer JSON file
-			//                          (auth-profiles, paired devices,
-			//                          identity, exec-approvals).
-			//                          Writes go to TALON OVERLAY,
-			//                          never to ~/.openclaw.
-			//   anything else        → dotted merged-config path.
-			if strings.HasPrefix(path, "file://") {
-				return migrateFilePath(cmd, paths, path, vault, field, itemName, dryRun, yes)
+  talon secrets migrate                  # show plan
+  talon secrets migrate --apply          # do it
+  talon secrets migrate --filter gateway # only paths matching "gateway"`,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if runtime.GOOS != "darwin" {
+				return fmt.Errorf("secrets migrate is macOS-only (current: %s) — the keychain:// resolver shells out to `security`", runtime.GOOS)
 			}
-
-			segments, err := config.ParsePath(path)
-			if err != nil {
-				return fmt.Errorf("parse path: %w", err)
+			if apply {
+				if _, err := exec.LookPath("security"); err != nil {
+					return fmt.Errorf("`security` CLI not found (should be on every macOS)")
+				}
 			}
-			merged, err := config.MergedBytes(paths)
-			if err != nil {
-				return fmt.Errorf("read merged config: %w", err)
-			}
-
-			cur := gjson.GetBytes(merged, strings.Join(segments, "."))
-			if !cur.Exists() {
-				return fmt.Errorf("path not found: %s", path)
-			}
-			if cur.Type != gjson.String {
-				return fmt.Errorf("path %s is not a string (got %s); migrate only supports string secrets", path, gjsonTypeName(cur.Type))
-			}
-			value := cur.Str
-			if value == "" {
-				return fmt.Errorf("path %s has empty value (nothing to migrate)", path)
-			}
-			if secrets.IsReference(value) {
-				return fmt.Errorf("path %s is already a reference (%s); skip", path, value)
-			}
-			if !secrets.IsSensitivePath(path) {
-				return fmt.Errorf("path %s doesn't look sensitive (no token/password/secret/key/auth segment); refusing to migrate", path)
-			}
-
-			if itemName == "" {
-				itemName = itemNameForPath(path)
-			}
-			ref := fmt.Sprintf("op://%s/%s/%s", vault, itemName, field)
-
-			cmd.Println("Migrating", path)
-			cmd.Printf("  → 1Password: vault=%s item=%s field=%s\n", vault, itemName, field)
-			cmd.Println("  → Replacing literal in", paths.Talon.Config)
-			cmd.Println("  → New reference:", ref)
-			if dryRun {
-				cmd.Println("(dry-run; no changes made)")
-				return nil
-			}
-			if !yes {
-				cmd.Print("Proceed? [y/N] ")
-				reader := bufio.NewReader(os.Stdin)
-				line, _ := reader.ReadString('\n')
-				if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
-					return fmt.Errorf("aborted")
+			if account == "" {
+				if u := os.Getenv("USER"); u != "" {
+					account = u
+				} else {
+					account = "talon"
 				}
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-
-			// Step 1: write to 1Password. We do this BEFORE
-			// touching config so a 1P failure can't strand the
-			// user with a broken config and an unsaved secret.
-			if err := upsertOpItem(ctx, vault, itemName, field, value); err != nil {
-				return fmt.Errorf("write to 1Password: %w", err)
-			}
-
-			// Step 2: round-trip via the resolver to confirm
-			// the new reference can actually be read back.
-			roundTrip, err := secrets.NewResolver().Resolve(ctx, ref)
+			paths := resolvePaths()
+			plan, err := buildMigratePlan(paths, filter)
 			if err != nil {
-				return fmt.Errorf("verify new reference: %w (config NOT modified)", err)
+				return err
 			}
-			if roundTrip != value {
-				return fmt.Errorf("verify mismatch: 1Password returned %d bytes, expected %d (config NOT modified)", len(roundTrip), len(value))
+			if len(plan) == 0 {
+				fmt.Fprintln(cmd.OutOrStdout(), "No plaintext secrets found. Nothing to migrate.")
+				return nil
 			}
 
-			// Step 3: replace the config value. SetReplaceSafe
-			// preserves the rest of the file structure.
-			if _, err := config.Set(paths, segments, ref, config.SetOpts{Mode: config.SetReplaceSafe}); err != nil {
-				return fmt.Errorf("rewrite config: %w (1Password item exists at %s — re-run to replace literal)", err, ref)
+			printMigratePlan(cmd, plan, account, apply)
+			if !apply {
+				fmt.Fprintln(cmd.OutOrStdout(), "")
+				fmt.Fprintln(cmd.OutOrStdout(), "Dry-run only. Re-run with --apply to migrate.")
+				return nil
 			}
-			cmd.Println("✓ Migrated", path, "→", ref)
-			return nil
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+			defer cancel()
+			return applyMigratePlan(ctx, cmd, paths, plan, account)
 		},
 	}
-	c.Flags().StringVar(&vault, "vault", "Personal", "1Password vault to write into")
-	c.Flags().StringVar(&field, "field", "credential", "1Password item field name")
-	c.Flags().StringVar(&itemName, "item", "", "1Password item name (default derived from path)")
-	c.Flags().BoolVar(&dryRun, "dry-run", false, "print what would happen without writing")
-	c.Flags().BoolVar(&yes, "yes", false, "skip the interactive confirmation")
+	c.Flags().BoolVar(&apply, "apply", false, "actually write to keychain and rewrite config (default: dry-run)")
+	c.Flags().StringVar(&account, "account", "", "keychain account name (default: $USER)")
+	c.Flags().StringVar(&filter, "filter", "", "only migrate paths containing this substring")
 	return c
 }
 
-// migrateFilePath handles paths of the form
-// "file://<rel>:<dotted-key>" — i.e. a secret living inside a
-// JSON file in ~/.openclaw (auth-profiles.json, paired.json,
-// etc.). Reads the value from the openclaw layer (or a
-// pre-existing talon overlay copy), creates the 1P item, and
-// writes the modified file with the op:// reference to the
-// TALON OVERLAY at ~/.talon/<rel>. The openclaw file is never
-// modified — the per-agent reader in gateway_chat.go already
-// prefers the talon overlay path so the override picks up
-// transparently.
-func migrateFilePath(cmd *cobra.Command, paths openclaw.Paths, fullPath, vault, field, itemName string, dryRun, yes bool) error {
+// migrateItem is one row in the plan: a discovered literal secret
+// and where it will end up.
+type migrateItem struct {
+	// Path is the source location — dotted merged-config path
+	// ("gateway.auth.token") or file:// reference
+	// ("file://agents/main/agent/auth-profiles.json:profiles.openai:default.key").
+	Path string
+	// Value is the plaintext to write into the keychain. Kept in
+	// memory only — never logged, never echoed to stdout, never
+	// written to disk outside the keychain.
+	Value string
+	// Service is the keychain service name we'll create. Format:
+	// talon.<dotted-path> with file:// rel-paths flattened in.
+	Service string
+}
+
+// buildMigratePlan walks both audit sources and returns one item
+// per literal secret. Empty values and existing refs are skipped —
+// migrate is the "convert literals" command; refs are already
+// migrated and empties have nothing to move.
+func buildMigratePlan(paths openclaw.Paths, filter string) ([]migrateItem, error) {
+	merged, err := config.MergedBytes(paths)
+	if err != nil {
+		return nil, fmt.Errorf("read merged config: %w", err)
+	}
+	configEntries := auditSecrets(merged)
+	fileEntries := auditFileSecrets(paths.Openclaw.Dir)
+
+	items := []migrateItem{}
+	for _, e := range configEntries {
+		if e.Kind != "literal" {
+			continue
+		}
+		if filter != "" && !strings.Contains(e.Path, filter) {
+			continue
+		}
+		value, err := readConfigLiteral(merged, e.Path)
+		if err != nil || value == "" {
+			continue
+		}
+		items = append(items, migrateItem{
+			Path:    e.Path,
+			Value:   value,
+			Service: KeychainServiceForPath(e.Path),
+		})
+	}
+	for _, e := range fileEntries {
+		if e.Kind != "literal" {
+			continue
+		}
+		if filter != "" && !strings.Contains(e.Path, filter) {
+			continue
+		}
+		value, err := readFileLiteral(paths, e.Path)
+		if err != nil || value == "" {
+			continue
+		}
+		items = append(items, migrateItem{
+			Path:    e.Path,
+			Value:   value,
+			Service: KeychainServiceForPath(e.Path),
+		})
+	}
+	sort.Slice(items, func(i, j int) bool { return items[i].Path < items[j].Path })
+	return items, nil
+}
+
+func readConfigLiteral(merged []byte, path string) (string, error) {
+	segments, err := config.ParsePath(path)
+	if err != nil {
+		return "", err
+	}
+	cur := gjson.GetBytes(merged, strings.Join(segments, "."))
+	if !cur.Exists() || cur.Type != gjson.String {
+		return "", fmt.Errorf("%s: not a string leaf", path)
+	}
+	return cur.Str, nil
+}
+
+func readFileLiteral(paths openclaw.Paths, fullPath string) (string, error) {
+	rel, key, err := parseFileRef(fullPath)
+	if err != nil {
+		return "", err
+	}
+	// Talon overlay wins, fall back to openclaw layer — same
+	// precedence as the runtime reader.
+	overlayPath := filepath.Join(paths.Talon.Dir, rel)
+	openclawPath := filepath.Join(paths.Openclaw.Dir, rel)
+	src := overlayPath
+	if _, err := os.Stat(src); err != nil {
+		src = openclawPath
+	}
+	raw, err := os.ReadFile(src)
+	if err != nil {
+		return "", err
+	}
+	cur := gjson.GetBytes(raw, key)
+	if !cur.Exists() || cur.Type != gjson.String {
+		return "", fmt.Errorf("%s: not a string leaf", key)
+	}
+	return cur.Str, nil
+}
+
+func printMigratePlan(cmd *cobra.Command, items []migrateItem, account string, apply bool) {
+	mode := "PLAN (dry-run)"
+	if apply {
+		mode = "APPLYING"
+	}
+	fmt.Fprintf(cmd.OutOrStdout(), "%s — %d secret(s), keychain account=%s\n\n", mode, len(items), account)
+	tw := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
+	fmt.Fprintln(tw, "SOURCE\tKEYCHAIN SERVICE\tNEW REFERENCE")
+	for _, it := range items {
+		fmt.Fprintf(tw, "%s\t%s\tkeychain://%s\n", it.Path, it.Service, it.Service)
+	}
+	tw.Flush()
+}
+
+// applyMigratePlan executes each migration. Per-item failures are
+// reported but don't abort — partial progress is fine because each
+// keychain write is independently verified before its config gets
+// rewritten.
+func applyMigratePlan(ctx context.Context, cmd *cobra.Command, paths openclaw.Paths, items []migrateItem, account string) error {
+	var failures int
+	for _, it := range items {
+		ref := "keychain://" + it.Service
+		if err := writeKeychainEntry(ctx, it.Service, account, it.Value); err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "✗ %s — keychain write failed: %v\n", it.Path, err)
+			failures++
+			continue
+		}
+		// Verify via the canonical resolver (inlined keychain
+		// reader) so the same code path the gateway uses at
+		// runtime validates the entry.
+		roundTrip, err := secrets.NewResolver().Resolve(ctx, ref)
+		if err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "✗ %s — verify failed: %v (keychain entry exists; config NOT modified)\n", it.Path, err)
+			failures++
+			continue
+		}
+		if roundTrip != it.Value {
+			fmt.Fprintf(cmd.OutOrStdout(), "✗ %s — verify mismatch (keychain returned different bytes; config NOT modified)\n", it.Path)
+			failures++
+			continue
+		}
+		if err := writeRefForPath(paths, it.Path, ref); err != nil {
+			fmt.Fprintf(cmd.OutOrStdout(), "✗ %s — config rewrite failed: %v (keychain entry at %s is good; re-run to finish)\n", it.Path, err, ref)
+			failures++
+			continue
+		}
+		fmt.Fprintf(cmd.OutOrStdout(), "✓ %s → %s\n", it.Path, ref)
+	}
+	if failures > 0 {
+		return fmt.Errorf("secrets migrate: %d of %d item(s) failed", failures, len(items))
+	}
+	fmt.Fprintln(cmd.OutOrStdout(), "")
+	fmt.Fprintln(cmd.OutOrStdout(), "All literals migrated. The gateway picks up new refs as it re-reads them — usually transparently per-request. Restart the gateway only if you've rotated the underlying values (rare; migration writes the same bytes you had on disk).")
+	return nil
+}
+
+// writeKeychainEntry creates or updates a generic-password entry in
+// the macOS keychain. -U makes the upsert atomic: if the service+
+// account combo already exists, it's overwritten rather than
+// failing as a duplicate.
+func writeKeychainEntry(ctx context.Context, service, account, value string) error {
+	args := []string{
+		"add-generic-password",
+		"-U",
+		"-s", service,
+		"-a", account,
+		"-w", value,
+	}
+	runCmd := exec.CommandContext(ctx, "security", args...)
+	runCmd.Stderr = os.Stderr
+	if err := runCmd.Run(); err != nil {
+		return fmt.Errorf("security add-generic-password: %w", err)
+	}
+	return nil
+}
+
+// writeRefForPath dispatches on path shape: dotted merged-config
+// path → config.Set on the talon overlay; file:// path → JSON
+// rewrite of the file in the talon overlay.
+func writeRefForPath(paths openclaw.Paths, path, ref string) error {
+	if strings.HasPrefix(path, "file://") {
+		return writeFileRef(paths, path, ref)
+	}
+	segments, err := config.ParsePath(path)
+	if err != nil {
+		return err
+	}
+	if _, err := config.Set(paths, segments, ref, config.SetOpts{Mode: config.SetReplaceSafe}); err != nil {
+		return err
+	}
+	return nil
+}
+
+// writeFileRef rewrites a file:// secret in the talon overlay,
+// leaving the openclaw layer file alone. Same overlay-only write
+// policy the rest of talon uses for layered state.
+func writeFileRef(paths openclaw.Paths, fullPath, ref string) error {
 	rel, key, err := parseFileRef(fullPath)
 	if err != nil {
 		return err
 	}
-	if !secrets.IsSensitivePath(key) {
-		return fmt.Errorf("key %q in %s doesn't look sensitive (no token/key/auth segment); refusing to migrate", key, rel)
-	}
-
-	// Source preference: talon overlay first (so a prior partial
-	// migration is consistent), then openclaw layer.
 	overlayPath := filepath.Join(paths.Talon.Dir, rel)
 	openclawPath := filepath.Join(paths.Openclaw.Dir, rel)
-	srcPath := overlayPath
-	if _, err := os.Stat(srcPath); err != nil {
-		srcPath = openclawPath
+	src := overlayPath
+	if _, err := os.Stat(src); err != nil {
+		src = openclawPath
 	}
-	raw, err := os.ReadFile(srcPath)
+	raw, err := os.ReadFile(src)
 	if err != nil {
-		return fmt.Errorf("read %s: %w", srcPath, err)
+		return fmt.Errorf("read %s: %w", src, err)
 	}
-	cur := gjson.GetBytes(raw, key)
-	if !cur.Exists() {
-		return fmt.Errorf("key %q not found in %s", key, srcPath)
-	}
-	if cur.Type != gjson.String {
-		return fmt.Errorf("key %q in %s is not a string (got %s)", key, srcPath, gjsonTypeName(cur.Type))
-	}
-	value := cur.Str
-	if value == "" {
-		return fmt.Errorf("key %q in %s has empty value", key, srcPath)
-	}
-	if secrets.IsReference(value) {
-		return fmt.Errorf("key %q in %s is already a reference (%s)", key, srcPath, value)
-	}
-
-	if itemName == "" {
-		itemName = itemNameForPath(strings.TrimPrefix(fullPath, "file://"))
-	}
-	ref := fmt.Sprintf("op://%s/%s/%s", vault, itemName, field)
-
-	cmd.Println("Migrating", fullPath)
-	cmd.Printf("  → 1Password: vault=%s item=%s field=%s\n", vault, itemName, field)
-	cmd.Printf("  → Source file: %s\n", srcPath)
-	cmd.Printf("  → Talon overlay write: %s\n", overlayPath)
-	cmd.Println("  → New reference:", ref)
-	cmd.Println("  (the openclaw file is left untouched; talon's reader prefers the overlay)")
-	if dryRun {
-		cmd.Println("(dry-run; no changes made)")
-		return nil
-	}
-	if !yes {
-		cmd.Print("Proceed? [y/N] ")
-		reader := bufio.NewReader(os.Stdin)
-		line, _ := reader.ReadString('\n')
-		if !strings.HasPrefix(strings.ToLower(strings.TrimSpace(line)), "y") {
-			return fmt.Errorf("aborted")
-		}
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	if err := upsertOpItem(ctx, vault, itemName, field, value); err != nil {
-		return fmt.Errorf("write to 1Password: %w", err)
-	}
-	roundTrip, err := secrets.NewResolver().Resolve(ctx, ref)
-	if err != nil {
-		return fmt.Errorf("verify new reference: %w (config NOT modified)", err)
-	}
-	if roundTrip != value {
-		return fmt.Errorf("verify mismatch (config NOT modified)")
-	}
-
-	// Write the modified JSON to the talon overlay. Use sjson so
-	// the rest of the file structure stays byte-identical to
-	// the source — minimizes diff and avoids reformatting.
 	updated, err := sjsonSetString(raw, key, ref)
 	if err != nil {
 		return fmt.Errorf("rewrite JSON: %w", err)
@@ -265,8 +340,6 @@ func migrateFilePath(cmd *cobra.Command, paths openclaw.Paths, fullPath, vault, 
 	if err := os.WriteFile(overlayPath, updated, 0o600); err != nil {
 		return fmt.Errorf("write overlay: %w", err)
 	}
-	cmd.Println("✓ Migrated", fullPath, "→", ref)
-	cmd.Println("  Wrote talon overlay at", overlayPath)
 	return nil
 }
 
@@ -290,109 +363,35 @@ func sjsonSetString(raw []byte, key, value string) ([]byte, error) {
 	return sjson.SetBytes(raw, key, value)
 }
 
-// itemNameForPath turns a dotted config path into a 1Password
-// item name that's valid + reverse-readable. We replace dots with
-// dashes (1P item names allow most characters but dots feel
-// pathy + confusing) and prefix with "talon-" so the items are
-// grouped in the user's vault search.
+// KeychainServiceForPath derives the keychain service name from a
+// secret's source path. Format: talon.<dotted-path> with any non-
+// dot separator (/, :, ", [, ], etc.) flattened into a dot, and
+// runs of dots collapsed to a single dot.
 //
-//	gateway.auth.token            → talon-gateway-auth-token
-//	channels.telegram.botToken    → talon-channels-telegram-botToken
-func itemNameForPath(path string) string {
+//	gateway.auth.token
+//	  → talon.gateway.auth.token
+//	channels.telegram.botToken
+//	  → talon.channels.telegram.botToken
+//	file://agents/main/agent/auth-profiles.json:profiles.openai:default.key
+//	  → talon.agents.main.agent.auth-profiles.json.profiles.openai.default.key
+//
+// Exported because the smoke target's test filter matches on this
+// name and dry-run output exercises it without writing to keychain.
+func KeychainServiceForPath(path string) string {
 	cleaned := strings.NewReplacer(
-		".", "-",
-		"[", "-",
-		"]", "",
+		"file://", "",
+		"/", ".",
+		":", ".",
 		`"`, "",
-		" ", "-",
-		"/", "-", // file:// paths contain slashes
-		":", "-", // file://...:key delimiter + profile ids like "openai:default"
+		"[", ".",
+		"]", "",
+		" ", ".",
 	).Replace(path)
-	// Collapse runs of dashes left over from adjacent
-	// separators (e.g. ."key" → -"key" → --key after quote
-	// removal). Keeps the item name tidy.
-	for strings.Contains(cleaned, "--") {
-		cleaned = strings.ReplaceAll(cleaned, "--", "-")
+	for strings.Contains(cleaned, "..") {
+		cleaned = strings.ReplaceAll(cleaned, "..", ".")
 	}
-	return "talon-" + strings.Trim(cleaned, "-")
-}
-
-// upsertOpItem creates a 1Password item with the given field, or
-// updates the field if the item already exists. Uses two `op`
-// invocations because `op item create` errors when the item
-// exists and `op item edit` errors when it doesn't — easier to
-// dispatch on existence than parse the error code.
-func upsertOpItem(ctx context.Context, vault, item, field, value string) error {
-	if _, err := exec.LookPath("op"); err != nil {
-		return fmt.Errorf("1Password CLI not on $PATH (brew install --cask 1password-cli)")
-	}
-	exists, err := opItemExists(ctx, vault, item)
-	if err != nil {
-		return fmt.Errorf("check item exists: %w", err)
-	}
-	if exists {
-		// Edit the existing item's field. `password` items use
-		// the field name verbatim; we always write the field
-		// the user chose (default "credential").
-		c := exec.CommandContext(ctx, "op", "item", "edit", item, "--vault", vault, fmt.Sprintf("%s=%s", field, value))
-		c.Stderr = os.Stderr
-		if err := c.Run(); err != nil {
-			return fmt.Errorf("op item edit %s: %w", item, err)
-		}
-		return nil
-	}
-	c := exec.CommandContext(ctx, "op", "item", "create",
-		"--category=password",
-		"--vault", vault,
-		"--title", item,
-		fmt.Sprintf("%s=%s", field, value),
-	)
-	c.Stderr = os.Stderr
-	if err := c.Run(); err != nil {
-		return fmt.Errorf("op item create %s: %w", item, err)
-	}
-	return nil
-}
-
-// opItemExists checks whether a 1Password item with the given
-// title exists in the named vault. `op item get` returns non-zero
-// when not found; we use stderr containing "doesn't exist" or a
-// non-zero exit as the negative signal.
-func opItemExists(ctx context.Context, vault, item string) (bool, error) {
-	c, cancel := context.WithTimeout(ctx, 8*time.Second)
-	defer cancel()
-	cmd := exec.CommandContext(c, "op", "item", "get", item, "--vault", vault, "--format", "json")
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		// "isn't an item in" / "doesn't exist" / exit code 1 →
-		// item missing. Anything else (auth failure, network) is
-		// a real error.
-		s := stderr.String()
-		if strings.Contains(s, "isn't an item") || strings.Contains(s, "doesn't exist") || strings.Contains(s, "no item") {
-			return false, nil
-		}
-		// op exits 1 on any error including not-found; only
-		// surface as error if we don't recognize the message.
-		return false, fmt.Errorf("op item get: %s", strings.TrimSpace(s))
-	}
-	return true, nil
-}
-
-func gjsonTypeName(t gjson.Type) string {
-	switch t {
-	case gjson.Null:
-		return "null"
-	case gjson.False, gjson.True:
-		return "boolean"
-	case gjson.Number:
-		return "number"
-	case gjson.String:
-		return "string"
-	case gjson.JSON:
-		return "object/array"
-	}
-	return "unknown"
+	cleaned = strings.Trim(cleaned, ".")
+	return "talon." + cleaned
 }
 
 // --- keychain-bootstrap ---------------------------------------------------
@@ -449,19 +448,8 @@ Examples:
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
-			// Use -U so an existing entry with the same service
-			// name is updated rather than rejected as duplicate.
-			args = []string{
-				"add-generic-password",
-				"-U",
-				"-s", keychainServiceForOPToken,
-				"-a", account,
-				"-w", token,
-			}
-			runCmd := exec.CommandContext(ctx, "security", args...)
-			runCmd.Stderr = os.Stderr
-			if err := runCmd.Run(); err != nil {
-				return fmt.Errorf("security add-generic-password: %w", err)
+			if err := writeKeychainEntry(ctx, keychainServiceForOPToken, account, token); err != nil {
+				return err
 			}
 
 			// Round-trip read so the user knows it's actually

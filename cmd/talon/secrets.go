@@ -94,9 +94,9 @@ func secretsAuditCmd() *cobra.Command {
 			}
 			if anyLiteral {
 				fmt.Fprintln(cmd.OutOrStdout(), "")
-				fmt.Fprintln(cmd.OutOrStdout(), "Plaintext secrets detected. To migrate:")
-				fmt.Fprintln(cmd.OutOrStdout(), "  1) talon secrets keychain-bootstrap   (one time, sets up 1P service-account token in keychain)")
-				fmt.Fprintln(cmd.OutOrStdout(), "  2) talon secrets migrate <path>       (one secret at a time)")
+				fmt.Fprintln(cmd.OutOrStdout(), "Plaintext secrets detected. To migrate to the macOS keychain:")
+				fmt.Fprintln(cmd.OutOrStdout(), "  talon secrets migrate            # show the plan")
+				fmt.Fprintln(cmd.OutOrStdout(), "  talon secrets migrate --apply    # do it")
 				if check {
 					return fmt.Errorf("secrets audit: plaintext secrets found")
 				}

@@ -33,6 +33,18 @@ func TestIsSensitiveKey(t *testing.T) {
 		"agentId":             false,
 		"enabled":             false,
 		"":                    false,
+		// "public" qualifier negates the "key" sensitivity — public
+		// keys are public by design, never credentials. Without the
+		// negator the audit walker would migrate paired-device
+		// publicKey entries into the keychain (talon-yt0 fallout).
+		"publicKey":      false,
+		"public_key":     false,
+		"PUBLIC_KEY":     false,
+		"devicePublicKey": false,
+		"public.key":     false, // dotted from gjson
+		// But "private" is itself sensitive — privateKey must still match.
+		"privateKey":  true,
+		"private_key": true,
 	}
 	for k, want := range cases {
 		if got := IsSensitiveKey(k); got != want {

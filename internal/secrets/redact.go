@@ -54,15 +54,33 @@ var SensitiveKeyParts = func() []string {
 // Placeholder is the string substituted for redacted leaf values.
 const Placeholder = "[REDACTED]"
 
+// NonSensitiveQualifiers are words that, when present alongside an
+// otherwise sensitive token, mark the key as NOT sensitive. The
+// canonical case is "publicKey" — "key" alone is sensitive, but a
+// public key is meant to be public, so the "public" qualifier wins.
+// Negators apply globally: any tokenized key containing one of
+// these words is non-sensitive regardless of other tokens.
+var NonSensitiveQualifiers = map[string]bool{
+	"public": true,
+}
+
 // IsSensitiveKey reports whether key tokenizes (camelCase /
 // snake_case / kebab-case / dotted) into a word that EQUALS one of
-// the SensitiveWords. Word-boundary matching avoids false
-// positives like "maxTokens" tripping on "token".
+// the SensitiveWords AND contains no NonSensitiveQualifiers. Word-
+// boundary matching avoids false positives like "maxTokens"
+// tripping on "token"; the negator list avoids "publicKey" tripping
+// on "key".
 func IsSensitiveKey(key string) bool {
 	if key == "" {
 		return false
 	}
-	for _, w := range tokenizeKey(key) {
+	tokens := tokenizeKey(key)
+	for _, w := range tokens {
+		if NonSensitiveQualifiers[w] {
+			return false
+		}
+	}
+	for _, w := range tokens {
 		if SensitiveWords[w] {
 			return true
 		}

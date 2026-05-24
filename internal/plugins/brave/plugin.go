@@ -220,8 +220,8 @@ func stripHTML(s string) string {
 
 // resolveBraveAPIKey returns the Brave API key by trying:
 //  1. BRAVE_API_KEY env var (highest precedence — quick override)
-//  2. talon-op-plugin / talon-keychain-plugin if BRAVE_API_KEY_REF
-//     is an op:// or keychain:// reference
+//  2. secrets.Resolver if BRAVE_API_KEY_REF is an op:// (routed
+//     through talon-op-plugin) or keychain:// (inlined) reference
 //
 // The host is responsible for setting one of these env vars when
 // it spawns the plugin (see cmd/talon/gateway.go's plugin spawn

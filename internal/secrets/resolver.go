@@ -9,8 +9,8 @@
 // At read-time, callers route these through Resolve() which dispatches
 // on the scheme prefix:
 //
-//	op://...        → `op read <ref>` (1Password CLI)
-//	keychain://...  → `security find-generic-password -s <name> -w` (macOS)
+//	op://...        → talon-op-plugin (process-isolated; needs `op` CLI)
+//	keychain://...  → inlined call to `security find-generic-password` (macOS-only, no helper binary)
 //	(no scheme)     → returned verbatim (literal value, back-compat)
 //
 // Resolved values are cached in-memory for the lifetime of the
@@ -31,6 +31,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -150,7 +151,12 @@ func (r *dispatchResolver) Resolve(ctx context.Context, ref string) (string, err
 	switch parsed.Scheme {
 	case "":
 		return parsed.Target, nil
-	case "op", "keychain":
+	case "keychain":
+		// Inlined (see keychain.go) so one-binary installs work.
+		return resolveKeychainRef(ctx, parsed.Target)
+	case "op":
+		// Still plugin-routed — op has bootstrap state (service-
+		// account token lookup) that earns process isolation.
 		return runSecretPlugin(ctx, parsed.Scheme, parsed.Raw)
 	default:
 		return "", fmt.Errorf("secrets: unknown scheme %q in %q", parsed.Scheme, ref)
@@ -165,14 +171,21 @@ func runSecretPlugin(ctx context.Context, scheme, ref string) (string, error) {
 	binary := "talon-" + scheme + "-plugin"
 	path, err := exec.LookPath(binary)
 	if err != nil {
-		// Fallback to the docker-image install path used by every
-		// other talon plugin. Lets a missing $PATH entry not block
-		// startup when the binary is actually present.
-		fallback := "/usr/local/bin/" + binary
-		if _, statErr := os.Stat(fallback); statErr == nil {
-			path = fallback
-		} else {
-			return "", fmt.Errorf("secrets: %s not found on $PATH or /usr/local/bin (build with `make build` and place on $PATH)", binary)
+		// Three fallback locations, in order:
+		//   1. Sibling of the running talon binary. Lets a dev
+		//      running ./bin/talon find ./bin/talon-keychain-plugin
+		//      without dropping ./bin into $PATH.
+		//   2. /usr/local/bin — docker-image install location.
+		//   3. /opt/homebrew/bin — Apple Silicon Homebrew default.
+		for _, candidate := range pluginSearchPaths(binary) {
+			if _, statErr := os.Stat(candidate); statErr == nil {
+				path = candidate
+				err = nil
+				break
+			}
+		}
+		if err != nil {
+			return "", fmt.Errorf("secrets: %s not found on $PATH or any known install location (build with `make build`, then place on $PATH or alongside the talon binary)", binary)
 		}
 	}
 	runCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -194,6 +207,31 @@ func runSecretPlugin(ctx context.Context, scheme, ref string) (string, error) {
 // startup; long-running paths should use a single shared Resolver.
 func ResolveOrLiteral(ctx context.Context, ref string) (string, error) {
 	return NewResolver().Resolve(ctx, ref)
+}
+
+// pluginSearchPaths returns the fallback locations to probe when a
+// secret plugin binary isn't on $PATH. Two dev-mode layouts are
+// covered:
+//
+//	./bin/talon            with helper at ./bin/talon-keychain-plugin   (canonical make build output)
+//	./talon                with helper at ./bin/talon-keychain-plugin   (project-root convenience copy)
+//
+// Plus the conventional install dirs. Failures from os.Executable()
+// are tolerated — we just skip those probes and fall through.
+func pluginSearchPaths(binary string) []string {
+	out := []string{}
+	if exe, err := os.Executable(); err == nil {
+		dir := filepath.Dir(exe)
+		// Same dir as the running binary (./bin/talon → ./bin/talon-keychain-plugin).
+		out = append(out, filepath.Join(dir, binary))
+		// bin/ subdir of the running binary's dir (./talon → ./bin/talon-keychain-plugin).
+		out = append(out, filepath.Join(dir, "bin", binary))
+	}
+	out = append(out,
+		"/usr/local/bin/"+binary,
+		"/opt/homebrew/bin/"+binary,
+	)
+	return out
 }
 
 // silence unused-import linter when only some helpers are used.

@@ -184,8 +184,8 @@ func (s *whisperPlugin) callWhisper(ctx context.Context, apiKey, audioPath, lang
 }
 
 // resolveOpenAIAPIKey: env first, then env-supplied reference
-// (resolved via talon-op-plugin / talon-keychain-plugin). Same
-// pattern as talon-brave-plugin.
+// (op:// via talon-op-plugin, keychain:// inlined). Same pattern
+// as talon-brave-plugin.
 func resolveOpenAIAPIKey(ctx context.Context) string {
 	if v := strings.TrimSpace(os.Getenv("OPENAI_API_KEY")); v != "" {
 		return v
