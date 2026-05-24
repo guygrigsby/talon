@@ -15,3 +15,40 @@ jobs:
           go-version-file: go.mod
       - run: make test
       - run: make vet
+
+  proto:
+    # Guards the FE contract under proto/talon/v1. lint catches
+    # style drift; breaking catches accidental field removals,
+    # type changes, and number renumbers that would silently
+    # invalidate the frontend's generated TS types. talon-y6v
+    # split the WS surface into typed Connect services; this job
+    # is the policy gate that keeps the split honest.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Breaking-change detection needs both the current and
+          # the previous commit so the diff is real. Direct-push
+          # workflow on this repo: HEAD~1 is the baseline on
+          # main; on PRs the action below picks main automatically.
+          fetch-depth: 2
+      - uses: bufbuild/buf-setup-action@v1
+      - name: buf lint
+        run: buf lint
+      - name: buf breaking (vs HEAD~1 on push, vs main on PR)
+        env:
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            buf breaking --against '.git#branch=origin/main'
+          else
+            # First commit edge case: HEAD~1 may not exist on a
+            # brand-new repo. Skip cleanly instead of failing the
+            # whole job — only matters until the first proto edit
+            # lands after this workflow goes live.
+            if git rev-parse HEAD~1 >/dev/null 2>&1; then
+              buf breaking --against '.git#ref=HEAD~1'
+            else
+              echo "no HEAD~1 yet; skipping breaking check"
+            fi
+          fi
