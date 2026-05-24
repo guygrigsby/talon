@@ -1,0 +1,102 @@
+/*
+ * talon design tokens — light minimal
+ *
+ * One calm off-white canvas, ink text, a single cool-blue accent. Hierarchy
+ * comes from weight, size, color, and density — not ornament. No textures,
+ * no display serif, no dark chrome. A technical control surface that stays
+ * out of the way.
+ *
+ * Every text pair is verified ≥4.5:1 on its stated surface (WCAG 2.2 AA).
+ * Accent and status colors used as text clear 4.5:1; per-source dots are
+ * decorative UI (≥3:1).
+ */
+
+:root {
+	/* --- surfaces — pure white, structure from hairlines --------------- */
+	--canvas: #ffffff;       /* app background / chrome */
+	--surface: #ffffff;      /* raised panels: content, palette, inspector */
+	--surface-2: #f3f3f1;    /* subtle fill: headers, hovers */
+	--surface-3: #e9e9e6;    /* pressed / active fill */
+	--border: #e6e6e2;       /* hairline */
+	--border-strong: #d4d4ce;/* stronger divider */
+
+	/* --- text — all checked ≥4.5:1 on canvas/surface ------------------- */
+	--ink: #18181a;          /* ~16:1 — primary */
+	--ink-2: #54545a;        /* ~7.1:1 — secondary */
+	--ink-3: #74747a;        /* ~4.7:1 — meta / captions */
+
+	/* --- accent — cool blue, the only chromatic voice in the chrome ---- */
+	--accent: #2563eb;           /* ~5.2:1 on white — links, active, focus */
+	--accent-strong: #1d4ed8;    /* hover / pressed */
+	--accent-tint: rgba(37, 99, 235, 0.08);  /* selected / hover wash */
+	--accent-edge: rgba(37, 99, 235, 0.28);  /* tinted border */
+	--on-accent: #ffffff;        /* text on a filled accent */
+
+	/* --- status (on light) --------------------------------------------- */
+	--good: #15803d;     /* ~5.0:1 */
+	--warn: #b45309;     /* ~4.9:1 */
+	--err: #b91c1c;      /* ~5.9:1 */
+
+	/* --- per-source dots — decorative UI, ≥3:1 on white ---------------- */
+	--src-telegram: #1d72b8;
+	--src-signal: #2b6cb0;
+	--src-imessage: #178a47;
+	--src-slack: #a3344f;
+	--src-discord: #5b46c4;
+	--src-whisper: #b4530a;
+	--src-cli: #6b6b70;
+	--src-web: #6b6b70;
+	--src-irc: #2c7f78;
+
+	/* --- type families ------------------------------------------------- */
+	/* Atkinson Hyperlegible: characterful, accessibility-first humanist sans.
+	 * Courier Prime: data / ids / numbers. No display serif. */
+	--ff-body:
+		'Atkinson Hyperlegible', system-ui, -apple-system, 'Helvetica Neue',
+		sans-serif;
+	--ff-mono:
+		'Courier Prime', ui-monospace, 'SF Mono', Menlo, monospace;
+
+	/* --- type scale — FOUR sizes in rem -------------------------------- */
+	--fs-xs: 0.6875rem;   /* 11 — labels, meta */
+	--fs-sm: 0.8125rem;   /* 13 — captions, dense data */
+	--fs-md: 0.9375rem;   /* 15 — body / UI base */
+	--fs-lg: 1.125rem;    /* 18 — section title, one moment per screen */
+
+	--lh-tight: 1.2;
+	--lh-snug: 1.4;
+	--lh-body: 1.6;
+
+	--tracking-caps: 0.08em;   /* labels — restrained, not inscriptional */
+	--tracking-loose: 0.01em;
+
+	/* --- spacing ------------------------------------------------------- */
+	--s-1: 4px;
+	--s-2: 8px;
+	--s-3: 12px;
+	--s-4: 16px;
+	--s-5: 20px;
+	--s-6: 24px;
+	--s-8: 32px;
+	--s-10: 40px;
+	--s-12: 48px;
+
+	/* --- chrome dimensions --------------------------------------------- */
+	--rail-w: 272px;
+	--inspector-w: 340px;
+	--topbar-h: 52px;
+	--statusbar-h: 28px;
+	--hit-min: 24px;     /* non-interactive header min-height */
+	--tap: 44px;         /* interactive touch target floor */
+
+	--radius: 6px;       /* soft, not bubbly */
+	--radius-sm: 4px;
+
+	/* --- focus — blue ring, light inner so it reads on canvas or white - */
+	--focus-ring: 0 0 0 2px var(--surface), 0 0 0 4px var(--accent);
+
+	/* --- elevation — soft, low ----------------------------------------- */
+	--shadow-pop:
+		0 1px 2px rgba(24, 24, 26, 0.06),
+		0 8px 28px rgba(24, 24, 26, 0.14);
+}
