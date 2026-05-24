@@ -73,108 +73,6 @@ func (x *SessionsPatchRequest) GetPatchJson() string {
 	return ""
 }
 
-type SessionsSubscribeRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// SessionKey, when set, narrows the stream to one session.
-	// Empty subscribes to all sessions the auth context can see.
-	SessionKey    string `protobuf:"bytes,1,opt,name=session_key,json=sessionKey,proto3" json:"session_key,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SessionsSubscribeRequest) Reset() {
-	*x = SessionsSubscribeRequest{}
-	mi := &file_talon_v1_sessions_proto_msgTypes[1]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SessionsSubscribeRequest) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SessionsSubscribeRequest) ProtoMessage() {}
-
-func (x *SessionsSubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_talon_v1_sessions_proto_msgTypes[1]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SessionsSubscribeRequest.ProtoReflect.Descriptor instead.
-func (*SessionsSubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_talon_v1_sessions_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *SessionsSubscribeRequest) GetSessionKey() string {
-	if x != nil {
-		return x.SessionKey
-	}
-	return ""
-}
-
-// SessionEvent is the lowest-common-denominator envelope: an
-// event name + opaque JSON payload. Strongly-typed event
-// variants are a follow-up once the WS contract is fully retired;
-// for now this mirrors the on-the-wire shape exactly.
-type SessionEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Event         string                 `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
-	PayloadJson   string                 `protobuf:"bytes,2,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"` // JSON-string-pass-through
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *SessionEvent) Reset() {
-	*x = SessionEvent{}
-	mi := &file_talon_v1_sessions_proto_msgTypes[2]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *SessionEvent) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*SessionEvent) ProtoMessage() {}
-
-func (x *SessionEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_talon_v1_sessions_proto_msgTypes[2]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use SessionEvent.ProtoReflect.Descriptor instead.
-func (*SessionEvent) Descriptor() ([]byte, []int) {
-	return file_talon_v1_sessions_proto_rawDescGZIP(), []int{2}
-}
-
-func (x *SessionEvent) GetEvent() string {
-	if x != nil {
-		return x.Event
-	}
-	return ""
-}
-
-func (x *SessionEvent) GetPayloadJson() string {
-	if x != nil {
-		return x.PayloadJson
-	}
-	return ""
-}
-
 var File_talon_v1_sessions_proto protoreflect.FileDescriptor
 
 const file_talon_v1_sessions_proto_rawDesc = "" +
@@ -184,17 +82,10 @@ const file_talon_v1_sessions_proto_rawDesc = "" +
 	"\vsession_key\x18\x01 \x01(\tR\n" +
 	"sessionKey\x12\x1d\n" +
 	"\n" +
-	"patch_json\x18\x02 \x01(\tR\tpatchJson\";\n" +
-	"\x18SessionsSubscribeRequest\x12\x1f\n" +
-	"\vsession_key\x18\x01 \x01(\tR\n" +
-	"sessionKey\"G\n" +
-	"\fSessionEvent\x12\x14\n" +
-	"\x05event\x18\x01 \x01(\tR\x05event\x12!\n" +
-	"\fpayload_json\x18\x02 \x01(\tR\vpayloadJson2\xc6\x01\n" +
+	"patch_json\x18\x02 \x01(\tR\tpatchJson2{\n" +
 	"\x0fSessionsService\x12.\n" +
 	"\x04List\x12\x0f.talon.v1.Empty\x1a\x15.talon.v1.JSONPayload\x128\n" +
-	"\x05Patch\x12\x1e.talon.v1.SessionsPatchRequest\x1a\x0f.talon.v1.Empty\x12I\n" +
-	"\tSubscribe\x12\".talon.v1.SessionsSubscribeRequest\x1a\x16.talon.v1.SessionEvent0\x01B>Z<github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1b\x06proto3"
+	"\x05Patch\x12\x1e.talon.v1.SessionsPatchRequest\x1a\x0f.talon.v1.EmptyB>Z<github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1b\x06proto3"
 
 var (
 	file_talon_v1_sessions_proto_rawDescOnce sync.Once
@@ -208,23 +99,19 @@ func file_talon_v1_sessions_proto_rawDescGZIP() []byte {
 	return file_talon_v1_sessions_proto_rawDescData
 }
 
-var file_talon_v1_sessions_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
+var file_talon_v1_sessions_proto_msgTypes = make([]protoimpl.MessageInfo, 1)
 var file_talon_v1_sessions_proto_goTypes = []any{
-	(*SessionsPatchRequest)(nil),     // 0: talon.v1.SessionsPatchRequest
-	(*SessionsSubscribeRequest)(nil), // 1: talon.v1.SessionsSubscribeRequest
-	(*SessionEvent)(nil),             // 2: talon.v1.SessionEvent
-	(*Empty)(nil),                    // 3: talon.v1.Empty
-	(*JSONPayload)(nil),              // 4: talon.v1.JSONPayload
+	(*SessionsPatchRequest)(nil), // 0: talon.v1.SessionsPatchRequest
+	(*Empty)(nil),                // 1: talon.v1.Empty
+	(*JSONPayload)(nil),          // 2: talon.v1.JSONPayload
 }
 var file_talon_v1_sessions_proto_depIdxs = []int32{
-	3, // 0: talon.v1.SessionsService.List:input_type -> talon.v1.Empty
+	1, // 0: talon.v1.SessionsService.List:input_type -> talon.v1.Empty
 	0, // 1: talon.v1.SessionsService.Patch:input_type -> talon.v1.SessionsPatchRequest
-	1, // 2: talon.v1.SessionsService.Subscribe:input_type -> talon.v1.SessionsSubscribeRequest
-	4, // 3: talon.v1.SessionsService.List:output_type -> talon.v1.JSONPayload
-	3, // 4: talon.v1.SessionsService.Patch:output_type -> talon.v1.Empty
-	2, // 5: talon.v1.SessionsService.Subscribe:output_type -> talon.v1.SessionEvent
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
+	2, // 2: talon.v1.SessionsService.List:output_type -> talon.v1.JSONPayload
+	1, // 3: talon.v1.SessionsService.Patch:output_type -> talon.v1.Empty
+	2, // [2:4] is the sub-list for method output_type
+	0, // [0:2] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -242,7 +129,7 @@ func file_talon_v1_sessions_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_talon_v1_sessions_proto_rawDesc), len(file_talon_v1_sessions_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   3,
+			NumMessages:   1,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

@@ -43,15 +43,17 @@ const (
 
 // ChatServiceClient is a client for the talon.v1.ChatService service.
 type ChatServiceClient interface {
-	// Send accepts a user turn and returns the run ID immediately.
-	// Events for the run flow on Subscribe — keeping send and
-	// subscribe separate matches the existing WS contract so
-	// frontends migrate one call at a time.
+	// Send appends a user turn and starts the assistant run. Returns
+	// the run_id immediately; events for the run flow on Subscribe.
+	// The send and subscribe split mirrors the existing WS contract
+	// so frontends can migrate one call at a time.
 	Send(context.Context, *connect.Request[v1.ChatSendRequest]) (*connect.Response[v1.ChatSendResponse], error)
-	// History returns the recorded turns for a session.
-	History(context.Context, *connect.Request[v1.ChatHistoryRequest]) (*connect.Response[v1.JSONPayload], error)
-	// Subscribe opens a server-stream of chat events scoped to a
-	// session. Filters by run when run_id is set.
+	// History returns the recorded turns for a session in insertion
+	// order. Caller filters / paginates client-side once it has the
+	// window it wants.
+	History(context.Context, *connect.Request[v1.ChatHistoryRequest]) (*connect.Response[v1.ChatHistoryResponse], error)
+	// Subscribe opens a server-stream of typed chat + tool events
+	// scoped to a session. Optionally narrowed to one run_id.
 	Subscribe(context.Context, *connect.Request[v1.ChatSubscribeRequest]) (*connect.ServerStreamForClient[v1.ChatEvent], error)
 }
 
@@ -72,7 +74,7 @@ func NewChatServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 			connect.WithSchema(chatServiceMethods.ByName("Send")),
 			connect.WithClientOptions(opts...),
 		),
-		history: connect.NewClient[v1.ChatHistoryRequest, v1.JSONPayload](
+		history: connect.NewClient[v1.ChatHistoryRequest, v1.ChatHistoryResponse](
 			httpClient,
 			baseURL+ChatServiceHistoryProcedure,
 			connect.WithSchema(chatServiceMethods.ByName("History")),
@@ -90,7 +92,7 @@ func NewChatServiceClient(httpClient connect.HTTPClient, baseURL string, opts ..
 // chatServiceClient implements ChatServiceClient.
 type chatServiceClient struct {
 	send      *connect.Client[v1.ChatSendRequest, v1.ChatSendResponse]
-	history   *connect.Client[v1.ChatHistoryRequest, v1.JSONPayload]
+	history   *connect.Client[v1.ChatHistoryRequest, v1.ChatHistoryResponse]
 	subscribe *connect.Client[v1.ChatSubscribeRequest, v1.ChatEvent]
 }
 
@@ -100,7 +102,7 @@ func (c *chatServiceClient) Send(ctx context.Context, req *connect.Request[v1.Ch
 }
 
 // History calls talon.v1.ChatService.History.
-func (c *chatServiceClient) History(ctx context.Context, req *connect.Request[v1.ChatHistoryRequest]) (*connect.Response[v1.JSONPayload], error) {
+func (c *chatServiceClient) History(ctx context.Context, req *connect.Request[v1.ChatHistoryRequest]) (*connect.Response[v1.ChatHistoryResponse], error) {
 	return c.history.CallUnary(ctx, req)
 }
 
@@ -111,15 +113,17 @@ func (c *chatServiceClient) Subscribe(ctx context.Context, req *connect.Request[
 
 // ChatServiceHandler is an implementation of the talon.v1.ChatService service.
 type ChatServiceHandler interface {
-	// Send accepts a user turn and returns the run ID immediately.
-	// Events for the run flow on Subscribe — keeping send and
-	// subscribe separate matches the existing WS contract so
-	// frontends migrate one call at a time.
+	// Send appends a user turn and starts the assistant run. Returns
+	// the run_id immediately; events for the run flow on Subscribe.
+	// The send and subscribe split mirrors the existing WS contract
+	// so frontends can migrate one call at a time.
 	Send(context.Context, *connect.Request[v1.ChatSendRequest]) (*connect.Response[v1.ChatSendResponse], error)
-	// History returns the recorded turns for a session.
-	History(context.Context, *connect.Request[v1.ChatHistoryRequest]) (*connect.Response[v1.JSONPayload], error)
-	// Subscribe opens a server-stream of chat events scoped to a
-	// session. Filters by run when run_id is set.
+	// History returns the recorded turns for a session in insertion
+	// order. Caller filters / paginates client-side once it has the
+	// window it wants.
+	History(context.Context, *connect.Request[v1.ChatHistoryRequest]) (*connect.Response[v1.ChatHistoryResponse], error)
+	// Subscribe opens a server-stream of typed chat + tool events
+	// scoped to a session. Optionally narrowed to one run_id.
 	Subscribe(context.Context, *connect.Request[v1.ChatSubscribeRequest], *connect.ServerStream[v1.ChatEvent]) error
 }
 
@@ -169,7 +173,7 @@ func (UnimplementedChatServiceHandler) Send(context.Context, *connect.Request[v1
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("talon.v1.ChatService.Send is not implemented"))
 }
 
-func (UnimplementedChatServiceHandler) History(context.Context, *connect.Request[v1.ChatHistoryRequest]) (*connect.Response[v1.JSONPayload], error) {
+func (UnimplementedChatServiceHandler) History(context.Context, *connect.Request[v1.ChatHistoryRequest]) (*connect.Response[v1.ChatHistoryResponse], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("talon.v1.ChatService.History is not implemented"))
 }
 

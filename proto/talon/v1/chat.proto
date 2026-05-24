@@ -4,33 +4,41 @@ package talon.v1;
 
 option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1";
 
-import "talon/v1/common.proto";
-
-// ChatService handles per-turn chat sends + history reads + the
-// streaming-event subscription that delivers chat.delta /
-// agent.tool.* events back to the caller.
+// ChatService is the typed contract for chat send + history reads +
+// the long-lived event stream that delivers assistant deltas and
+// tool execution events back to the caller.
+//
+// The Subscribe stream returns CodeUnimplemented in stage 1 of the
+// WS→Connect migration (talon-y6v). The wire-level event shapes
+// below are the contract for both stages — once the server-side
+// EventSink lands, no proto changes here.
 service ChatService {
-  // Send accepts a user turn and returns the run ID immediately.
-  // Events for the run flow on Subscribe — keeping send and
-  // subscribe separate matches the existing WS contract so
-  // frontends migrate one call at a time.
+  // Send appends a user turn and starts the assistant run. Returns
+  // the run_id immediately; events for the run flow on Subscribe.
+  // The send and subscribe split mirrors the existing WS contract
+  // so frontends can migrate one call at a time.
   rpc Send(ChatSendRequest) returns (ChatSendResponse);
-  // History returns the recorded turns for a session.
-  rpc History(ChatHistoryRequest) returns (JSONPayload);
-  // Subscribe opens a server-stream of chat events scoped to a
-  // session. Filters by run when run_id is set.
+  // History returns the recorded turns for a session in insertion
+  // order. Caller filters / paginates client-side once it has the
+  // window it wants.
+  rpc History(ChatHistoryRequest) returns (ChatHistoryResponse);
+  // Subscribe opens a server-stream of typed chat + tool events
+  // scoped to a session. Optionally narrowed to one run_id.
   rpc Subscribe(ChatSubscribeRequest) returns (stream ChatEvent);
 }
 
+// ChatSendRequest mirrors the WS handler's accepted fields
+// exactly. Per-turn model / system overrides are intentionally NOT
+// in the schema yet: the WS handler doesn't read them, so
+// advertising them in the Connect contract would silently no-op.
+// Adding either field later is non-breaking.
 message ChatSendRequest {
   string session_key = 1;
   string message = 2;
+  // IdempotencyKey is also the run_id the server echoes back on
+  // events — the openclaw UI keys its run-tracking state off this
+  // value. Leave empty to let the server mint a fresh run_id.
   string idempotency_key = 3;
-  // Model, when set, overrides the agent's default for this turn.
-  string model = 4;
-  // System, when set, suffixes the agent's system prompt for this
-  // turn only.
-  string system = 5;
 }
 
 message ChatSendResponse {
@@ -39,6 +47,59 @@ message ChatSendResponse {
 
 message ChatHistoryRequest {
   string session_key = 1;
+  // Limit caps the returned row count from the most recent end.
+  // 0 means "no limit" (matches the WS handler convention).
+  int32 limit = 2;
+}
+
+message ChatHistoryResponse {
+  repeated HistoryRow messages = 1;
+}
+
+// HistoryRow is one turn's worth of content. The body oneof
+// carries the variant payload; id + seq are the stable React-key
+// fields the existing UI relies on.
+message HistoryRow {
+  string id = 1;
+  int32 seq = 2;
+  oneof body {
+    UserMessage       user        = 10;
+    AssistantMessage  assistant   = 11;
+    ToolUseMessage    tool_use    = 12;
+    ToolResultMessage tool_result = 13;
+  }
+}
+
+message UserMessage {
+  string text = 1;
+}
+
+message AssistantMessage {
+  // Text is the final accumulated assistant text for the turn.
+  // Empty when the turn consisted solely of tool calls — check
+  // tool_uses on the same row for that case.
+  string text = 1;
+  // ToolUses appears when this assistant turn invoked tools; one
+  // entry per tool call. Renders alongside the text as the
+  // multi-part assistant message the openclaw UI expects.
+  repeated ToolUseMessage tool_uses = 2;
+}
+
+message ToolUseMessage {
+  string tool_call_id = 1;
+  string name = 2;
+  // ArgsJson is the JSON-encoded arguments object the model sent.
+  // Kept as a string (not a struct) so callers don't have to
+  // declare every tool's arg shape in proto.
+  string args_json = 3;
+}
+
+message ToolResultMessage {
+  string tool_call_id = 1;
+  string name = 2;
+  // Output is the raw tool output text. Errors are encoded
+  // inline (the WS handler prefixes failures with "ERROR: ...").
+  string output = 3;
 }
 
 message ChatSubscribeRequest {
@@ -47,10 +108,74 @@ message ChatSubscribeRequest {
   string run_id = 2;
 }
 
-// ChatEvent is the envelope every server-pushed chat-stream
-// payload arrives in. Mirrors the WS frame's Event + Payload
-// shape so the migration is one-line on the consumer side.
+// ChatEvent is the typed envelope every server-pushed event
+// arrives in. The oneof carries one variant per state the WS
+// path emits today. ts_ms is the server wall-clock at emit time —
+// useful for client-side ordering when frames arrive out of order
+// on lossy transports.
 message ChatEvent {
-  string event = 1;
-  string payload_json = 2; // JSON-string-pass-through, see common.proto JSONPayload
+  int64 ts_ms = 1;
+  string run_id = 2;
+  string session_key = 3;
+  int32 seq = 4;
+  oneof payload {
+    ChatDelta   delta       = 10;
+    ChatFinal   final       = 11;
+    ChatAborted aborted     = 12;
+    ChatError   error       = 13;
+    ToolStart   tool_start  = 20;
+    ToolResult  tool_result = 21;
+  }
+}
+
+// ChatDelta carries an additive assistant-text suffix. Cumulative
+// is the full accumulated text including this delta (the WS
+// payload's message.content[0].text); delta_text is the suffix
+// added since the previous delta. replace is set when the new
+// text is not a prefix-extension; the talon provider abstraction
+// is append-only today so it's always false in practice but
+// preserved for v4 protocol compatibility.
+message ChatDelta {
+  string cumulative = 1;
+  string delta_text = 2;
+  bool replace = 3;
+}
+
+// ChatFinal closes the run. text is the final accumulated
+// assistant text. stop_reason mirrors the provider's stop signal
+// when available (e.g. "end_turn", "max_tokens", "tool_use").
+message ChatFinal {
+  string text = 1;
+  string stop_reason = 2;
+}
+
+// ChatAborted fires when a run is cancelled mid-stream. text is
+// whatever assistant text had accumulated at abort time.
+message ChatAborted {
+  string text = 1;
+}
+
+// ChatError is a terminal failure for the run. kind is a short
+// category tag ("provider", "tool-runner-unavailable",
+// "tool-loop-limit"); message is the human-readable detail.
+message ChatError {
+  string kind = 1;
+  string message = 2;
+}
+
+// ToolStart fires before a tool runs. args_json is the JSON-
+// encoded argument object the model emitted; UIs decode it for
+// pretty-printing.
+message ToolStart {
+  string tool_call_id = 1;
+  string name = 2;
+  string args_json = 3;
+}
+
+// ToolResult fires after a tool returns (whether or not it
+// succeeded — failures are encoded inline in output).
+message ToolResult {
+  string tool_call_id = 1;
+  string name = 2;
+  string output = 3;
 }

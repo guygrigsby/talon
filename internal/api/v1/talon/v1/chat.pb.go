@@ -21,18 +21,21 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// ChatSendRequest mirrors the WS handler's accepted fields
+// exactly. Per-turn model / system overrides are intentionally NOT
+// in the schema yet: the WS handler doesn't read them, so
+// advertising them in the Connect contract would silently no-op.
+// Adding either field later is non-breaking.
 type ChatSendRequest struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	SessionKey     string                 `protobuf:"bytes,1,opt,name=session_key,json=sessionKey,proto3" json:"session_key,omitempty"`
-	Message        string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
-	IdempotencyKey string                 `protobuf:"bytes,3,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
-	// Model, when set, overrides the agent's default for this turn.
-	Model string `protobuf:"bytes,4,opt,name=model,proto3" json:"model,omitempty"`
-	// System, when set, suffixes the agent's system prompt for this
-	// turn only.
-	System        string `protobuf:"bytes,5,opt,name=system,proto3" json:"system,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	SessionKey string                 `protobuf:"bytes,1,opt,name=session_key,json=sessionKey,proto3" json:"session_key,omitempty"`
+	Message    string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	// IdempotencyKey is also the run_id the server echoes back on
+	// events — the openclaw UI keys its run-tracking state off this
+	// value. Leave empty to let the server mint a fresh run_id.
+	IdempotencyKey string `protobuf:"bytes,3,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *ChatSendRequest) Reset() {
@@ -86,20 +89,6 @@ func (x *ChatSendRequest) GetIdempotencyKey() string {
 	return ""
 }
 
-func (x *ChatSendRequest) GetModel() string {
-	if x != nil {
-		return x.Model
-	}
-	return ""
-}
-
-func (x *ChatSendRequest) GetSystem() string {
-	if x != nil {
-		return x.System
-	}
-	return ""
-}
-
 type ChatSendResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	RunId         string                 `protobuf:"bytes,1,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
@@ -145,8 +134,11 @@ func (x *ChatSendResponse) GetRunId() string {
 }
 
 type ChatHistoryRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SessionKey    string                 `protobuf:"bytes,1,opt,name=session_key,json=sessionKey,proto3" json:"session_key,omitempty"`
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	SessionKey string                 `protobuf:"bytes,1,opt,name=session_key,json=sessionKey,proto3" json:"session_key,omitempty"`
+	// Limit caps the returned row count from the most recent end.
+	// 0 means "no limit" (matches the WS handler convention).
+	Limit         int32 `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -188,6 +180,417 @@ func (x *ChatHistoryRequest) GetSessionKey() string {
 	return ""
 }
 
+func (x *ChatHistoryRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type ChatHistoryResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Messages      []*HistoryRow          `protobuf:"bytes,1,rep,name=messages,proto3" json:"messages,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChatHistoryResponse) Reset() {
+	*x = ChatHistoryResponse{}
+	mi := &file_talon_v1_chat_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChatHistoryResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChatHistoryResponse) ProtoMessage() {}
+
+func (x *ChatHistoryResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_chat_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChatHistoryResponse.ProtoReflect.Descriptor instead.
+func (*ChatHistoryResponse) Descriptor() ([]byte, []int) {
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ChatHistoryResponse) GetMessages() []*HistoryRow {
+	if x != nil {
+		return x.Messages
+	}
+	return nil
+}
+
+// HistoryRow is one turn's worth of content. The body oneof
+// carries the variant payload; id + seq are the stable React-key
+// fields the existing UI relies on.
+type HistoryRow struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Id    string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Seq   int32                  `protobuf:"varint,2,opt,name=seq,proto3" json:"seq,omitempty"`
+	// Types that are valid to be assigned to Body:
+	//
+	//	*HistoryRow_User
+	//	*HistoryRow_Assistant
+	//	*HistoryRow_ToolUse
+	//	*HistoryRow_ToolResult
+	Body          isHistoryRow_Body `protobuf_oneof:"body"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HistoryRow) Reset() {
+	*x = HistoryRow{}
+	mi := &file_talon_v1_chat_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HistoryRow) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HistoryRow) ProtoMessage() {}
+
+func (x *HistoryRow) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_chat_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HistoryRow.ProtoReflect.Descriptor instead.
+func (*HistoryRow) Descriptor() ([]byte, []int) {
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *HistoryRow) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *HistoryRow) GetSeq() int32 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+func (x *HistoryRow) GetBody() isHistoryRow_Body {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+func (x *HistoryRow) GetUser() *UserMessage {
+	if x != nil {
+		if x, ok := x.Body.(*HistoryRow_User); ok {
+			return x.User
+		}
+	}
+	return nil
+}
+
+func (x *HistoryRow) GetAssistant() *AssistantMessage {
+	if x != nil {
+		if x, ok := x.Body.(*HistoryRow_Assistant); ok {
+			return x.Assistant
+		}
+	}
+	return nil
+}
+
+func (x *HistoryRow) GetToolUse() *ToolUseMessage {
+	if x != nil {
+		if x, ok := x.Body.(*HistoryRow_ToolUse); ok {
+			return x.ToolUse
+		}
+	}
+	return nil
+}
+
+func (x *HistoryRow) GetToolResult() *ToolResultMessage {
+	if x != nil {
+		if x, ok := x.Body.(*HistoryRow_ToolResult); ok {
+			return x.ToolResult
+		}
+	}
+	return nil
+}
+
+type isHistoryRow_Body interface {
+	isHistoryRow_Body()
+}
+
+type HistoryRow_User struct {
+	User *UserMessage `protobuf:"bytes,10,opt,name=user,proto3,oneof"`
+}
+
+type HistoryRow_Assistant struct {
+	Assistant *AssistantMessage `protobuf:"bytes,11,opt,name=assistant,proto3,oneof"`
+}
+
+type HistoryRow_ToolUse struct {
+	ToolUse *ToolUseMessage `protobuf:"bytes,12,opt,name=tool_use,json=toolUse,proto3,oneof"`
+}
+
+type HistoryRow_ToolResult struct {
+	ToolResult *ToolResultMessage `protobuf:"bytes,13,opt,name=tool_result,json=toolResult,proto3,oneof"`
+}
+
+func (*HistoryRow_User) isHistoryRow_Body() {}
+
+func (*HistoryRow_Assistant) isHistoryRow_Body() {}
+
+func (*HistoryRow_ToolUse) isHistoryRow_Body() {}
+
+func (*HistoryRow_ToolResult) isHistoryRow_Body() {}
+
+type UserMessage struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *UserMessage) Reset() {
+	*x = UserMessage{}
+	mi := &file_talon_v1_chat_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *UserMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*UserMessage) ProtoMessage() {}
+
+func (x *UserMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_chat_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use UserMessage.ProtoReflect.Descriptor instead.
+func (*UserMessage) Descriptor() ([]byte, []int) {
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *UserMessage) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+type AssistantMessage struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Text is the final accumulated assistant text for the turn.
+	// Empty when the turn consisted solely of tool calls — check
+	// tool_uses on the same row for that case.
+	Text string `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	// ToolUses appears when this assistant turn invoked tools; one
+	// entry per tool call. Renders alongside the text as the
+	// multi-part assistant message the openclaw UI expects.
+	ToolUses      []*ToolUseMessage `protobuf:"bytes,2,rep,name=tool_uses,json=toolUses,proto3" json:"tool_uses,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AssistantMessage) Reset() {
+	*x = AssistantMessage{}
+	mi := &file_talon_v1_chat_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AssistantMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AssistantMessage) ProtoMessage() {}
+
+func (x *AssistantMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_chat_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AssistantMessage.ProtoReflect.Descriptor instead.
+func (*AssistantMessage) Descriptor() ([]byte, []int) {
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *AssistantMessage) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *AssistantMessage) GetToolUses() []*ToolUseMessage {
+	if x != nil {
+		return x.ToolUses
+	}
+	return nil
+}
+
+type ToolUseMessage struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ToolCallId string                 `protobuf:"bytes,1,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	Name       string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// ArgsJson is the JSON-encoded arguments object the model sent.
+	// Kept as a string (not a struct) so callers don't have to
+	// declare every tool's arg shape in proto.
+	ArgsJson      string `protobuf:"bytes,3,opt,name=args_json,json=argsJson,proto3" json:"args_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolUseMessage) Reset() {
+	*x = ToolUseMessage{}
+	mi := &file_talon_v1_chat_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolUseMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolUseMessage) ProtoMessage() {}
+
+func (x *ToolUseMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_chat_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolUseMessage.ProtoReflect.Descriptor instead.
+func (*ToolUseMessage) Descriptor() ([]byte, []int) {
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ToolUseMessage) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ToolUseMessage) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ToolUseMessage) GetArgsJson() string {
+	if x != nil {
+		return x.ArgsJson
+	}
+	return ""
+}
+
+type ToolResultMessage struct {
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	ToolCallId string                 `protobuf:"bytes,1,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	Name       string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	// Output is the raw tool output text. Errors are encoded
+	// inline (the WS handler prefixes failures with "ERROR: ...").
+	Output        string `protobuf:"bytes,3,opt,name=output,proto3" json:"output,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolResultMessage) Reset() {
+	*x = ToolResultMessage{}
+	mi := &file_talon_v1_chat_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolResultMessage) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolResultMessage) ProtoMessage() {}
+
+func (x *ToolResultMessage) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_chat_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolResultMessage.ProtoReflect.Descriptor instead.
+func (*ToolResultMessage) Descriptor() ([]byte, []int) {
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ToolResultMessage) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ToolResultMessage) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ToolResultMessage) GetOutput() string {
+	if x != nil {
+		return x.Output
+	}
+	return ""
+}
+
 type ChatSubscribeRequest struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	SessionKey string                 `protobuf:"bytes,1,opt,name=session_key,json=sessionKey,proto3" json:"session_key,omitempty"`
@@ -199,7 +602,7 @@ type ChatSubscribeRequest struct {
 
 func (x *ChatSubscribeRequest) Reset() {
 	*x = ChatSubscribeRequest{}
-	mi := &file_talon_v1_chat_proto_msgTypes[3]
+	mi := &file_talon_v1_chat_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -211,7 +614,7 @@ func (x *ChatSubscribeRequest) String() string {
 func (*ChatSubscribeRequest) ProtoMessage() {}
 
 func (x *ChatSubscribeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_talon_v1_chat_proto_msgTypes[3]
+	mi := &file_talon_v1_chat_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -224,7 +627,7 @@ func (x *ChatSubscribeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChatSubscribeRequest.ProtoReflect.Descriptor instead.
 func (*ChatSubscribeRequest) Descriptor() ([]byte, []int) {
-	return file_talon_v1_chat_proto_rawDescGZIP(), []int{3}
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ChatSubscribeRequest) GetSessionKey() string {
@@ -241,20 +644,33 @@ func (x *ChatSubscribeRequest) GetRunId() string {
 	return ""
 }
 
-// ChatEvent is the envelope every server-pushed chat-stream
-// payload arrives in. Mirrors the WS frame's Event + Payload
-// shape so the migration is one-line on the consumer side.
+// ChatEvent is the typed envelope every server-pushed event
+// arrives in. The oneof carries one variant per state the WS
+// path emits today. ts_ms is the server wall-clock at emit time —
+// useful for client-side ordering when frames arrive out of order
+// on lossy transports.
 type ChatEvent struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Event         string                 `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
-	PayloadJson   string                 `protobuf:"bytes,2,opt,name=payload_json,json=payloadJson,proto3" json:"payload_json,omitempty"` // JSON-string-pass-through, see common.proto JSONPayload
+	state      protoimpl.MessageState `protogen:"open.v1"`
+	TsMs       int64                  `protobuf:"varint,1,opt,name=ts_ms,json=tsMs,proto3" json:"ts_ms,omitempty"`
+	RunId      string                 `protobuf:"bytes,2,opt,name=run_id,json=runId,proto3" json:"run_id,omitempty"`
+	SessionKey string                 `protobuf:"bytes,3,opt,name=session_key,json=sessionKey,proto3" json:"session_key,omitempty"`
+	Seq        int32                  `protobuf:"varint,4,opt,name=seq,proto3" json:"seq,omitempty"`
+	// Types that are valid to be assigned to Payload:
+	//
+	//	*ChatEvent_Delta
+	//	*ChatEvent_Final
+	//	*ChatEvent_Aborted
+	//	*ChatEvent_Error
+	//	*ChatEvent_ToolStart
+	//	*ChatEvent_ToolResult
+	Payload       isChatEvent_Payload `protobuf_oneof:"payload"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ChatEvent) Reset() {
 	*x = ChatEvent{}
-	mi := &file_talon_v1_chat_proto_msgTypes[4]
+	mi := &file_talon_v1_chat_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -266,7 +682,7 @@ func (x *ChatEvent) String() string {
 func (*ChatEvent) ProtoMessage() {}
 
 func (x *ChatEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_talon_v1_chat_proto_msgTypes[4]
+	mi := &file_talon_v1_chat_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -279,19 +695,482 @@ func (x *ChatEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChatEvent.ProtoReflect.Descriptor instead.
 func (*ChatEvent) Descriptor() ([]byte, []int) {
-	return file_talon_v1_chat_proto_rawDescGZIP(), []int{4}
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{10}
 }
 
-func (x *ChatEvent) GetEvent() string {
+func (x *ChatEvent) GetTsMs() int64 {
 	if x != nil {
-		return x.Event
+		return x.TsMs
+	}
+	return 0
+}
+
+func (x *ChatEvent) GetRunId() string {
+	if x != nil {
+		return x.RunId
 	}
 	return ""
 }
 
-func (x *ChatEvent) GetPayloadJson() string {
+func (x *ChatEvent) GetSessionKey() string {
 	if x != nil {
-		return x.PayloadJson
+		return x.SessionKey
+	}
+	return ""
+}
+
+func (x *ChatEvent) GetSeq() int32 {
+	if x != nil {
+		return x.Seq
+	}
+	return 0
+}
+
+func (x *ChatEvent) GetPayload() isChatEvent_Payload {
+	if x != nil {
+		return x.Payload
+	}
+	return nil
+}
+
+func (x *ChatEvent) GetDelta() *ChatDelta {
+	if x != nil {
+		if x, ok := x.Payload.(*ChatEvent_Delta); ok {
+			return x.Delta
+		}
+	}
+	return nil
+}
+
+func (x *ChatEvent) GetFinal() *ChatFinal {
+	if x != nil {
+		if x, ok := x.Payload.(*ChatEvent_Final); ok {
+			return x.Final
+		}
+	}
+	return nil
+}
+
+func (x *ChatEvent) GetAborted() *ChatAborted {
+	if x != nil {
+		if x, ok := x.Payload.(*ChatEvent_Aborted); ok {
+			return x.Aborted
+		}
+	}
+	return nil
+}
+
+func (x *ChatEvent) GetError() *ChatError {
+	if x != nil {
+		if x, ok := x.Payload.(*ChatEvent_Error); ok {
+			return x.Error
+		}
+	}
+	return nil
+}
+
+func (x *ChatEvent) GetToolStart() *ToolStart {
+	if x != nil {
+		if x, ok := x.Payload.(*ChatEvent_ToolStart); ok {
+			return x.ToolStart
+		}
+	}
+	return nil
+}
+
+func (x *ChatEvent) GetToolResult() *ToolResult {
+	if x != nil {
+		if x, ok := x.Payload.(*ChatEvent_ToolResult); ok {
+			return x.ToolResult
+		}
+	}
+	return nil
+}
+
+type isChatEvent_Payload interface {
+	isChatEvent_Payload()
+}
+
+type ChatEvent_Delta struct {
+	Delta *ChatDelta `protobuf:"bytes,10,opt,name=delta,proto3,oneof"`
+}
+
+type ChatEvent_Final struct {
+	Final *ChatFinal `protobuf:"bytes,11,opt,name=final,proto3,oneof"`
+}
+
+type ChatEvent_Aborted struct {
+	Aborted *ChatAborted `protobuf:"bytes,12,opt,name=aborted,proto3,oneof"`
+}
+
+type ChatEvent_Error struct {
+	Error *ChatError `protobuf:"bytes,13,opt,name=error,proto3,oneof"`
+}
+
+type ChatEvent_ToolStart struct {
+	ToolStart *ToolStart `protobuf:"bytes,20,opt,name=tool_start,json=toolStart,proto3,oneof"`
+}
+
+type ChatEvent_ToolResult struct {
+	ToolResult *ToolResult `protobuf:"bytes,21,opt,name=tool_result,json=toolResult,proto3,oneof"`
+}
+
+func (*ChatEvent_Delta) isChatEvent_Payload() {}
+
+func (*ChatEvent_Final) isChatEvent_Payload() {}
+
+func (*ChatEvent_Aborted) isChatEvent_Payload() {}
+
+func (*ChatEvent_Error) isChatEvent_Payload() {}
+
+func (*ChatEvent_ToolStart) isChatEvent_Payload() {}
+
+func (*ChatEvent_ToolResult) isChatEvent_Payload() {}
+
+// ChatDelta carries an additive assistant-text suffix. Cumulative
+// is the full accumulated text including this delta (the WS
+// payload's message.content[0].text); delta_text is the suffix
+// added since the previous delta. replace is set when the new
+// text is not a prefix-extension; the talon provider abstraction
+// is append-only today so it's always false in practice but
+// preserved for v4 protocol compatibility.
+type ChatDelta struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cumulative    string                 `protobuf:"bytes,1,opt,name=cumulative,proto3" json:"cumulative,omitempty"`
+	DeltaText     string                 `protobuf:"bytes,2,opt,name=delta_text,json=deltaText,proto3" json:"delta_text,omitempty"`
+	Replace       bool                   `protobuf:"varint,3,opt,name=replace,proto3" json:"replace,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChatDelta) Reset() {
+	*x = ChatDelta{}
+	mi := &file_talon_v1_chat_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChatDelta) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChatDelta) ProtoMessage() {}
+
+func (x *ChatDelta) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_chat_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChatDelta.ProtoReflect.Descriptor instead.
+func (*ChatDelta) Descriptor() ([]byte, []int) {
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ChatDelta) GetCumulative() string {
+	if x != nil {
+		return x.Cumulative
+	}
+	return ""
+}
+
+func (x *ChatDelta) GetDeltaText() string {
+	if x != nil {
+		return x.DeltaText
+	}
+	return ""
+}
+
+func (x *ChatDelta) GetReplace() bool {
+	if x != nil {
+		return x.Replace
+	}
+	return false
+}
+
+// ChatFinal closes the run. text is the final accumulated
+// assistant text. stop_reason mirrors the provider's stop signal
+// when available (e.g. "end_turn", "max_tokens", "tool_use").
+type ChatFinal struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	StopReason    string                 `protobuf:"bytes,2,opt,name=stop_reason,json=stopReason,proto3" json:"stop_reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChatFinal) Reset() {
+	*x = ChatFinal{}
+	mi := &file_talon_v1_chat_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChatFinal) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChatFinal) ProtoMessage() {}
+
+func (x *ChatFinal) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_chat_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChatFinal.ProtoReflect.Descriptor instead.
+func (*ChatFinal) Descriptor() ([]byte, []int) {
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ChatFinal) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *ChatFinal) GetStopReason() string {
+	if x != nil {
+		return x.StopReason
+	}
+	return ""
+}
+
+// ChatAborted fires when a run is cancelled mid-stream. text is
+// whatever assistant text had accumulated at abort time.
+type ChatAborted struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChatAborted) Reset() {
+	*x = ChatAborted{}
+	mi := &file_talon_v1_chat_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChatAborted) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChatAborted) ProtoMessage() {}
+
+func (x *ChatAborted) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_chat_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChatAborted.ProtoReflect.Descriptor instead.
+func (*ChatAborted) Descriptor() ([]byte, []int) {
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *ChatAborted) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+// ChatError is a terminal failure for the run. kind is a short
+// category tag ("provider", "tool-runner-unavailable",
+// "tool-loop-limit"); message is the human-readable detail.
+type ChatError struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Kind          string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
+	Message       string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChatError) Reset() {
+	*x = ChatError{}
+	mi := &file_talon_v1_chat_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChatError) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChatError) ProtoMessage() {}
+
+func (x *ChatError) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_chat_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChatError.ProtoReflect.Descriptor instead.
+func (*ChatError) Descriptor() ([]byte, []int) {
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *ChatError) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *ChatError) GetMessage() string {
+	if x != nil {
+		return x.Message
+	}
+	return ""
+}
+
+// ToolStart fires before a tool runs. args_json is the JSON-
+// encoded argument object the model emitted; UIs decode it for
+// pretty-printing.
+type ToolStart struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ToolCallId    string                 `protobuf:"bytes,1,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	ArgsJson      string                 `protobuf:"bytes,3,opt,name=args_json,json=argsJson,proto3" json:"args_json,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolStart) Reset() {
+	*x = ToolStart{}
+	mi := &file_talon_v1_chat_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolStart) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolStart) ProtoMessage() {}
+
+func (x *ToolStart) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_chat_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolStart.ProtoReflect.Descriptor instead.
+func (*ToolStart) Descriptor() ([]byte, []int) {
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ToolStart) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ToolStart) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ToolStart) GetArgsJson() string {
+	if x != nil {
+		return x.ArgsJson
+	}
+	return ""
+}
+
+// ToolResult fires after a tool returns (whether or not it
+// succeeded — failures are encoded inline in output).
+type ToolResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	ToolCallId    string                 `protobuf:"bytes,1,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	Output        string                 `protobuf:"bytes,3,opt,name=output,proto3" json:"output,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ToolResult) Reset() {
+	*x = ToolResult{}
+	mi := &file_talon_v1_chat_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ToolResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ToolResult) ProtoMessage() {}
+
+func (x *ToolResult) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_chat_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ToolResult.ProtoReflect.Descriptor instead.
+func (*ToolResult) Descriptor() ([]byte, []int) {
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ToolResult) GetToolCallId() string {
+	if x != nil {
+		return x.ToolCallId
+	}
+	return ""
+}
+
+func (x *ToolResult) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ToolResult) GetOutput() string {
+	if x != nil {
+		return x.Output
 	}
 	return ""
 }
@@ -300,29 +1179,96 @@ var File_talon_v1_chat_proto protoreflect.FileDescriptor
 
 const file_talon_v1_chat_proto_rawDesc = "" +
 	"\n" +
-	"\x13talon/v1/chat.proto\x12\btalon.v1\x1a\x15talon/v1/common.proto\"\xa3\x01\n" +
+	"\x13talon/v1/chat.proto\x12\btalon.v1\"u\n" +
 	"\x0fChatSendRequest\x12\x1f\n" +
 	"\vsession_key\x18\x01 \x01(\tR\n" +
 	"sessionKey\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\x12'\n" +
-	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\x12\x14\n" +
-	"\x05model\x18\x04 \x01(\tR\x05model\x12\x16\n" +
-	"\x06system\x18\x05 \x01(\tR\x06system\")\n" +
+	"\x0fidempotency_key\x18\x03 \x01(\tR\x0eidempotencyKey\")\n" +
 	"\x10ChatSendResponse\x12\x15\n" +
-	"\x06run_id\x18\x01 \x01(\tR\x05runId\"5\n" +
+	"\x06run_id\x18\x01 \x01(\tR\x05runId\"K\n" +
 	"\x12ChatHistoryRequest\x12\x1f\n" +
 	"\vsession_key\x18\x01 \x01(\tR\n" +
-	"sessionKey\"N\n" +
+	"sessionKey\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\"G\n" +
+	"\x13ChatHistoryResponse\x120\n" +
+	"\bmessages\x18\x01 \x03(\v2\x14.talon.v1.HistoryRowR\bmessages\"\x96\x02\n" +
+	"\n" +
+	"HistoryRow\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x10\n" +
+	"\x03seq\x18\x02 \x01(\x05R\x03seq\x12+\n" +
+	"\x04user\x18\n" +
+	" \x01(\v2\x15.talon.v1.UserMessageH\x00R\x04user\x12:\n" +
+	"\tassistant\x18\v \x01(\v2\x1a.talon.v1.AssistantMessageH\x00R\tassistant\x125\n" +
+	"\btool_use\x18\f \x01(\v2\x18.talon.v1.ToolUseMessageH\x00R\atoolUse\x12>\n" +
+	"\vtool_result\x18\r \x01(\v2\x1b.talon.v1.ToolResultMessageH\x00R\n" +
+	"toolResultB\x06\n" +
+	"\x04body\"!\n" +
+	"\vUserMessage\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\"]\n" +
+	"\x10AssistantMessage\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x125\n" +
+	"\ttool_uses\x18\x02 \x03(\v2\x18.talon.v1.ToolUseMessageR\btoolUses\"c\n" +
+	"\x0eToolUseMessage\x12 \n" +
+	"\ftool_call_id\x18\x01 \x01(\tR\n" +
+	"toolCallId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
+	"\targs_json\x18\x03 \x01(\tR\bargsJson\"a\n" +
+	"\x11ToolResultMessage\x12 \n" +
+	"\ftool_call_id\x18\x01 \x01(\tR\n" +
+	"toolCallId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
+	"\x06output\x18\x03 \x01(\tR\x06output\"N\n" +
 	"\x14ChatSubscribeRequest\x12\x1f\n" +
 	"\vsession_key\x18\x01 \x01(\tR\n" +
 	"sessionKey\x12\x15\n" +
-	"\x06run_id\x18\x02 \x01(\tR\x05runId\"D\n" +
-	"\tChatEvent\x12\x14\n" +
-	"\x05event\x18\x01 \x01(\tR\x05event\x12!\n" +
-	"\fpayload_json\x18\x02 \x01(\tR\vpayloadJson2\xd0\x01\n" +
+	"\x06run_id\x18\x02 \x01(\tR\x05runId\"\x9e\x03\n" +
+	"\tChatEvent\x12\x13\n" +
+	"\x05ts_ms\x18\x01 \x01(\x03R\x04tsMs\x12\x15\n" +
+	"\x06run_id\x18\x02 \x01(\tR\x05runId\x12\x1f\n" +
+	"\vsession_key\x18\x03 \x01(\tR\n" +
+	"sessionKey\x12\x10\n" +
+	"\x03seq\x18\x04 \x01(\x05R\x03seq\x12+\n" +
+	"\x05delta\x18\n" +
+	" \x01(\v2\x13.talon.v1.ChatDeltaH\x00R\x05delta\x12+\n" +
+	"\x05final\x18\v \x01(\v2\x13.talon.v1.ChatFinalH\x00R\x05final\x121\n" +
+	"\aaborted\x18\f \x01(\v2\x15.talon.v1.ChatAbortedH\x00R\aaborted\x12+\n" +
+	"\x05error\x18\r \x01(\v2\x13.talon.v1.ChatErrorH\x00R\x05error\x124\n" +
+	"\n" +
+	"tool_start\x18\x14 \x01(\v2\x13.talon.v1.ToolStartH\x00R\ttoolStart\x127\n" +
+	"\vtool_result\x18\x15 \x01(\v2\x14.talon.v1.ToolResultH\x00R\n" +
+	"toolResultB\t\n" +
+	"\apayload\"d\n" +
+	"\tChatDelta\x12\x1e\n" +
+	"\n" +
+	"cumulative\x18\x01 \x01(\tR\n" +
+	"cumulative\x12\x1d\n" +
+	"\n" +
+	"delta_text\x18\x02 \x01(\tR\tdeltaText\x12\x18\n" +
+	"\areplace\x18\x03 \x01(\bR\areplace\"@\n" +
+	"\tChatFinal\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1f\n" +
+	"\vstop_reason\x18\x02 \x01(\tR\n" +
+	"stopReason\"!\n" +
+	"\vChatAborted\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\"9\n" +
+	"\tChatError\x12\x12\n" +
+	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x18\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"^\n" +
+	"\tToolStart\x12 \n" +
+	"\ftool_call_id\x18\x01 \x01(\tR\n" +
+	"toolCallId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
+	"\targs_json\x18\x03 \x01(\tR\bargsJson\"Z\n" +
+	"\n" +
+	"ToolResult\x12 \n" +
+	"\ftool_call_id\x18\x01 \x01(\tR\n" +
+	"toolCallId\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
+	"\x06output\x18\x03 \x01(\tR\x06output2\xd8\x01\n" +
 	"\vChatService\x12=\n" +
-	"\x04Send\x12\x19.talon.v1.ChatSendRequest\x1a\x1a.talon.v1.ChatSendResponse\x12>\n" +
-	"\aHistory\x12\x1c.talon.v1.ChatHistoryRequest\x1a\x15.talon.v1.JSONPayload\x12B\n" +
+	"\x04Send\x12\x19.talon.v1.ChatSendRequest\x1a\x1a.talon.v1.ChatSendResponse\x12F\n" +
+	"\aHistory\x12\x1c.talon.v1.ChatHistoryRequest\x1a\x1d.talon.v1.ChatHistoryResponse\x12B\n" +
 	"\tSubscribe\x12\x1e.talon.v1.ChatSubscribeRequest\x1a\x13.talon.v1.ChatEvent0\x01B>Z<github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1b\x06proto3"
 
 var (
@@ -337,27 +1283,50 @@ func file_talon_v1_chat_proto_rawDescGZIP() []byte {
 	return file_talon_v1_chat_proto_rawDescData
 }
 
-var file_talon_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_talon_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
 var file_talon_v1_chat_proto_goTypes = []any{
 	(*ChatSendRequest)(nil),      // 0: talon.v1.ChatSendRequest
 	(*ChatSendResponse)(nil),     // 1: talon.v1.ChatSendResponse
 	(*ChatHistoryRequest)(nil),   // 2: talon.v1.ChatHistoryRequest
-	(*ChatSubscribeRequest)(nil), // 3: talon.v1.ChatSubscribeRequest
-	(*ChatEvent)(nil),            // 4: talon.v1.ChatEvent
-	(*JSONPayload)(nil),          // 5: talon.v1.JSONPayload
+	(*ChatHistoryResponse)(nil),  // 3: talon.v1.ChatHistoryResponse
+	(*HistoryRow)(nil),           // 4: talon.v1.HistoryRow
+	(*UserMessage)(nil),          // 5: talon.v1.UserMessage
+	(*AssistantMessage)(nil),     // 6: talon.v1.AssistantMessage
+	(*ToolUseMessage)(nil),       // 7: talon.v1.ToolUseMessage
+	(*ToolResultMessage)(nil),    // 8: talon.v1.ToolResultMessage
+	(*ChatSubscribeRequest)(nil), // 9: talon.v1.ChatSubscribeRequest
+	(*ChatEvent)(nil),            // 10: talon.v1.ChatEvent
+	(*ChatDelta)(nil),            // 11: talon.v1.ChatDelta
+	(*ChatFinal)(nil),            // 12: talon.v1.ChatFinal
+	(*ChatAborted)(nil),          // 13: talon.v1.ChatAborted
+	(*ChatError)(nil),            // 14: talon.v1.ChatError
+	(*ToolStart)(nil),            // 15: talon.v1.ToolStart
+	(*ToolResult)(nil),           // 16: talon.v1.ToolResult
 }
 var file_talon_v1_chat_proto_depIdxs = []int32{
-	0, // 0: talon.v1.ChatService.Send:input_type -> talon.v1.ChatSendRequest
-	2, // 1: talon.v1.ChatService.History:input_type -> talon.v1.ChatHistoryRequest
-	3, // 2: talon.v1.ChatService.Subscribe:input_type -> talon.v1.ChatSubscribeRequest
-	1, // 3: talon.v1.ChatService.Send:output_type -> talon.v1.ChatSendResponse
-	5, // 4: talon.v1.ChatService.History:output_type -> talon.v1.JSONPayload
-	4, // 5: talon.v1.ChatService.Subscribe:output_type -> talon.v1.ChatEvent
-	3, // [3:6] is the sub-list for method output_type
-	0, // [0:3] is the sub-list for method input_type
-	0, // [0:0] is the sub-list for extension type_name
-	0, // [0:0] is the sub-list for extension extendee
-	0, // [0:0] is the sub-list for field type_name
+	4,  // 0: talon.v1.ChatHistoryResponse.messages:type_name -> talon.v1.HistoryRow
+	5,  // 1: talon.v1.HistoryRow.user:type_name -> talon.v1.UserMessage
+	6,  // 2: talon.v1.HistoryRow.assistant:type_name -> talon.v1.AssistantMessage
+	7,  // 3: talon.v1.HistoryRow.tool_use:type_name -> talon.v1.ToolUseMessage
+	8,  // 4: talon.v1.HistoryRow.tool_result:type_name -> talon.v1.ToolResultMessage
+	7,  // 5: talon.v1.AssistantMessage.tool_uses:type_name -> talon.v1.ToolUseMessage
+	11, // 6: talon.v1.ChatEvent.delta:type_name -> talon.v1.ChatDelta
+	12, // 7: talon.v1.ChatEvent.final:type_name -> talon.v1.ChatFinal
+	13, // 8: talon.v1.ChatEvent.aborted:type_name -> talon.v1.ChatAborted
+	14, // 9: talon.v1.ChatEvent.error:type_name -> talon.v1.ChatError
+	15, // 10: talon.v1.ChatEvent.tool_start:type_name -> talon.v1.ToolStart
+	16, // 11: talon.v1.ChatEvent.tool_result:type_name -> talon.v1.ToolResult
+	0,  // 12: talon.v1.ChatService.Send:input_type -> talon.v1.ChatSendRequest
+	2,  // 13: talon.v1.ChatService.History:input_type -> talon.v1.ChatHistoryRequest
+	9,  // 14: talon.v1.ChatService.Subscribe:input_type -> talon.v1.ChatSubscribeRequest
+	1,  // 15: talon.v1.ChatService.Send:output_type -> talon.v1.ChatSendResponse
+	3,  // 16: talon.v1.ChatService.History:output_type -> talon.v1.ChatHistoryResponse
+	10, // 17: talon.v1.ChatService.Subscribe:output_type -> talon.v1.ChatEvent
+	15, // [15:18] is the sub-list for method output_type
+	12, // [12:15] is the sub-list for method input_type
+	12, // [12:12] is the sub-list for extension type_name
+	12, // [12:12] is the sub-list for extension extendee
+	0,  // [0:12] is the sub-list for field type_name
 }
 
 func init() { file_talon_v1_chat_proto_init() }
@@ -365,14 +1334,27 @@ func file_talon_v1_chat_proto_init() {
 	if File_talon_v1_chat_proto != nil {
 		return
 	}
-	file_talon_v1_common_proto_init()
+	file_talon_v1_chat_proto_msgTypes[4].OneofWrappers = []any{
+		(*HistoryRow_User)(nil),
+		(*HistoryRow_Assistant)(nil),
+		(*HistoryRow_ToolUse)(nil),
+		(*HistoryRow_ToolResult)(nil),
+	}
+	file_talon_v1_chat_proto_msgTypes[10].OneofWrappers = []any{
+		(*ChatEvent_Delta)(nil),
+		(*ChatEvent_Final)(nil),
+		(*ChatEvent_Aborted)(nil),
+		(*ChatEvent_Error)(nil),
+		(*ChatEvent_ToolStart)(nil),
+		(*ChatEvent_ToolResult)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_talon_v1_chat_proto_rawDesc), len(file_talon_v1_chat_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   17,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

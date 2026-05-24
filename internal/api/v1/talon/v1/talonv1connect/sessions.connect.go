@@ -37,9 +37,6 @@ const (
 	SessionsServiceListProcedure = "/talon.v1.SessionsService/List"
 	// SessionsServicePatchProcedure is the fully-qualified name of the SessionsService's Patch RPC.
 	SessionsServicePatchProcedure = "/talon.v1.SessionsService/Patch"
-	// SessionsServiceSubscribeProcedure is the fully-qualified name of the SessionsService's Subscribe
-	// RPC.
-	SessionsServiceSubscribeProcedure = "/talon.v1.SessionsService/Subscribe"
 )
 
 // SessionsServiceClient is a client for the talon.v1.SessionsService service.
@@ -49,11 +46,6 @@ type SessionsServiceClient interface {
 	// Patch applies a partial update to a session's state (e.g.
 	// model override, system prompt suffix).
 	Patch(context.Context, *connect.Request[v1.SessionsPatchRequest]) (*connect.Response[v1.Empty], error)
-	// Subscribe opens a server-stream of session-scope events for
-	// the connected client. The WS surface uses this as the
-	// primary push channel; Connect serves it as a long-lived
-	// HTTP chunked response.
-	Subscribe(context.Context, *connect.Request[v1.SessionsSubscribeRequest]) (*connect.ServerStreamForClient[v1.SessionEvent], error)
 }
 
 // NewSessionsServiceClient constructs a client for the talon.v1.SessionsService service. By
@@ -79,20 +71,13 @@ func NewSessionsServiceClient(httpClient connect.HTTPClient, baseURL string, opt
 			connect.WithSchema(sessionsServiceMethods.ByName("Patch")),
 			connect.WithClientOptions(opts...),
 		),
-		subscribe: connect.NewClient[v1.SessionsSubscribeRequest, v1.SessionEvent](
-			httpClient,
-			baseURL+SessionsServiceSubscribeProcedure,
-			connect.WithSchema(sessionsServiceMethods.ByName("Subscribe")),
-			connect.WithClientOptions(opts...),
-		),
 	}
 }
 
 // sessionsServiceClient implements SessionsServiceClient.
 type sessionsServiceClient struct {
-	list      *connect.Client[v1.Empty, v1.JSONPayload]
-	patch     *connect.Client[v1.SessionsPatchRequest, v1.Empty]
-	subscribe *connect.Client[v1.SessionsSubscribeRequest, v1.SessionEvent]
+	list  *connect.Client[v1.Empty, v1.JSONPayload]
+	patch *connect.Client[v1.SessionsPatchRequest, v1.Empty]
 }
 
 // List calls talon.v1.SessionsService.List.
@@ -105,11 +90,6 @@ func (c *sessionsServiceClient) Patch(ctx context.Context, req *connect.Request[
 	return c.patch.CallUnary(ctx, req)
 }
 
-// Subscribe calls talon.v1.SessionsService.Subscribe.
-func (c *sessionsServiceClient) Subscribe(ctx context.Context, req *connect.Request[v1.SessionsSubscribeRequest]) (*connect.ServerStreamForClient[v1.SessionEvent], error) {
-	return c.subscribe.CallServerStream(ctx, req)
-}
-
 // SessionsServiceHandler is an implementation of the talon.v1.SessionsService service.
 type SessionsServiceHandler interface {
 	// List returns the active sessions known to the gateway.
@@ -117,11 +97,6 @@ type SessionsServiceHandler interface {
 	// Patch applies a partial update to a session's state (e.g.
 	// model override, system prompt suffix).
 	Patch(context.Context, *connect.Request[v1.SessionsPatchRequest]) (*connect.Response[v1.Empty], error)
-	// Subscribe opens a server-stream of session-scope events for
-	// the connected client. The WS surface uses this as the
-	// primary push channel; Connect serves it as a long-lived
-	// HTTP chunked response.
-	Subscribe(context.Context, *connect.Request[v1.SessionsSubscribeRequest], *connect.ServerStream[v1.SessionEvent]) error
 }
 
 // NewSessionsServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -143,20 +118,12 @@ func NewSessionsServiceHandler(svc SessionsServiceHandler, opts ...connect.Handl
 		connect.WithSchema(sessionsServiceMethods.ByName("Patch")),
 		connect.WithHandlerOptions(opts...),
 	)
-	sessionsServiceSubscribeHandler := connect.NewServerStreamHandler(
-		SessionsServiceSubscribeProcedure,
-		svc.Subscribe,
-		connect.WithSchema(sessionsServiceMethods.ByName("Subscribe")),
-		connect.WithHandlerOptions(opts...),
-	)
 	return "/talon.v1.SessionsService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case SessionsServiceListProcedure:
 			sessionsServiceListHandler.ServeHTTP(w, r)
 		case SessionsServicePatchProcedure:
 			sessionsServicePatchHandler.ServeHTTP(w, r)
-		case SessionsServiceSubscribeProcedure:
-			sessionsServiceSubscribeHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -172,8 +139,4 @@ func (UnimplementedSessionsServiceHandler) List(context.Context, *connect.Reques
 
 func (UnimplementedSessionsServiceHandler) Patch(context.Context, *connect.Request[v1.SessionsPatchRequest]) (*connect.Response[v1.Empty], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("talon.v1.SessionsService.Patch is not implemented"))
-}
-
-func (UnimplementedSessionsServiceHandler) Subscribe(context.Context, *connect.Request[v1.SessionsSubscribeRequest], *connect.ServerStream[v1.SessionEvent]) error {
-	return connect.NewError(connect.CodeUnimplemented, errors.New("talon.v1.SessionsService.Subscribe is not implemented"))
 }

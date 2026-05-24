@@ -6,38 +6,20 @@ option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv
 
 import "talon/v1/common.proto";
 
-// SessionsService manages per-session state + the long-lived
-// event stream the UI subscribes to for cross-session events
-// (session created, agent switched, etc).
+// SessionsService manages per-session state. There is no Subscribe
+// RPC: the WS handler that would back it is a no-op ack today, so
+// committing it in the Connect contract would advertise a stream
+// that emits nothing. Add Subscribe when real presence /
+// active-run events exist on the server side.
 service SessionsService {
   // List returns the active sessions known to the gateway.
   rpc List(Empty) returns (JSONPayload);
   // Patch applies a partial update to a session's state (e.g.
   // model override, system prompt suffix).
   rpc Patch(SessionsPatchRequest) returns (Empty);
-  // Subscribe opens a server-stream of session-scope events for
-  // the connected client. The WS surface uses this as the
-  // primary push channel; Connect serves it as a long-lived
-  // HTTP chunked response.
-  rpc Subscribe(SessionsSubscribeRequest) returns (stream SessionEvent);
 }
 
 message SessionsPatchRequest {
   string session_key = 1;
   string patch_json = 2; // JSON-string-pass-through, see common.proto JSONPayload
-}
-
-message SessionsSubscribeRequest {
-  // SessionKey, when set, narrows the stream to one session.
-  // Empty subscribes to all sessions the auth context can see.
-  string session_key = 1;
-}
-
-// SessionEvent is the lowest-common-denominator envelope: an
-// event name + opaque JSON payload. Strongly-typed event
-// variants are a follow-up once the WS contract is fully retired;
-// for now this mirrors the on-the-wire shape exactly.
-message SessionEvent {
-  string event = 1;
-  string payload_json = 2; // JSON-string-pass-through
 }
