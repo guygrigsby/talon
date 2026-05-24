@@ -396,11 +396,15 @@ func TestCompat_ChatSendResponseShape(t *testing.T) {
 func TestCompat_ChatEventDeltaShape(t *testing.T) {
 	// state="delta" is the streaming-chunk signal. UI's handleChatEvent
 	// switches on payload.state — a typo here breaks live token rendering.
+	//
+	// Protocol v4 (openclaw 150bebcd0c) makes `deltaText` required on
+	// delta events; `message` remains the cumulative assistant snapshot.
 	payload := chatEventPayload{
 		RunID:      "run1",
 		SessionKey: "agent:main:main",
 		Seq:        3,
 		State:      "delta",
+		DeltaText:  "hi",
 		Message: &chatEventMessage{
 			Phase:   "assistant",
 			Role:    "assistant",
@@ -414,6 +418,9 @@ func TestCompat_ChatEventDeltaShape(t *testing.T) {
 	mustString(t, raw, "runId")
 	mustString(t, raw, "sessionKey")
 	mustExist(t, raw, "seq")
+	if mustString(t, raw, "deltaText") != "hi" {
+		t.Errorf("deltaText must carry the additive suffix (v4 contract)")
+	}
 	if mustString(t, raw, "message.role") != "assistant" {
 		t.Errorf("message.role must be 'assistant'")
 	}
@@ -430,6 +437,10 @@ func TestCompat_ChatEventFinalShape(t *testing.T) {
 	// chatStream into chatMessages. State drift here (e.g. "complete")
 	// would leave the typing indicator stuck — we already shipped a fix
 	// for that case (talon-11z); this test prevents recurrence.
+	//
+	// v4 schema for ChatFinalEventSchema is `additionalProperties:false`
+	// and does not include `deltaText` — `omitempty` on the payload keeps
+	// the wire form valid.
 	payload := chatEventPayload{
 		RunID: "r", SessionKey: "k", Seq: 7, State: "final",
 		Message: &chatEventMessage{
@@ -440,6 +451,9 @@ func TestCompat_ChatEventFinalShape(t *testing.T) {
 	raw := jsonOf(t, payload)
 	if mustString(t, raw, "state") != "final" {
 		t.Fatalf("state must be 'final' — UI's terminal-state check matches on this exact string")
+	}
+	if gjson.GetBytes(raw, "deltaText").Exists() {
+		t.Errorf("deltaText must be absent on final events (v4 additionalProperties:false)")
 	}
 }
 
@@ -631,8 +645,8 @@ func TestCompat_FrameTypesAreStable(t *testing.T) {
 	if FrameEvent != "event" {
 		t.Errorf("FrameEvent drift: %q", FrameEvent)
 	}
-	if ProtocolVersion != 3 {
-		t.Errorf("ProtocolVersion drift: %d (UI expects 3)", ProtocolVersion)
+	if ProtocolVersion != 4 {
+		t.Errorf("ProtocolVersion drift: %d (UI expects 4 post-openclaw 150bebcd0c)", ProtocolVersion)
 	}
 }
 

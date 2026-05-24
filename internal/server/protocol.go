@@ -7,7 +7,7 @@ const (
 	FrameRes   = "res"
 	FrameEvent = "event"
 
-	ProtocolVersion = 3
+	ProtocolVersion = 4
 )
 
 type Frame struct {

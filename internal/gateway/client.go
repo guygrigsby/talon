@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	protocolVersion = 3
+	protocolVersion = 4
 	clientIDDefault = "talon"
 	clientVersion   = "0.1.0-dev"
 )
