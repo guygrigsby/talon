@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -207,6 +208,21 @@ func gatewayRunCmd() *cobra.Command {
 				Paths:                paths,
 				PluginHost:           pluginHost,
 			})
+
+			// Memory sidecar (talon-2dn): opt-in via memory.enabled
+			// in merged config. When on, constructs the pure-Go
+			// GoMLX embedder + chromem-backed vector store under
+			// ~/.talon/memory and wires them into ChatHandler. The
+			// embedder downloads its model (~90MB MiniLM) from
+			// HuggingFace on first chat.send — we don't pre-warm
+			// here so a stuck network at startup doesn't block the
+			// gateway. Storage path overridable via memory.path.
+			if mem := buildMemorySidecar(paths); mem != nil {
+				srv.ChatHandler().WithMemory(mem)
+				slog.Info("memory sidecar wired",
+					"store_path", filepath.Join(paths.Talon.Dir, "memory"),
+				)
+			}
 
 			// Now that the WS server has built its handlers, wire the
 			// plugin Host gRPC service against the SAME ChatStore /

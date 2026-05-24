@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/guygrigsby/jess/memory"
+
 	"github.com/guygrigsby/talon/internal/agentcontext"
 	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
 	"github.com/guygrigsby/talon/internal/provider"
@@ -178,6 +180,7 @@ type ChatHandler struct {
 	store     *ChatStore
 	sessions  *SessionStore
 	costs     *CostTracker
+	memory    *MemoryConfig // optional jess/memory sidecar; nil = no augmentation
 
 	// runs tracks active runs by "sessionKey|idempotencyKey" so a duplicate
 	// chat.send returns the same runId without spawning a second stream.
@@ -565,6 +568,19 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 	}
 	systemPrompt := agentcontext.Build(workspace)
 
+	// Memory sidecar: wrap the tool runner with the RememberTool
+	// so the model can save memories during a turn, and stamp the
+	// run's source onto ctx so saves carry provenance. The system
+	// prompt gets augmented per-iteration below (after we have a
+	// fresh history snapshot for the recall hint).
+	if h.memory != nil && h.memory.Store != nil {
+		ctx = stampSourceCtx(ctx, emit.sessionKey, emit.runID)
+		remember := memory.NewRememberTool(h.memory.Store, memory.RememberOptions{
+			AgentID: agentID,
+		})
+		runner = wrapWithRemember(runner, remember)
+	}
+
 	var seq int
 	var accumulated strings.Builder // visible assistant text across iterations
 
@@ -603,7 +619,13 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 	for iter := 0; iter < h.MaxToolIterations; iter++ {
 		history := h.store.Snapshot(storeKey)
 		reqMsgs := messagesFromHistory(history)
-		req := provider.Request{Model: model, Messages: reqMsgs, System: systemPrompt}
+		// Augment the system prompt with memories on EVERY iteration.
+		// Doing it inside the loop (not once before) means tool-result
+		// turns can pull in newly-stored memories from a recent
+		// remember call — the model's context catches up immediately
+		// instead of waiting for the next chat.send.
+		iterSystem := h.augmentSystemPrompt(ctx, systemPrompt, agentID, lastUserText(history))
+		req := provider.Request{Model: model, Messages: reqMsgs, System: iterSystem}
 		if runner != nil {
 			req.Tools = runner.Specs()
 		}
@@ -629,7 +651,7 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 				iterText.WriteString(d.Text)
 				accumulated.WriteString(d.Text)
 				seq++
-				if err := h.emitChat(emit.chatSess, emit.runID, emit.sessionKey, seq, "delta", accumulated.String()); err != nil {
+				if err := h.emitChat(emit.chatSess, emit.runID, emit.sessionKey, seq, "delta", accumulated.String(), d.Text); err != nil {
 					emitFailures++
 					// Subagent mode (chatSess=nil): every emit fails;
 					// don't abort — the caller wants the text.
@@ -665,7 +687,7 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 			}
 			seq++
 			finalEmitStart = time.Now()
-			_ = h.emitChat(emit.chatSess, emit.runID, emit.sessionKey, seq, "final", accumulated.String())
+			_ = h.emitChat(emit.chatSess, emit.runID, emit.sessionKey, seq, "final", accumulated.String(), "")
 			finalEmitEnd = time.Now()
 			return accumulated.String(), nil
 		}
@@ -850,14 +872,30 @@ func messagesFromHistory(history []ChatMessage) []provider.Message {
 }
 
 // chatEventPayload is the openclaw-shaped chat event payload.
+//
+// Protocol v4 (openclaw 150bebcd0c) split this into a discriminated union
+// per state with `additionalProperties:false`. We keep one struct and rely
+// on `omitempty` so the wire form for each variant only carries its
+// schema-valid fields:
+//   - delta: state, message, deltaText (required), replace (optional)
+//   - final/aborted: state, message, stopReason (optional)
+//   - error: state, message, errorKind, errorMessage
+//
+// DeltaText holds the additive suffix since the previous broadcast. Replace
+// is set when the new text is not a prefix-extension (e.g. provider
+// revision). talon's provider abstraction is append-only today, so Replace
+// is never set in practice — kept for spec-level v4 compatibility.
 type chatEventPayload struct {
-	RunID        string             `json:"runId"`
-	SessionKey   string             `json:"sessionKey"`
-	Seq          int                `json:"seq"`
-	State        string             `json:"state"`
-	Message      *chatEventMessage  `json:"message,omitempty"`
-	ErrorKind    string             `json:"errorKind,omitempty"`
-	ErrorMessage string             `json:"errorMessage,omitempty"`
+	RunID        string            `json:"runId"`
+	SessionKey   string            `json:"sessionKey"`
+	Seq          int               `json:"seq"`
+	State        string            `json:"state"`
+	Message      *chatEventMessage `json:"message,omitempty"`
+	DeltaText    string            `json:"deltaText,omitempty"`
+	Replace      bool              `json:"replace,omitempty"`
+	StopReason   string            `json:"stopReason,omitempty"`
+	ErrorKind    string            `json:"errorKind,omitempty"`
+	ErrorMessage string            `json:"errorMessage,omitempty"`
 }
 
 type chatEventMessage struct {
@@ -871,12 +909,17 @@ type chatEventContentPart struct {
 	Text string `json:"text,omitempty"`
 }
 
-func (h *ChatHandler) emitChat(sess *Session, runID, sessionKey string, seq int, state, text string) error {
+// emitChat writes a chat event with the cumulative assistant text in
+// `message`. deltaText is the additive suffix since the previous broadcast
+// and is only valid (and required) on state="delta"; callers pass "" for
+// final/aborted/error.
+func (h *ChatHandler) emitChat(sess *Session, runID, sessionKey string, seq int, state, text, deltaText string) error {
 	payload := chatEventPayload{
 		RunID:      runID,
 		SessionKey: sessionKey,
 		Seq:        seq,
 		State:      state,
+		DeltaText:  deltaText,
 		Message: &chatEventMessage{
 			Phase: "assistant",
 			Role:  "assistant",
