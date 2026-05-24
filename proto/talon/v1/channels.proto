@@ -1,0 +1,30 @@
+syntax = "proto3";
+
+package talon.v1;
+
+option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1";
+
+import "talon/v1/common.proto";
+
+// ChannelsService covers per-channel setup flows. Currently only
+// the Telegram pairing wizard surfaces here; other channels will
+// land as their setup paths become RPC-visible.
+service ChannelsService {
+  rpc TelegramVerify(TelegramVerifyRequest) returns (JSONPayload);
+  rpc TelegramCaptureSender(TelegramCaptureSenderRequest) returns (JSONPayload);
+  rpc TelegramPersist(TelegramPersistRequest) returns (Empty);
+}
+
+message TelegramVerifyRequest {
+  string bot_token = 1;
+}
+message TelegramCaptureSenderRequest {
+  string bot_token = 1;
+  int64 timeout_ms = 2;
+}
+message TelegramPersistRequest {
+  string agent_id = 1;
+  string bot_token = 2;
+  int64 chat_id = 3;
+  bool confirm = 4;
+}

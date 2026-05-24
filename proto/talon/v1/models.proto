@@ -1,0 +1,25 @@
+syntax = "proto3";
+
+package talon.v1;
+
+option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1";
+
+import "talon/v1/common.proto";
+
+// ModelsService surfaces model catalog + per-provider auth health.
+service ModelsService {
+  // List returns the catalog of available models per provider
+  // (built-in catalog + user-config overlays + LM Studio
+  // discovery).
+  rpc List(Empty) returns (JSONPayload);
+  // AuthStatus returns per-provider credential status (talon-2aq):
+  // ok / missing per provider based on auth-profiles.json
+  // presence. No expiry tracking yet (talon-aws).
+  rpc AuthStatus(ModelsAuthStatusRequest) returns (JSONPayload);
+}
+
+message ModelsAuthStatusRequest {
+  string agent_id = 1;
+  string provider = 2;
+  bool refresh = 3;
+}

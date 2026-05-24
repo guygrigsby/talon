@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package talon.v1;
+
+option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1";
+
+import "talon/v1/common.proto";
+
+// PluginsService covers per-plugin dependency management +
+// the slash-command surface the UI's palette consumes.
+service PluginsService {
+  rpc DepsStatus(Empty) returns (JSONPayload);
+  rpc DepsInstall(DepsInstallRequest) returns (JSONPayload);
+  rpc DepsUninstall(DepsUninstallRequest) returns (JSONPayload);
+  rpc DepsDetail(DepsDetailRequest) returns (JSONPayload);
+  // CommandsList enumerates registered slash commands across
+  // skills + plugins (talon-18k stub today).
+  rpc CommandsList(CommandsListRequest) returns (JSONPayload);
+}
+
+message DepsInstallRequest {
+  string entry = 1;
+}
+message DepsUninstallRequest {
+  string entry = 1;
+}
+message DepsDetailRequest {
+  string entry = 1;
+}
+message CommandsListRequest {
+  string agent_id = 1;
+  string provider = 2;
+  string scope = 3;
+  bool include_args = 4;
+}

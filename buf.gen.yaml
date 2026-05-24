@@ -1,0 +1,14 @@
+version: v2
+# Generated stubs land under internal/api/v1/ so they're not
+# importable by external consumers yet — promote when the API
+# stabilizes (likely paired with the WS deprecation in talon-y6v).
+clean: true
+plugins:
+  - remote: buf.build/protocolbuffers/go
+    out: internal/api/v1
+    opt:
+      - paths=source_relative
+  - remote: buf.build/connectrpc/go
+    out: internal/api/v1
+    opt:
+      - paths=source_relative

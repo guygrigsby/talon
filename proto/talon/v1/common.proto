@@ -1,0 +1,29 @@
+// Shared message types used across multiple talon services.
+// Names mirror the JSON shapes the existing WS handlers produce
+// so the Connect adapter is a thin JSON re-marshal, not a
+// translation layer with its own schema.
+
+syntax = "proto3";
+
+package talon.v1;
+
+option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1";
+
+// Empty is the zero-payload request/response, used by methods
+// that take no input or return no output. google.protobuf.Empty
+// would do but pulling in well-known-types just for one message
+// isn't worth the extra dep — keeping it local.
+message Empty {}
+
+// JSONPayload carries an arbitrary JSON-encoded value. Used by
+// config.{get,schema}, agents.list, models.list, cron.*, and
+// anywhere else the response shape is dynamic enough that
+// declaring it in proto would be churn.
+//
+// Type is `string` not `bytes`: Connect's JSON encoder base64-
+// encodes proto bytes fields, which would force every consumer
+// to decode-then-parse. Strings pass through as JSON strings
+// (escaped) so consumers can JSON.parse(json) directly.
+message JSONPayload {
+  string json = 1;
+}

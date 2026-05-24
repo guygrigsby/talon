@@ -1,0 +1,35 @@
+syntax = "proto3";
+
+package talon.v1;
+
+option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1";
+
+import "talon/v1/common.proto";
+
+// InfraService covers health + cluster-shape RPCs that aren't
+// agent / chat / model specific.
+service InfraService {
+  // Health returns liveness + version info. Maps from WS "health".
+  rpc Health(Empty) returns (HealthResponse);
+  // NodeList enumerates paired/remote nodes (stub today — talon
+  // is single-process per talon-4cd; returns empty list).
+  rpc NodeList(Empty) returns (NodeListResponse);
+}
+
+message HealthResponse {
+  bool ok = 1;
+  string server = 2;
+  int64 uptime_ms = 3;
+  string version = 4;
+}
+
+message NodeListResponse {
+  repeated Node nodes = 1;
+}
+
+message Node {
+  string id = 1;
+  string name = 2;
+  bool connected = 3;
+  repeated string commands = 4;
+}

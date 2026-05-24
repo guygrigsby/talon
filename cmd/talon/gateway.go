@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
+	"github.com/guygrigsby/talon/internal/connectapi"
 	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
 	"github.com/guygrigsby/talon/internal/plugin/native"
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
@@ -223,6 +224,20 @@ func gatewayRunCmd() *cobra.Command {
 					"store_path", filepath.Join(paths.Talon.Dir, "memory"),
 				)
 			}
+
+			// Connect API (talon-y6v): expose every RPC the WS
+			// path serves over Connect (HTTP/JSON for browsers,
+			// gRPC wire elsewhere) too. Both transports run in
+			// parallel during the migration — frontends switch
+			// per-call. Streaming RPCs (chat.Subscribe,
+			// sessions.Subscribe) return Unimplemented on the
+			// Connect path for now; the WS stream stays the
+			// only path for chat events until stage 2 of
+			// talon-y6v lands the EventSink refactor.
+			connectapi.Register(srv.Mux(), srv)
+			slog.Info("connect API wired",
+				"prefix", "/talon.v1.*",
+			)
 
 			// Now that the WS server has built its handlers, wire the
 			// plugin Host gRPC service against the SAME ChatStore /

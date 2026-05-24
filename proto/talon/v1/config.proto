@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+package talon.v1;
+
+option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1";
+
+import "talon/v1/common.proto";
+
+// ConfigService surfaces the merged talon config (~/.talon over
+// ~/.openclaw) and the cached config schema.
+service ConfigService {
+  // Get returns the value at the requested dotted path, or the
+  // whole merged config when path is empty.
+  rpc Get(ConfigGetRequest) returns (JSONPayload);
+  // Schema returns the cached config JSON schema (refreshed via
+  // `talon config schema --refresh` on the CLI side).
+  rpc Schema(ConfigSchemaRequest) returns (JSONPayload);
+}
+
+message ConfigGetRequest {
+  string path = 1;
+}
+
+message ConfigSchemaRequest {
+  // Section filters the returned schema to one subschema
+  // (dotted; drill via "gateway.auth"). Empty returns the
+  // whole schema.
+  string section = 1;
+}

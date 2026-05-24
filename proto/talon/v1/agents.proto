@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package talon.v1;
+
+option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1";
+
+import "talon/v1/common.proto";
+
+// AgentsService groups agent-shaped reads + writes: the agent
+// list, per-agent identity, per-agent files (system prompt,
+// auth-profiles), skills status, and the memory.append write
+// path. Per-agent CRUD beyond reads stays on the CLI for now
+// (talon-48e) — this service mirrors what the gateway exposes.
+service AgentsService {
+  // List returns one row per configured agent (id, name,
+  // workspace, model resolution).
+  rpc List(Empty) returns (JSONPayload);
+  // FilesList enumerates the canonical per-agent files (system
+  // prompt, auth-profiles, identity).
+  rpc FilesList(AgentFilesListRequest) returns (JSONPayload);
+  // FilesGet returns the content of one per-agent file.
+  rpc FilesGet(AgentFilesGetRequest) returns (JSONPayload);
+  // FilesSet writes the content of one per-agent file (talon
+  // overlay only; openclaw layer is read-only).
+  rpc FilesSet(AgentFilesSetRequest) returns (Empty);
+  // IdentityGet returns the agent's resolved identity (operator
+  // token + device pairing context for channel routing).
+  rpc IdentityGet(AgentIdentityGetRequest) returns (JSONPayload);
+  // SkillsStatus reports per-agent skill bindings + status.
+  rpc SkillsStatus(SkillsStatusRequest) returns (JSONPayload);
+  // MemoryAppend records a memory entry for an agent (legacy
+  // path — talon-2dn's jess/memory sidecar exposes the modern
+  // "remember" tool to the model instead).
+  rpc MemoryAppend(MemoryAppendRequest) returns (Empty);
+}
+
+message AgentFilesListRequest {
+  string agent_id = 1;
+}
+message AgentFilesGetRequest {
+  string agent_id = 1;
+  string file = 2;
+}
+message AgentFilesSetRequest {
+  string agent_id = 1;
+  string file = 2;
+  string content = 3;
+}
+message AgentIdentityGetRequest {
+  string session_key = 1;
+}
+message SkillsStatusRequest {
+  string agent_id = 1;
+}
+message MemoryAppendRequest {
+  string agent_id = 1;
+  string kind = 2;
+  string text = 3;
+}

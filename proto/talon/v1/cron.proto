@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package talon.v1;
+
+option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1";
+
+import "talon/v1/common.proto";
+
+// CronService manages scheduled jobs (talon-8z0). All payloads
+// are passed as JSON for now to avoid breaking the existing
+// shapes during the migration; typed fields can land later.
+service CronService {
+  rpc List(CronListRequest) returns (JSONPayload);
+  rpc Add(JSONPayload) returns (JSONPayload);
+  rpc Remove(CronJobIDRequest) returns (Empty);
+  rpc Run(CronJobIDRequest) returns (JSONPayload);
+  rpc Status(Empty) returns (JSONPayload);
+  rpc Show(CronJobIDRequest) returns (JSONPayload);
+  rpc Enable(CronJobIDRequest) returns (Empty);
+  rpc Disable(CronJobIDRequest) returns (Empty);
+  rpc Runs(CronRunsRequest) returns (JSONPayload);
+}
+
+message CronListRequest {
+  bool include_disabled = 1;
+}
+message CronJobIDRequest {
+  string id = 1;
+}
+message CronRunsRequest {
+  string id = 1;
+  int32 limit = 2;
+}

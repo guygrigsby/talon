@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package talon.v1;
+
+option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1";
+
+import "talon/v1/common.proto";
+
+// ChatService handles per-turn chat sends + history reads + the
+// streaming-event subscription that delivers chat.delta /
+// agent.tool.* events back to the caller.
+service ChatService {
+  // Send accepts a user turn and returns the run ID immediately.
+  // Events for the run flow on Subscribe — keeping send and
+  // subscribe separate matches the existing WS contract so
+  // frontends migrate one call at a time.
+  rpc Send(ChatSendRequest) returns (ChatSendResponse);
+  // History returns the recorded turns for a session.
+  rpc History(ChatHistoryRequest) returns (JSONPayload);
+  // Subscribe opens a server-stream of chat events scoped to a
+  // session. Filters by run when run_id is set.
+  rpc Subscribe(ChatSubscribeRequest) returns (stream ChatEvent);
+}
+
+message ChatSendRequest {
+  string session_key = 1;
+  string message = 2;
+  string idempotency_key = 3;
+  // Model, when set, overrides the agent's default for this turn.
+  string model = 4;
+  // System, when set, suffixes the agent's system prompt for this
+  // turn only.
+  string system = 5;
+}
+
+message ChatSendResponse {
+  string run_id = 1;
+}
+
+message ChatHistoryRequest {
+  string session_key = 1;
+}
+
+message ChatSubscribeRequest {
+  string session_key = 1;
+  // RunID, when set, narrows the stream to one run.
+  string run_id = 2;
+}
+
+// ChatEvent is the envelope every server-pushed chat-stream
+// payload arrives in. Mirrors the WS frame's Event + Payload
+// shape so the migration is one-line on the consumer side.
+message ChatEvent {
+  string event = 1;
+  string payload_json = 2; // JSON-string-pass-through, see common.proto JSONPayload
+}
