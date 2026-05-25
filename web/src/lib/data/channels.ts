@@ -43,6 +43,10 @@ export type Message = {
 	model?: string;
 	latencyMs?: number;
 	toolCalls?: ToolCall[];
+	// Hidden reasoning trace (DeepSeek Reasoner, o-series, Claude
+	// thinking). When set, the assistant bubble renders a
+	// collapsible "thinking" block above the visible body.
+	thinking?: string;
 };
 
 // Only the live web session ships today. The other source bridges

@@ -652,6 +652,7 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 		}
 
 		var iterText strings.Builder
+		var iterThinking strings.Builder
 		var toolCalls []provider.ToolCall
 		emitFailures := 0
 
@@ -683,6 +684,18 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 				seq++
 				_ = h.emitError(emit.chatSess, emit.runID, emit.sessionKey, seq, "provider", d.Err.Error())
 				return accumulated.String(), d.Err
+			case provider.DeltaReasoning:
+				// DeepSeek Reasoner / o-series / Claude thinking
+				// emit hidden reasoning text. Accumulate per
+				// iteration and emit as a "thinking" chat event
+				// so the FE can render it in a collapsed block
+				// distinct from the visible reply.
+				if d.Text == "" {
+					break
+				}
+				iterThinking.WriteString(d.Text)
+				seq++
+				_ = h.emitChat(emit.chatSess, emit.runID, emit.sessionKey, seq, "thinking", iterThinking.String(), d.Text)
 			case provider.DeltaUsage:
 				// usage not surfaced over the wire yet, but the
 				// cost tracker (when wired) folds it into the

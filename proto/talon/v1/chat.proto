@@ -114,12 +114,13 @@ message ChatEvent {
   string session_key = 3;
   int32 seq = 4;
   oneof payload {
-    ChatDelta   delta       = 10;
-    ChatFinal   final       = 11;
-    ChatAborted aborted     = 12;
-    ChatError   error       = 13;
-    ToolStart   tool_start  = 20;
-    ToolResult  tool_result = 21;
+    ChatDelta    delta       = 10;
+    ChatFinal    final       = 11;
+    ChatAborted  aborted     = 12;
+    ChatError    error       = 13;
+    ChatThinking thinking    = 14;
+    ToolStart    tool_start  = 20;
+    ToolResult   tool_result = 21;
   }
 }
 
@@ -156,6 +157,17 @@ message ChatAborted {
 message ChatError {
   string kind = 1;
   string message = 2;
+}
+
+// ChatThinking carries the model's hidden reasoning trace
+// (o-series, DeepSeek Reasoner, Claude thinking). Same shape as
+// ChatDelta — cumulative is the full reasoning text so far,
+// delta_text is the chunk added by this event. Surfaced as a
+// separate event so the UI can render it in a collapsed block
+// distinct from the visible reply.
+message ChatThinking {
+  string cumulative = 1;
+  string delta_text = 2;
 }
 
 // ToolStart fires before a tool runs. args_json is the JSON-

@@ -115,6 +115,11 @@ func chatPayloadToEvent(p server.ChatEventPayload) *talonv1.ChatEvent {
 			DeltaText:  p.DeltaText,
 			Replace:    p.Replace,
 		}}
+	case "thinking":
+		ev.Payload = &talonv1.ChatEvent_Thinking{Thinking: &talonv1.ChatThinking{
+			Cumulative: messageText(p.Message),
+			DeltaText:  p.DeltaText,
+		}}
 	case "final":
 		ev.Payload = &talonv1.ChatEvent_Final{Final: &talonv1.ChatFinal{
 			Text:       messageText(p.Message),

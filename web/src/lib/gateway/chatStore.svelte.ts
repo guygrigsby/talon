@@ -115,6 +115,11 @@ export function makeChatStore(sessionKey: string) {
 				if (status !== 'streaming') status = 'streaming';
 				break;
 			}
+			case 'thinking': {
+				upsertThinking(ev, ev.payload.value.cumulative);
+				if (status !== 'streaming') status = 'streaming';
+				break;
+			}
 			case 'final': {
 				upsertAssistant(ev, ev.payload.value.text, true);
 				if (activeRunId === ev.runId) activeRunId = null;
@@ -164,6 +169,30 @@ export function makeChatStore(sessionKey: string) {
 				author: 'assistant',
 				body: text,
 				ts: nowLabel()
+			}
+		];
+	}
+
+	function upsertThinking(ev: ChatEvent, thinking: string) {
+		const id = `run-${ev.runId}`;
+		const existing = messages.find((m) => m.id === id);
+		if (existing) {
+			existing.thinking = thinking;
+			return;
+		}
+		// Thinking can land before any visible delta (the model
+		// reasons first, then speaks). Seed an empty-body
+		// assistant bubble so subsequent deltas append into it.
+		messages = [
+			...messages,
+			{
+				id,
+				channelId: ev.sessionKey || sessionKey,
+				role: 'assistant',
+				author: 'assistant',
+				body: '',
+				ts: nowLabel(),
+				thinking
 			}
 		];
 	}

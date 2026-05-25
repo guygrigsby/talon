@@ -10,7 +10,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file talon/v1/chat.proto.
  */
 export const file_talon_v1_chat: GenFile = /*@__PURE__*/
-  fileDesc("ChN0YWxvbi92MS9jaGF0LnByb3RvEgh0YWxvbi52MSJQCg9DaGF0U2VuZFJlcXVlc3QSEwoLc2Vzc2lvbl9rZXkYASABKAkSDwoHbWVzc2FnZRgCIAEoCRIXCg9pZGVtcG90ZW5jeV9rZXkYAyABKAkiIgoQQ2hhdFNlbmRSZXNwb25zZRIOCgZydW5faWQYASABKAkiOAoSQ2hhdEhpc3RvcnlSZXF1ZXN0EhMKC3Nlc3Npb25fa2V5GAEgASgJEg0KBWxpbWl0GAIgASgFIj0KE0NoYXRIaXN0b3J5UmVzcG9uc2USJgoIbWVzc2FnZXMYASADKAsyFC50YWxvbi52MS5IaXN0b3J5Um93IucBCgpIaXN0b3J5Um93EgoKAmlkGAEgASgJEgsKA3NlcRgCIAEoBRIlCgR1c2VyGAogASgLMhUudGFsb24udjEuVXNlck1lc3NhZ2VIABIvCglhc3Npc3RhbnQYCyABKAsyGi50YWxvbi52MS5Bc3Npc3RhbnRNZXNzYWdlSAASLAoIdG9vbF91c2UYDCABKAsyGC50YWxvbi52MS5Ub29sVXNlTWVzc2FnZUgAEjIKC3Rvb2xfcmVzdWx0GA0gASgLMhsudGFsb24udjEuVG9vbFJlc3VsdE1lc3NhZ2VIAEIGCgRib2R5IhsKC1VzZXJNZXNzYWdlEgwKBHRleHQYASABKAkiTQoQQXNzaXN0YW50TWVzc2FnZRIMCgR0ZXh0GAEgASgJEisKCXRvb2xfdXNlcxgCIAMoCzIYLnRhbG9uLnYxLlRvb2xVc2VNZXNzYWdlIkcKDlRvb2xVc2VNZXNzYWdlEhQKDHRvb2xfY2FsbF9pZBgBIAEoCRIMCgRuYW1lGAIgASgJEhEKCWFyZ3NfanNvbhgDIAEoCSJHChFUb29sUmVzdWx0TWVzc2FnZRIUCgx0b29sX2NhbGxfaWQYASABKAkSDAoEbmFtZRgCIAEoCRIOCgZvdXRwdXQYAyABKAkiOwoUQ2hhdFN1YnNjcmliZVJlcXVlc3QSEwoLc2Vzc2lvbl9rZXkYASABKAkSDgoGcnVuX2lkGAIgASgJIssCCglDaGF0RXZlbnQSDQoFdHNfbXMYASABKAMSDgoGcnVuX2lkGAIgASgJEhMKC3Nlc3Npb25fa2V5GAMgASgJEgsKA3NlcRgEIAEoBRIkCgVkZWx0YRgKIAEoCzITLnRhbG9uLnYxLkNoYXREZWx0YUgAEiQKBWZpbmFsGAsgASgLMhMudGFsb24udjEuQ2hhdEZpbmFsSAASKAoHYWJvcnRlZBgMIAEoCzIVLnRhbG9uLnYxLkNoYXRBYm9ydGVkSAASJAoFZXJyb3IYDSABKAsyEy50YWxvbi52MS5DaGF0RXJyb3JIABIpCgp0b29sX3N0YXJ0GBQgASgLMhMudGFsb24udjEuVG9vbFN0YXJ0SAASKwoLdG9vbF9yZXN1bHQYFSABKAsyFC50YWxvbi52MS5Ub29sUmVzdWx0SABCCQoHcGF5bG9hZCJECglDaGF0RGVsdGESEgoKY3VtdWxhdGl2ZRgBIAEoCRISCgpkZWx0YV90ZXh0GAIgASgJEg8KB3JlcGxhY2UYAyABKAgiLgoJQ2hhdEZpbmFsEgwKBHRleHQYASABKAkSEwoLc3RvcF9yZWFzb24YAiABKAkiGwoLQ2hhdEFib3J0ZWQSDAoEdGV4dBgBIAEoCSIqCglDaGF0RXJyb3ISDAoEa2luZBgBIAEoCRIPCgdtZXNzYWdlGAIgASgJIkIKCVRvb2xTdGFydBIUCgx0b29sX2NhbGxfaWQYASABKAkSDAoEbmFtZRgCIAEoCRIRCglhcmdzX2pzb24YAyABKAkiQAoKVG9vbFJlc3VsdBIUCgx0b29sX2NhbGxfaWQYASABKAkSDAoEbmFtZRgCIAEoCRIOCgZvdXRwdXQYAyABKAky2AEKC0NoYXRTZXJ2aWNlEj0KBFNlbmQSGS50YWxvbi52MS5DaGF0U2VuZFJlcXVlc3QaGi50YWxvbi52MS5DaGF0U2VuZFJlc3BvbnNlEkYKB0hpc3RvcnkSHC50YWxvbi52MS5DaGF0SGlzdG9yeVJlcXVlc3QaHS50YWxvbi52MS5DaGF0SGlzdG9yeVJlc3BvbnNlEkIKCVN1YnNjcmliZRIeLnRhbG9uLnYxLkNoYXRTdWJzY3JpYmVSZXF1ZXN0GhMudGFsb24udjEuQ2hhdEV2ZW50MAFCPlo8Z2l0aHViLmNvbS9ndXlncmlnc2J5L3RhbG9uL2ludGVybmFsL2FwaS92MS90YWxvbi92MTt0YWxvbnYxYgZwcm90bzM");
+  fileDesc("ChN0YWxvbi92MS9jaGF0LnByb3RvEgh0YWxvbi52MSJQCg9DaGF0U2VuZFJlcXVlc3QSEwoLc2Vzc2lvbl9rZXkYASABKAkSDwoHbWVzc2FnZRgCIAEoCRIXCg9pZGVtcG90ZW5jeV9rZXkYAyABKAkiIgoQQ2hhdFNlbmRSZXNwb25zZRIOCgZydW5faWQYASABKAkiOAoSQ2hhdEhpc3RvcnlSZXF1ZXN0EhMKC3Nlc3Npb25fa2V5GAEgASgJEg0KBWxpbWl0GAIgASgFIj0KE0NoYXRIaXN0b3J5UmVzcG9uc2USJgoIbWVzc2FnZXMYASADKAsyFC50YWxvbi52MS5IaXN0b3J5Um93IucBCgpIaXN0b3J5Um93EgoKAmlkGAEgASgJEgsKA3NlcRgCIAEoBRIlCgR1c2VyGAogASgLMhUudGFsb24udjEuVXNlck1lc3NhZ2VIABIvCglhc3Npc3RhbnQYCyABKAsyGi50YWxvbi52MS5Bc3Npc3RhbnRNZXNzYWdlSAASLAoIdG9vbF91c2UYDCABKAsyGC50YWxvbi52MS5Ub29sVXNlTWVzc2FnZUgAEjIKC3Rvb2xfcmVzdWx0GA0gASgLMhsudGFsb24udjEuVG9vbFJlc3VsdE1lc3NhZ2VIAEIGCgRib2R5IhsKC1VzZXJNZXNzYWdlEgwKBHRleHQYASABKAkiTQoQQXNzaXN0YW50TWVzc2FnZRIMCgR0ZXh0GAEgASgJEisKCXRvb2xfdXNlcxgCIAMoCzIYLnRhbG9uLnYxLlRvb2xVc2VNZXNzYWdlIkcKDlRvb2xVc2VNZXNzYWdlEhQKDHRvb2xfY2FsbF9pZBgBIAEoCRIMCgRuYW1lGAIgASgJEhEKCWFyZ3NfanNvbhgDIAEoCSJHChFUb29sUmVzdWx0TWVzc2FnZRIUCgx0b29sX2NhbGxfaWQYASABKAkSDAoEbmFtZRgCIAEoCRIOCgZvdXRwdXQYAyABKAkiOwoUQ2hhdFN1YnNjcmliZVJlcXVlc3QSEwoLc2Vzc2lvbl9rZXkYASABKAkSDgoGcnVuX2lkGAIgASgJIvcCCglDaGF0RXZlbnQSDQoFdHNfbXMYASABKAMSDgoGcnVuX2lkGAIgASgJEhMKC3Nlc3Npb25fa2V5GAMgASgJEgsKA3NlcRgEIAEoBRIkCgVkZWx0YRgKIAEoCzITLnRhbG9uLnYxLkNoYXREZWx0YUgAEiQKBWZpbmFsGAsgASgLMhMudGFsb24udjEuQ2hhdEZpbmFsSAASKAoHYWJvcnRlZBgMIAEoCzIVLnRhbG9uLnYxLkNoYXRBYm9ydGVkSAASJAoFZXJyb3IYDSABKAsyEy50YWxvbi52MS5DaGF0RXJyb3JIABIqCgh0aGlua2luZxgOIAEoCzIWLnRhbG9uLnYxLkNoYXRUaGlua2luZ0gAEikKCnRvb2xfc3RhcnQYFCABKAsyEy50YWxvbi52MS5Ub29sU3RhcnRIABIrCgt0b29sX3Jlc3VsdBgVIAEoCzIULnRhbG9uLnYxLlRvb2xSZXN1bHRIAEIJCgdwYXlsb2FkIkQKCUNoYXREZWx0YRISCgpjdW11bGF0aXZlGAEgASgJEhIKCmRlbHRhX3RleHQYAiABKAkSDwoHcmVwbGFjZRgDIAEoCCIuCglDaGF0RmluYWwSDAoEdGV4dBgBIAEoCRITCgtzdG9wX3JlYXNvbhgCIAEoCSIbCgtDaGF0QWJvcnRlZBIMCgR0ZXh0GAEgASgJIioKCUNoYXRFcnJvchIMCgRraW5kGAEgASgJEg8KB21lc3NhZ2UYAiABKAkiNgoMQ2hhdFRoaW5raW5nEhIKCmN1bXVsYXRpdmUYASABKAkSEgoKZGVsdGFfdGV4dBgCIAEoCSJCCglUb29sU3RhcnQSFAoMdG9vbF9jYWxsX2lkGAEgASgJEgwKBG5hbWUYAiABKAkSEQoJYXJnc19qc29uGAMgASgJIkAKClRvb2xSZXN1bHQSFAoMdG9vbF9jYWxsX2lkGAEgASgJEgwKBG5hbWUYAiABKAkSDgoGb3V0cHV0GAMgASgJMtgBCgtDaGF0U2VydmljZRI9CgRTZW5kEhkudGFsb24udjEuQ2hhdFNlbmRSZXF1ZXN0GhoudGFsb24udjEuQ2hhdFNlbmRSZXNwb25zZRJGCgdIaXN0b3J5EhwudGFsb24udjEuQ2hhdEhpc3RvcnlSZXF1ZXN0Gh0udGFsb24udjEuQ2hhdEhpc3RvcnlSZXNwb25zZRJCCglTdWJzY3JpYmUSHi50YWxvbi52MS5DaGF0U3Vic2NyaWJlUmVxdWVzdBoTLnRhbG9uLnYxLkNoYXRFdmVudDABQj5aPGdpdGh1Yi5jb20vZ3V5Z3JpZ3NieS90YWxvbi9pbnRlcm5hbC9hcGkvdjEvdGFsb24vdjE7dGFsb252MWIGcHJvdG8z");
 
 /**
  * ChatSendRequest mirrors the WS handler's accepted fields
@@ -354,6 +354,12 @@ export type ChatEvent = Message<"talon.v1.ChatEvent"> & {
     case: "error";
   } | {
     /**
+     * @generated from field: talon.v1.ChatThinking thinking = 14;
+     */
+    value: ChatThinking;
+    case: "thinking";
+  } | {
+    /**
      * @generated from field: talon.v1.ToolStart tool_start = 20;
      */
     value: ToolStart;
@@ -482,6 +488,35 @@ export const ChatErrorSchema: GenMessage<ChatError> = /*@__PURE__*/
   messageDesc(file_talon_v1_chat, 14);
 
 /**
+ * ChatThinking carries the model's hidden reasoning trace
+ * (o-series, DeepSeek Reasoner, Claude thinking). Same shape as
+ * ChatDelta — cumulative is the full reasoning text so far,
+ * delta_text is the chunk added by this event. Surfaced as a
+ * separate event so the UI can render it in a collapsed block
+ * distinct from the visible reply.
+ *
+ * @generated from message talon.v1.ChatThinking
+ */
+export type ChatThinking = Message<"talon.v1.ChatThinking"> & {
+  /**
+   * @generated from field: string cumulative = 1;
+   */
+  cumulative: string;
+
+  /**
+   * @generated from field: string delta_text = 2;
+   */
+  deltaText: string;
+};
+
+/**
+ * Describes the message talon.v1.ChatThinking.
+ * Use `create(ChatThinkingSchema)` to create a new message.
+ */
+export const ChatThinkingSchema: GenMessage<ChatThinking> = /*@__PURE__*/
+  messageDesc(file_talon_v1_chat, 15);
+
+/**
  * ToolStart fires before a tool runs. args_json is the JSON-
  * encoded argument object the model emitted; UIs decode it for
  * pretty-printing.
@@ -510,7 +545,7 @@ export type ToolStart = Message<"talon.v1.ToolStart"> & {
  * Use `create(ToolStartSchema)` to create a new message.
  */
 export const ToolStartSchema: GenMessage<ToolStart> = /*@__PURE__*/
-  messageDesc(file_talon_v1_chat, 15);
+  messageDesc(file_talon_v1_chat, 16);
 
 /**
  * ToolResult fires after a tool returns (whether or not it
@@ -540,7 +575,7 @@ export type ToolResult = Message<"talon.v1.ToolResult"> & {
  * Use `create(ToolResultSchema)` to create a new message.
  */
 export const ToolResultSchema: GenMessage<ToolResult> = /*@__PURE__*/
-  messageDesc(file_talon_v1_chat, 16);
+  messageDesc(file_talon_v1_chat, 17);
 
 /**
  * ChatService is the typed contract for chat send + history reads +

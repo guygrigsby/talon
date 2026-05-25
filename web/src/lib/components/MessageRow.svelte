@@ -1,6 +1,7 @@
 <script lang="ts">
 	import type { Channel, Message } from '$lib/data/channels';
 	import SourceDot from './SourceDot.svelte';
+	import { renderMarkdown } from '$lib/markdown';
 
 	let {
 		message,
@@ -18,6 +19,19 @@
 		else next.add(i);
 		expanded = next;
 	}
+
+	// Thinking block defaults to collapsed. Per-message state since
+	// once the user opens it they probably want to keep it open while
+	// the bubble is in view; auto-collapse on every new event would
+	// be hostile.
+	let thinkingOpen = $state(false);
+
+	// Markdown render only for assistant text; user text stays plain
+	// (user input goes through `white-space:pre-wrap` to preserve
+	// whatever they typed verbatim).
+	const bodyHTML = $derived(
+		message.role === 'assistant' ? renderMarkdown(message.body) : ''
+	);
 </script>
 
 <article class="row r-{message.role}">
@@ -42,7 +56,30 @@
 		{/if}
 	</header>
 
-	<div class="text t-body">{message.body}</div>
+	{#if message.thinking}
+		<section class="thinking" aria-label="Reasoning trace">
+			<button
+				type="button"
+				class="thinking-summary"
+				aria-expanded={thinkingOpen}
+				aria-controls="thinking-{message.id}"
+				onclick={() => (thinkingOpen = !thinkingOpen)}
+			>
+				<span class="tc-caret" aria-hidden="true">{thinkingOpen ? '▾' : '▸'}</span>
+				<span class="t-label">thinking</span>
+				<span class="t-num dim">{message.thinking.length} chars</span>
+			</button>
+			{#if thinkingOpen}
+				<pre id="thinking-{message.id}" class="thinking-body t-mono">{message.thinking}</pre>
+			{/if}
+		</section>
+	{/if}
+
+	{#if message.role === 'assistant'}
+		<div class="text t-body md">{@html bodyHTML}</div>
+	{:else}
+		<div class="text t-body">{message.body}</div>
+	{/if}
 
 	{#if message.toolCalls?.length}
 		<section class="tools" aria-label="Tool calls">
@@ -153,6 +190,108 @@
 		white-space: pre-wrap;
 		word-wrap: break-word;
 		max-width: 70ch;
+	}
+	/* Markdown-rendered assistant body. Override the pre-wrap
+	   on the container so block elements can collapse vertical
+	   whitespace naturally, but keep pre-wrap inside <pre>
+	   for code blocks. */
+	.text.md {
+		white-space: normal;
+	}
+	.text.md :global(p) {
+		margin: 0 0 var(--s-3);
+		white-space: pre-wrap;
+	}
+	.text.md :global(p:last-child) {
+		margin-bottom: 0;
+	}
+	.text.md :global(ul),
+	.text.md :global(ol) {
+		margin: 0 0 var(--s-3);
+		padding-left: var(--s-6);
+	}
+	.text.md :global(li) {
+		margin-bottom: 4px;
+	}
+	.text.md :global(code) {
+		font-family: var(--ff-mono);
+		font-size: var(--fs-sm);
+		background: var(--canvas);
+		padding: 1px 4px;
+		border-radius: 3px;
+	}
+	.text.md :global(pre) {
+		font-family: var(--ff-mono);
+		font-size: var(--fs-sm);
+		background: var(--canvas);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		padding: var(--s-3);
+		margin: 0 0 var(--s-3);
+		overflow: auto;
+		white-space: pre;
+	}
+	.text.md :global(pre code) {
+		background: transparent;
+		padding: 0;
+	}
+	.text.md :global(blockquote) {
+		margin: 0 0 var(--s-3);
+		padding-left: var(--s-3);
+		border-left: 2px solid var(--border);
+		color: var(--ink-2);
+	}
+	.text.md :global(h1),
+	.text.md :global(h2),
+	.text.md :global(h3),
+	.text.md :global(h4) {
+		font-size: var(--fs-md);
+		font-weight: 700;
+		margin: var(--s-3) 0 var(--s-2);
+	}
+	.text.md :global(a) {
+		color: var(--accent);
+		text-decoration: underline;
+	}
+
+	.thinking {
+		margin-bottom: var(--s-3);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		background: var(--canvas);
+		overflow: hidden;
+	}
+	.thinking-summary {
+		display: flex;
+		align-items: baseline;
+		gap: var(--s-2);
+		width: 100%;
+		background: transparent;
+		border: 0;
+		padding: 6px var(--s-3);
+		text-align: left;
+		font: inherit;
+		color: var(--ink-2);
+		cursor: pointer;
+		min-height: var(--tap, 32px);
+	}
+	.thinking-summary:hover {
+		color: var(--ink);
+	}
+	.thinking-summary:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: -2px;
+	}
+	.thinking-body {
+		margin: 0;
+		padding: var(--s-3);
+		font-size: var(--fs-xs);
+		color: var(--ink-2);
+		white-space: pre-wrap;
+		word-break: break-word;
+		max-height: 320px;
+		overflow: auto;
+		border-top: 1px solid var(--border);
 	}
 
 	.tools {

@@ -661,6 +661,7 @@ type ChatEvent struct {
 	//	*ChatEvent_Final
 	//	*ChatEvent_Aborted
 	//	*ChatEvent_Error
+	//	*ChatEvent_Thinking
 	//	*ChatEvent_ToolStart
 	//	*ChatEvent_ToolResult
 	Payload       isChatEvent_Payload `protobuf_oneof:"payload"`
@@ -769,6 +770,15 @@ func (x *ChatEvent) GetError() *ChatError {
 	return nil
 }
 
+func (x *ChatEvent) GetThinking() *ChatThinking {
+	if x != nil {
+		if x, ok := x.Payload.(*ChatEvent_Thinking); ok {
+			return x.Thinking
+		}
+	}
+	return nil
+}
+
 func (x *ChatEvent) GetToolStart() *ToolStart {
 	if x != nil {
 		if x, ok := x.Payload.(*ChatEvent_ToolStart); ok {
@@ -807,6 +817,10 @@ type ChatEvent_Error struct {
 	Error *ChatError `protobuf:"bytes,13,opt,name=error,proto3,oneof"`
 }
 
+type ChatEvent_Thinking struct {
+	Thinking *ChatThinking `protobuf:"bytes,14,opt,name=thinking,proto3,oneof"`
+}
+
 type ChatEvent_ToolStart struct {
 	ToolStart *ToolStart `protobuf:"bytes,20,opt,name=tool_start,json=toolStart,proto3,oneof"`
 }
@@ -822,6 +836,8 @@ func (*ChatEvent_Final) isChatEvent_Payload() {}
 func (*ChatEvent_Aborted) isChatEvent_Payload() {}
 
 func (*ChatEvent_Error) isChatEvent_Payload() {}
+
+func (*ChatEvent_Thinking) isChatEvent_Payload() {}
 
 func (*ChatEvent_ToolStart) isChatEvent_Payload() {}
 
@@ -1050,6 +1066,64 @@ func (x *ChatError) GetMessage() string {
 	return ""
 }
 
+// ChatThinking carries the model's hidden reasoning trace
+// (o-series, DeepSeek Reasoner, Claude thinking). Same shape as
+// ChatDelta — cumulative is the full reasoning text so far,
+// delta_text is the chunk added by this event. Surfaced as a
+// separate event so the UI can render it in a collapsed block
+// distinct from the visible reply.
+type ChatThinking struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cumulative    string                 `protobuf:"bytes,1,opt,name=cumulative,proto3" json:"cumulative,omitempty"`
+	DeltaText     string                 `protobuf:"bytes,2,opt,name=delta_text,json=deltaText,proto3" json:"delta_text,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ChatThinking) Reset() {
+	*x = ChatThinking{}
+	mi := &file_talon_v1_chat_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ChatThinking) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ChatThinking) ProtoMessage() {}
+
+func (x *ChatThinking) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_chat_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ChatThinking.ProtoReflect.Descriptor instead.
+func (*ChatThinking) Descriptor() ([]byte, []int) {
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ChatThinking) GetCumulative() string {
+	if x != nil {
+		return x.Cumulative
+	}
+	return ""
+}
+
+func (x *ChatThinking) GetDeltaText() string {
+	if x != nil {
+		return x.DeltaText
+	}
+	return ""
+}
+
 // ToolStart fires before a tool runs. args_json is the JSON-
 // encoded argument object the model emitted; UIs decode it for
 // pretty-printing.
@@ -1064,7 +1138,7 @@ type ToolStart struct {
 
 func (x *ToolStart) Reset() {
 	*x = ToolStart{}
-	mi := &file_talon_v1_chat_proto_msgTypes[15]
+	mi := &file_talon_v1_chat_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1076,7 +1150,7 @@ func (x *ToolStart) String() string {
 func (*ToolStart) ProtoMessage() {}
 
 func (x *ToolStart) ProtoReflect() protoreflect.Message {
-	mi := &file_talon_v1_chat_proto_msgTypes[15]
+	mi := &file_talon_v1_chat_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1089,7 +1163,7 @@ func (x *ToolStart) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolStart.ProtoReflect.Descriptor instead.
 func (*ToolStart) Descriptor() ([]byte, []int) {
-	return file_talon_v1_chat_proto_rawDescGZIP(), []int{15}
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *ToolStart) GetToolCallId() string {
@@ -1126,7 +1200,7 @@ type ToolResult struct {
 
 func (x *ToolResult) Reset() {
 	*x = ToolResult{}
-	mi := &file_talon_v1_chat_proto_msgTypes[16]
+	mi := &file_talon_v1_chat_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1138,7 +1212,7 @@ func (x *ToolResult) String() string {
 func (*ToolResult) ProtoMessage() {}
 
 func (x *ToolResult) ProtoReflect() protoreflect.Message {
-	mi := &file_talon_v1_chat_proto_msgTypes[16]
+	mi := &file_talon_v1_chat_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1151,7 +1225,7 @@ func (x *ToolResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolResult.ProtoReflect.Descriptor instead.
 func (*ToolResult) Descriptor() ([]byte, []int) {
-	return file_talon_v1_chat_proto_rawDescGZIP(), []int{16}
+	return file_talon_v1_chat_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *ToolResult) GetToolCallId() string {
@@ -1222,7 +1296,7 @@ const file_talon_v1_chat_proto_rawDesc = "" +
 	"\x14ChatSubscribeRequest\x12\x1f\n" +
 	"\vsession_key\x18\x01 \x01(\tR\n" +
 	"sessionKey\x12\x15\n" +
-	"\x06run_id\x18\x02 \x01(\tR\x05runId\"\x9e\x03\n" +
+	"\x06run_id\x18\x02 \x01(\tR\x05runId\"\xd4\x03\n" +
 	"\tChatEvent\x12\x13\n" +
 	"\x05ts_ms\x18\x01 \x01(\x03R\x04tsMs\x12\x15\n" +
 	"\x06run_id\x18\x02 \x01(\tR\x05runId\x12\x1f\n" +
@@ -1234,6 +1308,7 @@ const file_talon_v1_chat_proto_rawDesc = "" +
 	"\x05final\x18\v \x01(\v2\x13.talon.v1.ChatFinalH\x00R\x05final\x121\n" +
 	"\aaborted\x18\f \x01(\v2\x15.talon.v1.ChatAbortedH\x00R\aaborted\x12+\n" +
 	"\x05error\x18\r \x01(\v2\x13.talon.v1.ChatErrorH\x00R\x05error\x124\n" +
+	"\bthinking\x18\x0e \x01(\v2\x16.talon.v1.ChatThinkingH\x00R\bthinking\x124\n" +
 	"\n" +
 	"tool_start\x18\x14 \x01(\v2\x13.talon.v1.ToolStartH\x00R\ttoolStart\x127\n" +
 	"\vtool_result\x18\x15 \x01(\v2\x14.talon.v1.ToolResultH\x00R\n" +
@@ -1254,7 +1329,13 @@ const file_talon_v1_chat_proto_rawDesc = "" +
 	"\x04text\x18\x01 \x01(\tR\x04text\"9\n" +
 	"\tChatError\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x18\n" +
-	"\amessage\x18\x02 \x01(\tR\amessage\"^\n" +
+	"\amessage\x18\x02 \x01(\tR\amessage\"M\n" +
+	"\fChatThinking\x12\x1e\n" +
+	"\n" +
+	"cumulative\x18\x01 \x01(\tR\n" +
+	"cumulative\x12\x1d\n" +
+	"\n" +
+	"delta_text\x18\x02 \x01(\tR\tdeltaText\"^\n" +
 	"\tToolStart\x12 \n" +
 	"\ftool_call_id\x18\x01 \x01(\tR\n" +
 	"toolCallId\x12\x12\n" +
@@ -1283,7 +1364,7 @@ func file_talon_v1_chat_proto_rawDescGZIP() []byte {
 	return file_talon_v1_chat_proto_rawDescData
 }
 
-var file_talon_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_talon_v1_chat_proto_msgTypes = make([]protoimpl.MessageInfo, 18)
 var file_talon_v1_chat_proto_goTypes = []any{
 	(*ChatSendRequest)(nil),      // 0: talon.v1.ChatSendRequest
 	(*ChatSendResponse)(nil),     // 1: talon.v1.ChatSendResponse
@@ -1300,8 +1381,9 @@ var file_talon_v1_chat_proto_goTypes = []any{
 	(*ChatFinal)(nil),            // 12: talon.v1.ChatFinal
 	(*ChatAborted)(nil),          // 13: talon.v1.ChatAborted
 	(*ChatError)(nil),            // 14: talon.v1.ChatError
-	(*ToolStart)(nil),            // 15: talon.v1.ToolStart
-	(*ToolResult)(nil),           // 16: talon.v1.ToolResult
+	(*ChatThinking)(nil),         // 15: talon.v1.ChatThinking
+	(*ToolStart)(nil),            // 16: talon.v1.ToolStart
+	(*ToolResult)(nil),           // 17: talon.v1.ToolResult
 }
 var file_talon_v1_chat_proto_depIdxs = []int32{
 	4,  // 0: talon.v1.ChatHistoryResponse.messages:type_name -> talon.v1.HistoryRow
@@ -1314,19 +1396,20 @@ var file_talon_v1_chat_proto_depIdxs = []int32{
 	12, // 7: talon.v1.ChatEvent.final:type_name -> talon.v1.ChatFinal
 	13, // 8: talon.v1.ChatEvent.aborted:type_name -> talon.v1.ChatAborted
 	14, // 9: talon.v1.ChatEvent.error:type_name -> talon.v1.ChatError
-	15, // 10: talon.v1.ChatEvent.tool_start:type_name -> talon.v1.ToolStart
-	16, // 11: talon.v1.ChatEvent.tool_result:type_name -> talon.v1.ToolResult
-	0,  // 12: talon.v1.ChatService.Send:input_type -> talon.v1.ChatSendRequest
-	2,  // 13: talon.v1.ChatService.History:input_type -> talon.v1.ChatHistoryRequest
-	9,  // 14: talon.v1.ChatService.Subscribe:input_type -> talon.v1.ChatSubscribeRequest
-	1,  // 15: talon.v1.ChatService.Send:output_type -> talon.v1.ChatSendResponse
-	3,  // 16: talon.v1.ChatService.History:output_type -> talon.v1.ChatHistoryResponse
-	10, // 17: talon.v1.ChatService.Subscribe:output_type -> talon.v1.ChatEvent
-	15, // [15:18] is the sub-list for method output_type
-	12, // [12:15] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	15, // 10: talon.v1.ChatEvent.thinking:type_name -> talon.v1.ChatThinking
+	16, // 11: talon.v1.ChatEvent.tool_start:type_name -> talon.v1.ToolStart
+	17, // 12: talon.v1.ChatEvent.tool_result:type_name -> talon.v1.ToolResult
+	0,  // 13: talon.v1.ChatService.Send:input_type -> talon.v1.ChatSendRequest
+	2,  // 14: talon.v1.ChatService.History:input_type -> talon.v1.ChatHistoryRequest
+	9,  // 15: talon.v1.ChatService.Subscribe:input_type -> talon.v1.ChatSubscribeRequest
+	1,  // 16: talon.v1.ChatService.Send:output_type -> talon.v1.ChatSendResponse
+	3,  // 17: talon.v1.ChatService.History:output_type -> talon.v1.ChatHistoryResponse
+	10, // 18: talon.v1.ChatService.Subscribe:output_type -> talon.v1.ChatEvent
+	16, // [16:19] is the sub-list for method output_type
+	13, // [13:16] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_talon_v1_chat_proto_init() }
@@ -1345,6 +1428,7 @@ func file_talon_v1_chat_proto_init() {
 		(*ChatEvent_Final)(nil),
 		(*ChatEvent_Aborted)(nil),
 		(*ChatEvent_Error)(nil),
+		(*ChatEvent_Thinking)(nil),
 		(*ChatEvent_ToolStart)(nil),
 		(*ChatEvent_ToolResult)(nil),
 	}
@@ -1354,7 +1438,7 @@ func file_talon_v1_chat_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_talon_v1_chat_proto_rawDesc), len(file_talon_v1_chat_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   17,
+			NumMessages:   18,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

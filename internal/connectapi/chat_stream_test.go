@@ -82,8 +82,27 @@ func TestTranslateEvent_ChatAborted(t *testing.T) {
 	}
 }
 
+func TestTranslateEvent_ChatThinking(t *testing.T) {
+	got := translateEvent("chat", server.ChatEventPayload{
+		State: "thinking", DeltaText: " let me think",
+		Message: &server.ChatEventMessage{
+			Content: []server.ChatEventContentPart{{Type: "text", Text: "hmm. let me think"}},
+		},
+	})
+	if got == nil {
+		t.Fatal("thinking should translate")
+	}
+	tk := got.GetThinking()
+	if tk == nil {
+		t.Fatalf("expected Thinking variant, got %T", got.GetPayload())
+	}
+	if tk.GetCumulative() != "hmm. let me think" || tk.GetDeltaText() != " let me think" {
+		t.Errorf("thinking fields wrong: %+v", tk)
+	}
+}
+
 func TestTranslateEvent_ChatUnknownStateDrops(t *testing.T) {
-	got := translateEvent("chat", server.ChatEventPayload{State: "thinking"})
+	got := translateEvent("chat", server.ChatEventPayload{State: "freestyle"})
 	if got != nil {
 		t.Errorf("unknown state should drop; got %+v", got)
 	}
