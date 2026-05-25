@@ -313,8 +313,21 @@ type getUpdatesResp struct {
 // are logged to stderr and retried with a small backoff — transient
 // network blips shouldn't take down the channel.
 func (s *telegramPlugin) pollLoop(ctx context.Context, token string, allow map[string]struct{}, out chan<- *pb.IncomingChannelMessage) error {
+	// One identity probe up front so the user sees in the log
+	// that the bot token actually works (vs. silently long-polling
+	// against a 401). getMe is cheap (no offset / state) and
+	// surfaces the bot username for clarity.
+	if username, err := s.getMe(ctx, token); err != nil {
+		slog.Warn("telegram getMe failed — token may be wrong or revoked",
+			"plugin", "telegram", "err", err)
+	} else {
+		slog.Info("telegram polling started",
+			"plugin", "telegram", "bot", "@"+username, "allowlist_size", len(allow))
+	}
+
 	var offset int64
 	backoff := time.Second
+	totalReceived := 0
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -344,6 +357,12 @@ func (s *telegramPlugin) pollLoop(ctx context.Context, token string, allow map[s
 			if msg == nil {
 				continue
 			}
+			totalReceived++
+			if totalReceived == 1 {
+				slog.Info("telegram first inbound message",
+					"plugin", "telegram", "sender", msg.GetSenderId(), "room", msg.GetRoomId(),
+					"text_len", len(msg.GetText()))
+			}
 			if len(allow) > 0 {
 				if _, ok := allow[msg.GetSenderId()]; !ok {
 					slog.Info("telegram dropping non-allowlisted message",
@@ -358,6 +377,39 @@ func (s *telegramPlugin) pollLoop(ctx context.Context, token string, allow map[s
 			}
 		}
 	}
+}
+
+// getMe pings Telegram's bot-identity endpoint to confirm the
+// token works. Used as a startup probe so a wrong/expired token
+// surfaces as a clear log line instead of silent long-polling.
+func (s *telegramPlugin) getMe(ctx context.Context, token string) (string, error) {
+	endpoint := fmt.Sprintf("%s/bot%s/getMe", telegramAPIBase, token)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		raw, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("getMe http %d: %s", resp.StatusCode, truncate(string(raw), 256))
+	}
+	var out struct {
+		OK     bool `json:"ok"`
+		Result struct {
+			Username string `json:"username"`
+		} `json:"result"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return "", err
+	}
+	if !out.OK {
+		return "", fmt.Errorf("getMe ok=false")
+	}
+	return out.Result.Username, nil
 }
 
 func (s *telegramPlugin) getUpdates(ctx context.Context, token string, offset int64) ([]telegramUpdate, error) {
