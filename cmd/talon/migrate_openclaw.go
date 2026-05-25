@@ -22,6 +22,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -29,7 +30,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"github.com/guygrigsby/talon/internal/config"
+	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/spf13/cobra"
 )
 
@@ -42,8 +46,9 @@ type migrateStats struct {
 
 func migrateOpenclawCmd() *cobra.Command {
 	var (
-		dryRun bool
-		force  bool
+		dryRun        bool
+		force         bool
+		noMergeConfig bool
 	)
 	c := &cobra.Command{
 		Use:   "migrate-from-openclaw",
@@ -80,9 +85,28 @@ a message). When you're satisfied, ~/.openclaw can be removed.`,
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(),
-				"\nDone. copied=%d skipped=%d existed-no-clobber=%d bytes=%s\n",
+				"\nFile tree: copied=%d skipped=%d existed-no-clobber=%d bytes=%s\n",
 				stats.copied, stats.skipped, stats.wouldClobber, humanBytes(stats.bytes),
 			)
+
+			// Config merge: agents.list / agents.defaults / gateway /
+			// providers / channels live in openclaw.json itself, not
+			// under the file tree. Talon's MergedBytes already
+			// implements the layer merge (talon wins on conflict);
+			// write that snapshot back into ~/.talon/openclaw.json so
+			// when SkipOpenclaw goes true the merged view persists.
+			if !noMergeConfig {
+				wroteConfig, err := mergeConfigInto(paths, dryRun, force, cmd.OutOrStdout())
+				if err != nil {
+					return fmt.Errorf("merge openclaw.json: %w", err)
+				}
+				if dryRun {
+					fmt.Fprintf(cmd.OutOrStdout(), "Config merge: would-write=%v\n", wroteConfig)
+				} else {
+					fmt.Fprintf(cmd.OutOrStdout(), "Config merge: wrote=%v target=%s\n", wroteConfig, paths.Talon.Config)
+				}
+			}
+
 			if !dryRun && stats.copied > 0 {
 				fmt.Fprintln(cmd.OutOrStdout(),
 					"\nNext: restart any running talon-gateway, run `talon dashboard`,",
@@ -93,7 +117,54 @@ a message). When you're satisfied, ~/.openclaw can be removed.`,
 	}
 	c.Flags().BoolVar(&dryRun, "dry-run", false, "print what would happen without touching the filesystem")
 	c.Flags().BoolVar(&force, "force", false, "overwrite destination files that already exist (default: leave them alone)")
+	c.Flags().BoolVar(&noMergeConfig, "no-merge-config", false, "skip merging openclaw.json into the talon overlay")
 	return c
+}
+
+// mergeConfigInto reads both layers' openclaw.json (via the
+// existing merge helper, talon overlay wins on conflicts) and
+// writes the resulting bytes to the talon overlay path. The
+// resolvePaths() default has SkipOpenclaw=true so callers must
+// pass paths with SkipOpenclaw cleared — we override here.
+func mergeConfigInto(paths openclaw.Paths, dryRun, force bool, out io.Writer) (bool, error) {
+	probe := paths
+	probe.SkipOpenclaw = false
+	merged, err := config.MergedBytes(probe)
+	if err != nil {
+		return false, err
+	}
+	if len(merged) == 0 || string(merged) == "{}" {
+		return false, nil
+	}
+	dst := paths.Talon.Config
+	if dst == "" {
+		return false, errors.New("talon config path empty")
+	}
+	// MergedBytes already merges talon-over-openclaw with id-keyed
+	// array semantics (agents.list, models.aliases, etc.) so writing
+	// its output to the talon overlay folds openclaw in without
+	// dropping talon-side overrides. We pretty-print the result so
+	// it stays human-editable. Backup the pre-existing overlay if
+	// any, so a botched run is recoverable.
+	pretty, err := jsonPretty(merged)
+	if err != nil {
+		return false, err
+	}
+	if dryRun {
+		return true, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return false, err
+	}
+	if existing, err := os.ReadFile(dst); err == nil && len(existing) > 0 {
+		backup := dst + ".bak." + nowStamp()
+		if err := atomicWriteFile(backup, existing, 0o644); err != nil {
+			fmt.Fprintf(out, "warning: could not write backup %s: %v\n", backup, err)
+		} else {
+			fmt.Fprintf(out, "Backed up existing talon overlay to %s\n", backup)
+		}
+	}
+	return true, atomicWriteFile(dst, pretty, 0o644)
 }
 
 // shouldSkip applies the carve-outs that keep the migration from
@@ -232,6 +303,106 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	return out.Close()
+}
+
+// jsonPretty re-marshals JSON bytes with 2-space indent. The merged
+// output from config.MergedBytes is compact; humans read the overlay
+// after a migration so the indented form is the right default.
+func jsonPretty(raw []byte) ([]byte, error) {
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, err
+	}
+	return json.MarshalIndent(v, "", "  ")
+}
+
+// nowStamp returns an RFC3339-like timestamp without colons so it's
+// safe in filenames on every common filesystem.
+func nowStamp() string {
+	t := time.Now().UTC()
+	return fmt.Sprintf("%04d%02d%02dT%02d%02d%02dZ",
+		t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second())
+}
+
+// overlayMissing fills in keys from src that aren't already present
+// in existing. Returns the new bytes + a changed flag. Recurses into
+// nested objects so a partial talon overlay (e.g. {gateway:{port:18789}})
+// gains the rest of gateway's keys from openclaw without losing the
+// port override. Arrays are NOT deep-merged: if existing has the
+// array at all (even empty), it wins — matches the rest of talon's
+// "talon-wins" merge semantics.
+func overlayMissing(existing, src []byte) ([]byte, bool, error) {
+	var ex, srcMap map[string]any
+	if len(existing) > 0 {
+		if err := json.Unmarshal(existing, &ex); err != nil {
+			return nil, false, fmt.Errorf("parse talon overlay: %w", err)
+		}
+	}
+	if ex == nil {
+		ex = map[string]any{}
+	}
+	if len(src) > 0 {
+		if err := json.Unmarshal(src, &srcMap); err != nil {
+			return nil, false, fmt.Errorf("parse merged source: %w", err)
+		}
+	}
+	changed := overlayMissingObj(ex, srcMap)
+	if !changed {
+		return existing, false, nil
+	}
+	out, err := json.MarshalIndent(ex, "", "  ")
+	if err != nil {
+		return nil, false, err
+	}
+	return out, true, nil
+}
+
+func overlayMissingObj(dst, src map[string]any) bool {
+	changed := false
+	for k, v := range src {
+		cur, present := dst[k]
+		if !present {
+			dst[k] = v
+			changed = true
+			continue
+		}
+		// Recurse only when both sides are JSON objects. Anything
+		// else (string, number, bool, array) — existing wins.
+		curObj, curOK := cur.(map[string]any)
+		srcObj, srcOK := v.(map[string]any)
+		if curOK && srcOK {
+			if overlayMissingObj(curObj, srcObj) {
+				changed = true
+			}
+		}
+	}
+	return changed
+}
+
+// atomicWriteFile writes data to path via a temp file in the same
+// directory, then renames into place. Avoids leaving a half-written
+// openclaw.json if the migration is interrupted.
+func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmp.Name())
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func humanBytes(n int64) string {

@@ -43,6 +43,11 @@ type Layer struct {
 }
 
 // DefaultPaths returns the default layered paths, honoring env overrides.
+// SkipOpenclaw defaults to true — talon is now talon-only at read time.
+// The Openclaw Layer is still populated (path resolution still runs) so
+// callers that opt back in via `--openclaw-fallback` get the same merged
+// behavior they had before. Use `talon migrate-from-openclaw` to pull
+// the old data into ~/.talon ahead of dropping the fallback flag.
 func DefaultPaths() Paths {
 	talonDir := resolveStateDir("TALON_STATE_DIR", ".talon")
 	openclawDir := resolveStateDir("OPENCLAW_STATE_DIR", ".openclaw")
@@ -55,6 +60,7 @@ func DefaultPaths() Paths {
 			Dir:    openclawDir,
 			Config: resolveConfigPath("OPENCLAW_CONFIG_PATH", openclawDir),
 		},
+		SkipOpenclaw: true,
 	}
 }
 

@@ -18,15 +18,18 @@ import (
 )
 
 var (
-	flagTalonConfig    string
-	flagOpenclawConfig string
-	flagNoFallback     bool
-	flagJSON           bool
-	flagLogFormat      string
+	flagTalonConfig      string
+	flagOpenclawConfig   string
+	flagOpenclawFallback bool
+	flagJSON             bool
+	flagLogFormat        string
 )
 
 // resolvePaths returns the layered paths for this invocation, applying any
-// global --config / --openclaw-config / --no-openclaw-fallback overrides.
+// global --config / --openclaw-config / --openclaw-fallback overrides.
+// Talon defaults to talon-only at read time; pass --openclaw-fallback to
+// merge in the ~/.openclaw layer (legacy behavior, useful right after
+// `talon migrate-from-openclaw` while you verify the cutover).
 func resolvePaths() openclaw.Paths {
 	p := openclaw.DefaultPaths()
 	if flagTalonConfig != "" {
@@ -35,8 +38,8 @@ func resolvePaths() openclaw.Paths {
 	if flagOpenclawConfig != "" {
 		p.Openclaw.Config = flagOpenclawConfig
 	}
-	if flagNoFallback {
-		p.SkipOpenclaw = true
+	if flagOpenclawFallback {
+		p.SkipOpenclaw = false
 	}
 	return p
 }
@@ -64,7 +67,7 @@ func main() {
 
 	root.PersistentFlags().StringVar(&flagTalonConfig, "config", "", "path to the talon overlay config (default: $TALON_CONFIG_PATH or ~/.talon/openclaw.json)")
 	root.PersistentFlags().StringVar(&flagOpenclawConfig, "openclaw-config", "", "path to the read-only openclaw config (default: $OPENCLAW_CONFIG_PATH or ~/.openclaw/openclaw.json)")
-	root.PersistentFlags().BoolVar(&flagNoFallback, "no-openclaw-fallback", false, "ignore the openclaw config layer when reading")
+	root.PersistentFlags().BoolVar(&flagOpenclawFallback, "openclaw-fallback", false, "ALSO read from the legacy ~/.openclaw layer (default: talon-only)")
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "emit raw JSON response")
 	root.PersistentFlags().StringVar(&flagLogFormat, "log-format", "", "log handler: text (default, ANSI-colored on TTY) or json. Env override: TALON_LOG_FORMAT")
 
