@@ -5,37 +5,82 @@
 	import { channels, messages } from '$lib/data/channels';
 	import { chrome } from '$lib/state/chrome.svelte';
 	import { makeChatStore } from '$lib/gateway/chatStore.svelte';
+	import { getAgentsClient } from '$lib/gateway/connect';
 
 	let activeId = $state('web-here');
 
 	const channel = $derived(channels.find((c) => c.id === activeId) ?? channels[0]);
 
-	// First live wire: the 'web-here' channel maps to a fixed
-	// gateway session-key. Other channels stay on mock data until
-	// their respective bridges (telegram, signal, ...) get plumbed
-	// through the gateway too. The agent ID after the colon is
-	// what the gateway resolves to a model+workspace; if it isn't
-	// configured locally History returns empty and Send returns a
-	// typed error which the composer surfaces inline.
+	// 'web-here' is the channel wired to the live gateway. Session-key
+	// shape is `agent:<id>:<conv>`; the agentId is resolved from
+	// agents.list at mount so we don't hardcode an agent name that
+	// might not exist on this gateway. <conv> stays "web" so reloads
+	// land back in the same conversation.
 	const LIVE_CHANNEL_ID = 'web-here';
-	const LIVE_SESSION_KEY = 'agent:talon:web';
+	const LIVE_CONV = 'web';
 
-	const liveStore = makeChatStore(LIVE_SESSION_KEY);
+	let agentId = $state<string | null>(null);
+	let agentsLoadError = $state<string | null>(null);
+	let liveStore: ReturnType<typeof makeChatStore> | null = $state(null);
+
+	async function loadAgents() {
+		try {
+			const client = getAgentsClient();
+			const res = await client.list({});
+			const parsed = JSON.parse(res.json);
+			const def = typeof parsed.defaultId === 'string' ? parsed.defaultId : '';
+			const first = Array.isArray(parsed.agents) && parsed.agents[0]?.id;
+			agentId = def || first || null;
+			if (!agentId) {
+				agentsLoadError = 'No agents configured on this gateway.';
+			}
+		} catch (err) {
+			agentsLoadError = err instanceof Error ? err.message : String(err);
+		}
+	}
 
 	$effect(() => {
-		// Mount the live history + subscribe loop with the page.
-		// loadHistory backfills once; startSubscribe stays open
-		// until the returned dispose() runs on unmount.
-		liveStore.loadHistory();
-		liveStore.startSubscribe();
-		return () => liveStore.dispose();
+		loadAgents();
+	});
+
+	// (Re)create the chat store any time the agentId resolves to a
+	// new value. Mount the history + subscribe loop on the new
+	// store, dispose the old one in the cleanup so the prior stream
+	// doesn't leak across agent changes.
+	$effect(() => {
+		if (!agentId) return;
+		const store = makeChatStore(`agent:${agentId}:${LIVE_CONV}`);
+		liveStore = store;
+		store.loadHistory();
+		store.startSubscribe();
+		return () => {
+			store.dispose();
+			if (liveStore === store) liveStore = null;
+		};
 	});
 
 	const isLive = $derived(channel.id === LIVE_CHANNEL_ID);
-	const stream = $derived(isLive ? liveStore.messages : (messages[channel.id] ?? []));
-	const composerStatus = $derived(isLive ? liveStore.status : 'idle');
-	const composerError = $derived(isLive ? liveStore.errorMessage : null);
-	const onSend = $derived(isLive ? (text: string) => liveStore.send(text) : undefined);
+	const stream = $derived.by(() => {
+		const s = liveStore;
+		if (isLive && s) return s.messages;
+		return messages[channel.id] ?? [];
+	});
+	const composerStatus = $derived.by(() => {
+		if (!isLive) return 'idle' as const;
+		const s = liveStore;
+		if (s) return s.status;
+		return agentsLoadError ? ('error' as const) : ('loading' as const);
+	});
+	const composerError = $derived.by(() => {
+		if (!isLive) return null;
+		const s = liveStore;
+		return s?.errorMessage ?? agentsLoadError;
+	});
+	const onSend = $derived.by(() => {
+		const s = liveStore;
+		if (!isLive || !s) return undefined;
+		return (text: string) => s.send(text);
+	});
 
 	function selectChannel(id: string) {
 		activeId = id;
