@@ -1,10 +1,8 @@
 <script lang="ts">
 	import type { Channel, Message } from '$lib/data/channels';
 	import { sourceLabel } from '$lib/data/channels';
-	import type { AgentEntry } from '$lib/gateway/agents';
 	import MessageRow from './MessageRow.svelte';
 	import ModelPicker from './ModelPicker.svelte';
-	import AgentPicker from './AgentPicker.svelte';
 	import SourceDot from './SourceDot.svelte';
 
 	let {
@@ -17,9 +15,7 @@
 		errorMessage = null,
 		model = null,
 		onModelChange,
-		agents = [],
-		agentId = '',
-		onAgentChange,
+		defaultModelLabel = null,
 	}: {
 		channel: Channel;
 		messages: Message[];
@@ -30,18 +26,10 @@
 		errorMessage?: string | null;
 		model?: string | null;
 		onModelChange?: (modelId: string) => void;
-		agents?: AgentEntry[];
-		agentId?: string;
-		onAgentChange?: (agentId: string) => void;
+		// Resolved primary-agent default model name, used by the
+		// model picker's "agent default" option label.
+		defaultModelLabel?: string | null;
 	} = $props();
-
-	// Default label echoes the active agent's primary model name
-	// so the model-picker's "agent default" option carries real
-	// information instead of just the phrase.
-	const activeAgent = $derived(agents.find((a) => a.id === agentId));
-	const defaultModelLabel = $derived(
-		activeAgent?.primaryModelName || activeAgent?.primaryModel || null
-	);
 
 	// Auto-pin the stream to the bottom on new content. Track the
 	// last user-scroll position so a user mid-scrollback doesn't get
@@ -116,9 +104,6 @@
 			</span>
 		</div>
 		<div class="ops">
-			{#if onAgentChange && agents.length > 0}
-				<AgentPicker {agents} value={agentId} onChange={onAgentChange} disabled={!wired} />
-			{/if}
 			{#if onModelChange}
 				<ModelPicker
 					value={model ?? ''}

@@ -11,30 +11,26 @@
 
 	const channel = $derived(channels.find((c) => c.id === activeId) ?? channels[0]);
 
-	// 'web-here' is the channel wired to the live gateway. Session-key
-	// shape is `agent:<id>:<conv>`; the agentId is resolved from
-	// agents.list at mount, with the agent picker letting the user
-	// switch between configured agents on the fly. <conv> stays "web"
-	// so reloads land back in the same conversation.
+	// 'web-here' is the channel wired to the live gateway. Talon
+	// runs ONE primary agent the user talks to; the rest are
+	// subagents the primary can delegate to via the subagent tool.
+	// Session-key shape stays `agent:<id>:<conv>` for compatibility
+	// with the chat-history keying; <conv> stays "web" so reloads
+	// land back in the same conversation.
 	const LIVE_CHANNEL_ID = 'web-here';
 	const LIVE_CONV = 'web';
 
-	let agents = $state<AgentEntry[]>([]);
-	let agentId = $state<string | null>(null);
+	let primary = $state<AgentEntry | null>(null);
 	let agentsLoadError = $state<string | null>(null);
 	let liveStore: ReturnType<typeof makeChatStore> | null = $state(null);
 
 	async function refreshAgents() {
 		try {
 			const view = await loadAgents();
-			agents = view.entries;
-			// Prefer the user's current selection if it's still present;
-			// otherwise fall back to the gateway's defaultId or the
-			// first agent.
-			if (!agentId || !view.entries.some((a) => a.id === agentId)) {
-				agentId = view.defaultId || view.entries[0]?.id || null;
-			}
-			if (!agentId) {
+			const def =
+				view.entries.find((a) => a.id === view.defaultId) ?? view.entries[0] ?? null;
+			primary = def;
+			if (!primary) {
 				agentsLoadError = 'No agents configured on this gateway.';
 			}
 		} catch (err) {
@@ -46,18 +42,13 @@
 		refreshAgents();
 	});
 
-	function selectAgent(next: string) {
-		if (!next || next === agentId) return;
-		agentId = next;
-	}
-
-	// (Re)create the chat store any time the agentId resolves to a
-	// new value. Mount the history + subscribe loop on the new
-	// store, dispose the old one in the cleanup so the prior stream
-	// doesn't leak across agent changes.
+	// (Re)create the chat store when the primary agent resolves.
+	// Cleanup disposes the prior subscribe so a reload or
+	// re-resolve doesn't leak.
 	$effect(() => {
-		if (!agentId) return;
-		const store = makeChatStore(`agent:${agentId}:${LIVE_CONV}`);
+		const id = primary?.id;
+		if (!id) return;
+		const store = makeChatStore(`agent:${id}:${LIVE_CONV}`);
 		liveStore = store;
 		store.loadHistory();
 		store.startSubscribe();
@@ -98,6 +89,9 @@
 		if (!isLive || !s) return undefined;
 		return (modelId: string) => s.setModel(modelId);
 	});
+	const defaultModelLabel = $derived(
+		primary?.primaryModelName || primary?.primaryModel || null
+	);
 
 	function selectChannel(id: string) {
 		activeId = id;
@@ -121,9 +115,7 @@
 	errorMessage={composerError}
 	model={composerModel}
 	{onModelChange}
-	{agents}
-	agentId={agentId ?? ''}
-	onAgentChange={selectAgent}
+	{defaultModelLabel}
 />
 <Inspector
 	{channel}
