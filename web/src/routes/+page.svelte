@@ -19,13 +19,15 @@
 
 	async function refreshChannels() {
 		try {
-			liveChannels = await loadConfiguredChannels();
+			const next = await loadConfiguredChannels();
+			console.info('[talon] configured channels:', next);
+			liveChannels = next;
 		} catch (err) {
 			// Config read failures are non-fatal — the static web-here
 			// entry keeps the rail usable even if the gateway briefly
 			// can't enumerate channels. Surface to console so silent
 			// breaks are debuggable without a server-side log.
-			console.warn('loadConfiguredChannels failed:', err);
+			console.warn('[talon] loadConfiguredChannels failed:', err);
 			liveChannels = [];
 		}
 	}

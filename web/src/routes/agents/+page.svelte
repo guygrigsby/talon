@@ -86,25 +86,24 @@
 			{#if fleet.length === 0}
 				<div class="t-mono dim">No subagents configured.</div>
 			{:else}
-				<ul class="grid">
-					{#each fleet as a (a.id)}
-						<li>
-							<article class="card">
-								<header class="card-head">
-									<span class="card-id t-mono">{a.id}</span>
-								</header>
-								<dl class="card-body">
-									<dt class="t-label">model</dt>
-									<dd class="t-mono">{a.primaryModel || '(unset)'}</dd>
-									{#if a.workspace}
-										<dt class="t-label">workspace</dt>
-										<dd class="t-mono break">{a.workspace}</dd>
-									{/if}
-								</dl>
-							</article>
-						</li>
-					{/each}
-				</ul>
+				<table class="fleet-table">
+					<thead>
+						<tr>
+							<th scope="col">id</th>
+							<th scope="col">model</th>
+							<th scope="col">workspace</th>
+						</tr>
+					</thead>
+					<tbody>
+						{#each fleet as a (a.id)}
+							<tr>
+								<td class="t-mono name">{a.id}</td>
+								<td class="t-mono">{a.primaryModel || '(unset)'}</td>
+								<td class="t-mono break">{a.workspace ?? ''}</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
 			{/if}
 		</section>
 	{/if}
@@ -179,14 +178,6 @@
 		max-width: 60ch;
 	}
 
-	.grid {
-		list-style: none;
-		margin: 0;
-		padding: 0;
-		display: grid;
-		grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-		gap: var(--s-3);
-	}
 	.card {
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
@@ -200,6 +191,39 @@
 		border-color: var(--accent);
 		border-width: 1px;
 		max-width: 480px;
+	}
+
+	.fleet-table {
+		width: 100%;
+		border-collapse: collapse;
+		font-size: var(--fs-sm);
+	}
+	.fleet-table th,
+	.fleet-table td {
+		text-align: left;
+		padding: 8px var(--s-3);
+		border-bottom: 1px solid var(--border);
+		vertical-align: top;
+	}
+	.fleet-table thead th {
+		font-size: var(--fs-xs);
+		font-weight: 700;
+		color: var(--ink-3);
+		text-transform: lowercase;
+		letter-spacing: var(--tracking-caps, 0.04em);
+		border-bottom: 1px solid var(--border-strong, var(--border));
+	}
+	.fleet-table tbody tr:last-child td {
+		border-bottom: 0;
+	}
+	.fleet-table .name {
+		font-weight: 700;
+		color: var(--ink);
+		white-space: nowrap;
+	}
+	.fleet-table .break {
+		word-break: break-all;
+		color: var(--ink-2);
 	}
 	.card-head {
 		display: flex;
