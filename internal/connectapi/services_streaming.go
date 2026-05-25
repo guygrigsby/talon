@@ -195,17 +195,22 @@ func (s *SessionsService) List(ctx context.Context, req *connect.Request[talonv1
 }
 
 func (s *SessionsService) Patch(ctx context.Context, req *connect.Request[talonv1.SessionsPatchRequest]) (*connect.Response[talonv1.Empty], error) {
-	// Patch's body is dynamic — different state slices have
-	// different shapes. Hand the raw JSON to the legacy handler.
+	// The WS handler expects a flat shape: {key, ...patchFields}.
+	// session_key arrives in its own typed field on the Connect
+	// request, and patch_json holds the rest as a JSON object;
+	// hoist its members into the params map so it matches.
 	var patch any
 	if err := jsonUnmarshalAny(req.Msg.GetPatchJson(), &patch); err != nil {
 		return nil, connect.NewError(connect.CodeInvalidArgument, err)
 	}
-	params := map[string]any{
-		"sessionKey": req.Msg.GetSessionKey(),
-	}
-	if patch != nil {
-		params["patch"] = patch
+	params := map[string]any{"key": req.Msg.GetSessionKey()}
+	if obj, ok := patch.(map[string]any); ok {
+		for k, v := range obj {
+			if k == "key" {
+				continue // protect the session-key from being overwritten
+			}
+			params[k] = v
+		}
 	}
 	_, err := dispatchJSON(ctx, s.Reg, "sessions.patch", params)
 	if err != nil {

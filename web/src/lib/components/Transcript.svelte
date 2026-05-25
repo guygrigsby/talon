@@ -2,6 +2,7 @@
 	import type { Channel, Message } from '$lib/data/channels';
 	import { sourceLabel } from '$lib/data/channels';
 	import MessageRow from './MessageRow.svelte';
+	import ModelPicker from './ModelPicker.svelte';
 	import SourceDot from './SourceDot.svelte';
 
 	let {
@@ -12,6 +13,8 @@
 		onSend,
 		status = 'idle',
 		errorMessage = null,
+		model = null,
+		onModelChange,
 	}: {
 		channel: Channel;
 		messages: Message[];
@@ -20,6 +23,8 @@
 		onSend?: (text: string) => void | Promise<void>;
 		status?: 'idle' | 'loading' | 'streaming' | 'error';
 		errorMessage?: string | null;
+		model?: string | null;
+		onModelChange?: (modelId: string) => void;
 	} = $props();
 
 	let draft = $state('');
@@ -65,6 +70,9 @@
 			</span>
 		</div>
 		<div class="ops">
+			{#if onModelChange}
+				<ModelPicker value={model ?? ''} onChange={onModelChange} disabled={!wired} />
+			{/if}
 			<button
 				type="button"
 				class="op"

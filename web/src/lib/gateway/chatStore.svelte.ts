@@ -13,7 +13,8 @@ import {
 	type ChatEvent,
 	type HistoryRow
 } from './gen/talon/v1/chat_pb.js';
-import { getChatClient } from './connect.js';
+import { SessionsPatchRequestSchema } from './gen/talon/v1/sessions_pb.js';
+import { getChatClient, getSessionsClient } from './connect.js';
 import type { Message, ToolCall } from '../data/channels.js';
 
 export type ChatStatus = 'idle' | 'loading' | 'streaming' | 'error';
@@ -29,6 +30,10 @@ export function makeChatStore(sessionKey: string) {
 	// Track the currently-streaming assistant message by run_id so
 	// delta events update the right bubble; cleared on final.
 	let activeRunId = $state<string | null>(null);
+	// Per-session model override (null = agent default). Echoes the
+	// SessionsService.Patch state the server keeps; updated
+	// optimistically on setModel.
+	let model = $state<string | null>(null);
 
 	let subscribeAbort: AbortController | null = null;
 
@@ -207,6 +212,29 @@ export function makeChatStore(sessionKey: string) {
 		subscribeAbort = null;
 	}
 
+	// setModel persists a per-session model override on the gateway
+	// via SessionsService.Patch. The next chat.send for this session
+	// reads the override (sessions.Model on the server side) and
+	// uses it instead of the agent's primary model. Empty string
+	// reverts to the agent default. Optimistic local update so the
+	// composer reflects the new choice immediately; on patch failure
+	// the local state rolls back and surfaces the error.
+	async function setModel(next: string) {
+		const prev = model;
+		model = next || null;
+		try {
+			await getSessionsClient().patch(
+				create(SessionsPatchRequestSchema, {
+					sessionKey,
+					patchJson: JSON.stringify({ model: next })
+				})
+			);
+		} catch (err) {
+			model = prev;
+			errorMessage = err instanceof Error ? err.message : String(err);
+		}
+	}
+
 	return {
 		get messages() {
 			return messages;
@@ -220,9 +248,13 @@ export function makeChatStore(sessionKey: string) {
 		get activeRunId() {
 			return activeRunId;
 		},
+		get model() {
+			return model;
+		},
 		loadHistory,
 		startSubscribe,
 		send,
+		setModel,
 		dispose
 	};
 }

@@ -81,6 +81,15 @@
 		if (!isLive || !s) return undefined;
 		return (text: string) => s.send(text);
 	});
+	const composerModel = $derived.by(() => {
+		const s = liveStore;
+		return isLive && s ? s.model : null;
+	});
+	const onModelChange = $derived.by(() => {
+		const s = liveStore;
+		if (!isLive || !s) return undefined;
+		return (modelId: string) => s.setModel(modelId);
+	});
 
 	function selectChannel(id: string) {
 		activeId = id;
@@ -102,6 +111,8 @@
 	{onSend}
 	status={composerStatus}
 	errorMessage={composerError}
+	model={composerModel}
+	{onModelChange}
 />
 <Inspector
 	{channel}
