@@ -140,6 +140,9 @@ func (d *ChannelDispatcher) Stop() {
 // run is the core pump loop. Splits out from Start so it's
 // straight-line testable.
 func (d *ChannelDispatcher) run(ctx context.Context) error {
+	slog.Info("channel dispatcher run-loop entered",
+		"plugin", d.inst.Name, "channel", d.binding.ChannelName,
+		"config_bytes", len(d.binding.ConfigJSON))
 	stream, err := d.inst.Client.StartChannel(ctx, &pb.StartChannelRequest{
 		ChannelName:   d.binding.ChannelName,
 		ChannelConfig: d.binding.ConfigJSON,
@@ -147,6 +150,8 @@ func (d *ChannelDispatcher) run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("StartChannel: %w", err)
 	}
+	slog.Info("channel dispatcher StartChannel returned, polling for messages",
+		"plugin", d.inst.Name, "channel", d.binding.ChannelName)
 
 	for {
 		msg, err := stream.Recv()
