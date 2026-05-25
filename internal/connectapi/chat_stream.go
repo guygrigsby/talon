@@ -263,7 +263,15 @@ func (s *ChatService) Subscribe(ctx context.Context, req *connect.Request[talonv
 	if err := sink.send(&talonv1.ChatEvent{SessionKey: sessionKey}); err != nil {
 		return nil
 	}
-	<-ctx.Done()
+	// Select on the request ctx AND the registry's drain channel.
+	// The request ctx fires on normal client disconnect; the drain
+	// fires on gateway shutdown (Ctrl-C). Without the second case,
+	// a Ctrl-C would wait the http.Server.Shutdown timeout for
+	// every open Subscribe to time out individually.
+	select {
+	case <-ctx.Done():
+	case <-s.Sinks.Drain():
+	}
 	// ctx.Err is Canceled for normal client disconnect and
 	// DeadlineExceeded for forced cutoff; both map cleanly to a
 	// successful stream-close on the Connect side. Returning the

@@ -32,10 +32,45 @@ type EventSink interface {
 type SinkRegistry struct {
 	mu    sync.RWMutex
 	sinks map[string][]EventSink
+
+	// drain is closed by Close() to broadcast "the server is going
+	// down, stop blocking on me." Subscribe handlers in connectapi
+	// select on this alongside the request context so a graceful
+	// shutdown doesn't wait the HTTP-server timeout for every open
+	// stream to time out individually.
+	drain     chan struct{}
+	closeOnce sync.Once
 }
 
 func NewSinkRegistry() *SinkRegistry {
-	return &SinkRegistry{sinks: make(map[string][]EventSink)}
+	return &SinkRegistry{
+		sinks: make(map[string][]EventSink),
+		drain: make(chan struct{}),
+	}
+}
+
+// Drain returns a channel closed when the registry is shutting
+// down. Streaming handlers should select on it alongside their
+// request context so a Ctrl-C unblocks every in-flight Subscribe
+// without waiting for each request to time out.
+func (r *SinkRegistry) Drain() <-chan struct{} {
+	if r == nil {
+		// nil registry: return a never-closed channel so a select
+		// on it just falls through to the ctx case.
+		ch := make(chan struct{})
+		return ch
+	}
+	return r.drain
+}
+
+// Close fires the drain broadcast. Safe to call once; subsequent
+// calls are no-ops (close on a closed channel would panic, hence
+// the sync.Once dance via the closeOnce field below).
+func (r *SinkRegistry) Close() {
+	if r == nil {
+		return
+	}
+	r.closeOnce.Do(func() { close(r.drain) })
 }
 
 // Subscribe registers sink for sessionKey events and returns an

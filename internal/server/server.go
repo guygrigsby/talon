@@ -273,7 +273,16 @@ func (s *Server) Run(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		// Broadcast drain to in-flight Connect Subscribe handlers
+		// FIRST so they unblock and return. http.Server.Shutdown
+		// otherwise waits its whole timeout for each stream to
+		// time out individually — Ctrl-C felt like 5+ seconds of
+		// hang before this. Also force-close any active WS
+		// sessions; Shutdown doesn't track hijacked conns and
+		// they'd hold the process up indefinitely otherwise.
+		s.sinks.Close()
+		s.closeAllSessions("gateway shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		return hs.Shutdown(shutdownCtx)
 	case err := <-errCh:
@@ -281,6 +290,23 @@ func (s *Server) Run(ctx context.Context) error {
 			return nil
 		}
 		return err
+	}
+}
+
+// closeAllSessions issues a normal-closure on every registered WS
+// session. Called from the shutdown path so Ctrl-C drains within
+// the http.Server.Shutdown window rather than hitting the timeout.
+// Sessions deregister themselves from Session.Run's defer chain, so
+// we just trigger the close; the map clean-up happens for free.
+func (s *Server) closeAllSessions(reason string) {
+	s.sessionsMu.Lock()
+	snapshot := make([]*Session, 0, len(s.sessions))
+	for _, sess := range s.sessions {
+		snapshot = append(snapshot, sess)
+	}
+	s.sessionsMu.Unlock()
+	for _, sess := range snapshot {
+		sess.shutdown(reason)
 	}
 }
 
