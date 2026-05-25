@@ -20,10 +20,12 @@
 	async function refreshChannels() {
 		try {
 			liveChannels = await loadConfiguredChannels();
-		} catch {
+		} catch (err) {
 			// Config read failures are non-fatal — the static web-here
 			// entry keeps the rail usable even if the gateway briefly
-			// can't enumerate channels.
+			// can't enumerate channels. Surface to console so silent
+			// breaks are debuggable without a server-side log.
+			console.warn('loadConfiguredChannels failed:', err);
 			liveChannels = [];
 		}
 	}
@@ -121,6 +123,7 @@
 </script>
 
 <ChannelRail
+	{channels}
 	{activeId}
 	open={chrome.railOpen}
 	onSelect={selectChannel}

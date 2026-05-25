@@ -1,20 +1,25 @@
 <script lang="ts">
-	import { channels, bySource, sourceLabel } from '$lib/data/channels';
+	import { bySource, sourceLabel, type Channel } from '$lib/data/channels';
 	import SourceDot from './SourceDot.svelte';
 
 	let {
+		channels = [],
 		activeId = 'web-here',
 		onSelect,
 		open = true,
 		onClose,
 	}: {
+		channels?: Channel[];
 		activeId?: string;
 		onSelect?: (id: string) => void;
 		open?: boolean;
 		onClose?: () => void;
 	} = $props();
 
-	const grouped = bySource(channels);
+	// Derived so the rail re-renders when the parent loads live
+	// channels (telegram, bluebubbles, etc.) after the initial
+	// mount. The previous static import made these counts frozen.
+	const grouped = $derived(bySource(channels));
 	const totalConnected = $derived(channels.filter((c) => c.status === 'connected').length);
 	const totalUnread = $derived(channels.reduce((n, c) => n + c.unread, 0));
 </script>
