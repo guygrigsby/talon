@@ -201,7 +201,7 @@ func sendCrashLoopAlert(ctx context.Context, paths openclaw.Paths, events []gate
 		}
 	}
 	body := fmt.Sprintf(
-		"⚠️ talon-gateway crash loop: %d starts in the last %s. Last start at %s. Check logs (`make docker-logs` or stdout).",
+		"⚠️ talon-gateway crash loop: %d starts in the last %s. Last start at %s. Check the gateway stdout/stderr where you launched it (`bin/talon gateway run`).",
 		starts,
 		crashLoopWindow,
 		now.Format(time.RFC3339),

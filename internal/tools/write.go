@@ -13,7 +13,12 @@ type writeTool struct{ ws string }
 func (t *writeTool) Name() string { return "write" }
 
 func (t *writeTool) Description() string {
-	return "Create or overwrite a file in the workspace with the given content."
+	return "Create or overwrite a file in the workspace with the given content. " +
+		"For code, notes, configs, drafts — anything the user wants persisted as " +
+		"a file in their project. Do NOT use this to save facts to your own memory; " +
+		"the `remember` tool is the only memory-persistence path. Writing to paths " +
+		"like memory/, MEMORY.md, or memory/YYYY-MM-DD.md is a legacy pattern that " +
+		"talon's runtime no longer reads — those writes will not become memory."
 }
 
 func (t *writeTool) ParametersSchema() json.RawMessage {
@@ -40,9 +45,6 @@ func (t *writeTool) Run(ctx context.Context, input json.RawMessage) (string, err
 	}
 	abs, err := resolveInWorkspace(t.ws, p.Path)
 	if err != nil {
-		return "", err
-	}
-	if err := denyReservedMemoryPath(t.ws, abs); err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {

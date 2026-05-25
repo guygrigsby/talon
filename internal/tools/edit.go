@@ -44,9 +44,6 @@ func (t *editTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 	if err != nil {
 		return "", err
 	}
-	if err := denyReservedMemoryPath(t.ws, abs); err != nil {
-		return "", err
-	}
 	body, err := os.ReadFile(abs)
 	if err != nil {
 		return "", fmt.Errorf("edit %s: %w", p.Path, err)
