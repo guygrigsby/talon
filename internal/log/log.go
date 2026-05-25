@@ -25,20 +25,27 @@ import (
 
 // Format selects the handler shape. Text is the human-readable
 // console handler with optional ANSI colors; JSON is slog's
-// stdlib JSON handler, suitable for log shippers.
+// stdlib JSON handler, suitable for log shippers; HCLog emits
+// hashicorp/go-hclog's JSON schema so go-plugin's host-side
+// parser can pick up plugin log lines and route them through the
+// host's Logger.
 type Format int
 
 const (
 	FormatText Format = iota
 	FormatJSON
+	FormatHCLog
 )
 
 // ParseFormat is the CLI/env parser. Unknown values fall back to
-// text — never JSON, since misconfiguring an interactive run with
-// JSON would render the gateway nearly unreadable.
+// text — never JSON or HCLog, since misconfiguring an interactive
+// run with structured output would render the gateway unreadable.
 func ParseFormat(s string) Format {
-	if strings.EqualFold(strings.TrimSpace(s), "json") {
+	switch {
+	case strings.EqualFold(strings.TrimSpace(s), "json"):
 		return FormatJSON
+	case hclogFormatFromEnv(s):
+		return FormatHCLog
 	}
 	return FormatText
 }
@@ -61,6 +68,8 @@ func Init(format Format) *slog.Logger {
 	switch format {
 	case FormatJSON:
 		h = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
+	case FormatHCLog:
+		h = NewHCLogHandler(os.Stderr)
 	default:
 		h = newConsoleHandler(os.Stderr)
 	}
