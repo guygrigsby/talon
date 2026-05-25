@@ -2,14 +2,35 @@
 	import ChannelRail from '$lib/components/ChannelRail.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import Inspector from '$lib/components/Inspector.svelte';
-	import { channels, messages } from '$lib/data/channels';
+	import { channels as staticChannels, messages, type Channel } from '$lib/data/channels';
 	import { chrome } from '$lib/state/chrome.svelte';
 	import { makeChatStore } from '$lib/gateway/chatStore.svelte';
 	import { loadAgents, type AgentEntry } from '$lib/gateway/agents';
+	import { loadConfiguredChannels } from '$lib/gateway/channels';
 
 	let activeId = $state('web-here');
 
+	// Rail entries: the always-present 'web-here' web session plus
+	// any gateway-configured channels (telegram, bluebubbles, ...).
+	// Re-derived whenever the live channels fetch resolves.
+	let liveChannels = $state<Channel[]>([]);
+	const channels = $derived<Channel[]>([...staticChannels, ...liveChannels]);
 	const channel = $derived(channels.find((c) => c.id === activeId) ?? channels[0]);
+
+	async function refreshChannels() {
+		try {
+			liveChannels = await loadConfiguredChannels();
+		} catch {
+			// Config read failures are non-fatal — the static web-here
+			// entry keeps the rail usable even if the gateway briefly
+			// can't enumerate channels.
+			liveChannels = [];
+		}
+	}
+
+	$effect(() => {
+		refreshChannels();
+	});
 
 	// 'web-here' is the channel wired to the live gateway. Talon
 	// runs ONE primary agent the user talks to; the rest are
