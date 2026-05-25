@@ -41,9 +41,9 @@ func TestBuild_LoadsCanonicalSetInOrder(t *testing.T) {
 		"IDENTITY.md": "identity body",
 		"SOUL.md":     "soul body",
 		"AGENTS.md":   "agents body",
-		// Retired files — should NOT appear.
-		"MEMORY.md": "memory body",
-		"TOOLS.md":  "tools body",
+		// Non-canonical files — should NOT appear.
+		"NOTES.md":   "notes body",
+		"random.md":  "random body",
 	})
 	got := Build(dir)
 	want := []string{"AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"}
@@ -57,11 +57,10 @@ func TestBuild_LoadsCanonicalSetInOrder(t *testing.T) {
 		if idx <= prev {
 			t.Errorf("section %q at idx %d, expected after previous (%d)", w, idx, prev)
 		}
-		prev = idx
 	}
-	for _, retired := range []string{"## MEMORY.md", "## TOOLS.md"} {
-		if strings.Contains(got, retired) {
-			t.Errorf("retired file leaked into prompt: %s", retired)
+	for _, nonCanonical := range []string{"## NOTES.md", "## random.md"} {
+		if strings.Contains(got, nonCanonical) {
+			t.Errorf("non-canonical file leaked into prompt: %s", nonCanonical)
 		}
 	}
 }

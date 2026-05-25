@@ -16,9 +16,7 @@ func (t *writeTool) Description() string {
 	return "Create or overwrite a file in the workspace with the given content. " +
 		"For code, notes, configs, drafts — anything the user wants persisted as " +
 		"a file in their project. Do NOT use this to save facts to your own memory; " +
-		"the `remember` tool is the only memory-persistence path. Writing to paths " +
-		"like memory/, MEMORY.md, or memory/YYYY-MM-DD.md is a legacy pattern that " +
-		"talon's runtime no longer reads — those writes will not become memory."
+		"the `remember` tool is the only memory-persistence path."
 }
 
 func (t *writeTool) ParametersSchema() json.RawMessage {

@@ -9,11 +9,8 @@
 //	IDENTITY.md — name, creature, vibe, emoji (the chat avatar source)
 //	USER.md     — who the human is
 //
-// TOOLS.md / MEMORY.md / HEARTBEAT.md / BOOTSTRAP.md / PROJECTS.md
-// and the legacy memory/*.md daily journals are NOT loaded.
-// Memory now lives in the RAG store at ~/.talon/memory/ via the
-// `remember` tool; the workspace-side memory/ pattern is deny-
-// listed in the tools layer to keep the model from recreating it.
+// Other workspace files are not loaded. Memory lives in the RAG
+// store at ~/.talon/memory/ via the `remember` tool.
 package agentcontext
 
 import (

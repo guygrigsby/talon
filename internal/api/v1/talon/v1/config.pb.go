@@ -112,6 +112,73 @@ func (x *ConfigSchemaRequest) GetSection() string {
 	return ""
 }
 
+type ConfigSetRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Path is the dotted target (e.g. "agents.defaults.models.openai/gpt-4o.alias").
+	Path string `protobuf:"bytes,1,opt,name=path,proto3" json:"path,omitempty"`
+	// ValueJson is the JSON-encoded value to write. Empty deletes
+	// the path. Parsed server-side, so an empty string means
+	// "delete" — to write the string "" pass "\"\"".
+	ValueJson string `protobuf:"bytes,2,opt,name=value_json,json=valueJson,proto3" json:"value_json,omitempty"`
+	// Merge controls how object/array values merge into existing
+	// ones. When false (default), the value replaces; when true,
+	// objects deep-merge and id-keyed arrays merge by id.
+	Merge         bool `protobuf:"varint,3,opt,name=merge,proto3" json:"merge,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigSetRequest) Reset() {
+	*x = ConfigSetRequest{}
+	mi := &file_talon_v1_config_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigSetRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigSetRequest) ProtoMessage() {}
+
+func (x *ConfigSetRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_talon_v1_config_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigSetRequest.ProtoReflect.Descriptor instead.
+func (*ConfigSetRequest) Descriptor() ([]byte, []int) {
+	return file_talon_v1_config_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ConfigSetRequest) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *ConfigSetRequest) GetValueJson() string {
+	if x != nil {
+		return x.ValueJson
+	}
+	return ""
+}
+
+func (x *ConfigSetRequest) GetMerge() bool {
+	if x != nil {
+		return x.Merge
+	}
+	return false
+}
+
 var File_talon_v1_config_proto protoreflect.FileDescriptor
 
 const file_talon_v1_config_proto_rawDesc = "" +
@@ -120,10 +187,16 @@ const file_talon_v1_config_proto_rawDesc = "" +
 	"\x10ConfigGetRequest\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\"/\n" +
 	"\x13ConfigSchemaRequest\x12\x18\n" +
-	"\asection\x18\x01 \x01(\tR\asection2\x89\x01\n" +
+	"\asection\x18\x01 \x01(\tR\asection\"[\n" +
+	"\x10ConfigSetRequest\x12\x12\n" +
+	"\x04path\x18\x01 \x01(\tR\x04path\x12\x1d\n" +
+	"\n" +
+	"value_json\x18\x02 \x01(\tR\tvalueJson\x12\x14\n" +
+	"\x05merge\x18\x03 \x01(\bR\x05merge2\xc3\x01\n" +
 	"\rConfigService\x128\n" +
 	"\x03Get\x12\x1a.talon.v1.ConfigGetRequest\x1a\x15.talon.v1.JSONPayload\x12>\n" +
-	"\x06Schema\x12\x1d.talon.v1.ConfigSchemaRequest\x1a\x15.talon.v1.JSONPayloadB>Z<github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1b\x06proto3"
+	"\x06Schema\x12\x1d.talon.v1.ConfigSchemaRequest\x1a\x15.talon.v1.JSONPayload\x128\n" +
+	"\x03Set\x12\x1a.talon.v1.ConfigSetRequest\x1a\x15.talon.v1.JSONPayloadB>Z<github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1b\x06proto3"
 
 var (
 	file_talon_v1_config_proto_rawDescOnce sync.Once
@@ -137,19 +210,22 @@ func file_talon_v1_config_proto_rawDescGZIP() []byte {
 	return file_talon_v1_config_proto_rawDescData
 }
 
-var file_talon_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 2)
+var file_talon_v1_config_proto_msgTypes = make([]protoimpl.MessageInfo, 3)
 var file_talon_v1_config_proto_goTypes = []any{
 	(*ConfigGetRequest)(nil),    // 0: talon.v1.ConfigGetRequest
 	(*ConfigSchemaRequest)(nil), // 1: talon.v1.ConfigSchemaRequest
-	(*JSONPayload)(nil),         // 2: talon.v1.JSONPayload
+	(*ConfigSetRequest)(nil),    // 2: talon.v1.ConfigSetRequest
+	(*JSONPayload)(nil),         // 3: talon.v1.JSONPayload
 }
 var file_talon_v1_config_proto_depIdxs = []int32{
 	0, // 0: talon.v1.ConfigService.Get:input_type -> talon.v1.ConfigGetRequest
 	1, // 1: talon.v1.ConfigService.Schema:input_type -> talon.v1.ConfigSchemaRequest
-	2, // 2: talon.v1.ConfigService.Get:output_type -> talon.v1.JSONPayload
-	2, // 3: talon.v1.ConfigService.Schema:output_type -> talon.v1.JSONPayload
-	2, // [2:4] is the sub-list for method output_type
-	0, // [0:2] is the sub-list for method input_type
+	2, // 2: talon.v1.ConfigService.Set:input_type -> talon.v1.ConfigSetRequest
+	3, // 3: talon.v1.ConfigService.Get:output_type -> talon.v1.JSONPayload
+	3, // 4: talon.v1.ConfigService.Schema:output_type -> talon.v1.JSONPayload
+	3, // 5: talon.v1.ConfigService.Set:output_type -> talon.v1.JSONPayload
+	3, // [3:6] is the sub-list for method output_type
+	0, // [0:3] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
 	0, // [0:0] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
@@ -167,7 +243,7 @@ func file_talon_v1_config_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_talon_v1_config_proto_rawDesc), len(file_talon_v1_config_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   2,
+			NumMessages:   3,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

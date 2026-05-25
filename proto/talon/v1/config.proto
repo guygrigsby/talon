@@ -7,7 +7,8 @@ option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv
 import "talon/v1/common.proto";
 
 // ConfigService surfaces the merged talon config (~/.talon over
-// ~/.openclaw) and the cached config schema.
+// ~/.openclaw) and the cached config schema, plus write access
+// against the talon overlay.
 service ConfigService {
   // Get returns the value at the requested dotted path, or the
   // whole merged config when path is empty.
@@ -15,6 +16,10 @@ service ConfigService {
   // Schema returns the cached config JSON schema (refreshed via
   // `talon config schema --refresh` on the CLI side).
   rpc Schema(ConfigSchemaRequest) returns (JSONPayload);
+  // Set writes value_json at path into the talon overlay. Empty
+  // value_json deletes the path. Always writes the overlay; never
+  // the openclaw layer (which is read-only).
+  rpc Set(ConfigSetRequest) returns (JSONPayload);
 }
 
 message ConfigGetRequest {
@@ -26,4 +31,17 @@ message ConfigSchemaRequest {
   // (dotted; drill via "gateway.auth"). Empty returns the
   // whole schema.
   string section = 1;
+}
+
+message ConfigSetRequest {
+  // Path is the dotted target (e.g. "agents.defaults.models.openai/gpt-4o.alias").
+  string path = 1;
+  // ValueJson is the JSON-encoded value to write. Empty deletes
+  // the path. Parsed server-side, so an empty string means
+  // "delete" — to write the string "" pass "\"\"".
+  string value_json = 2;
+  // Merge controls how object/array values merge into existing
+  // ones. When false (default), the value replaces; when true,
+  // objects deep-merge and id-keyed arrays merge by id.
+  bool merge = 3;
 }

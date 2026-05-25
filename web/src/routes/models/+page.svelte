@@ -4,22 +4,57 @@
 	// the header. Reuses loadSelectableModels which already fans
 	// ModelsService.List + AuthStatus together.
 
-	import { loadSelectableModels, type ModelEntry } from '$lib/gateway/models';
+	import { loadSelectableModels, setModelAlias, modelKey, type ModelEntry } from '$lib/gateway/models';
 
 	let models = $state<ModelEntry[]>([]);
 	let loadError = $state<string | null>(null);
 	let loading = $state(true);
+	// Per-row alias draft state. Keyed by `provider/id` so a row's
+	// edits survive a re-render that swaps the model array.
+	let aliasDrafts = $state<Record<string, string>>({});
+	let aliasSaving = $state<Record<string, boolean>>({});
+	let aliasError = $state<Record<string, string>>({});
 
 	async function load() {
 		loading = true;
 		loadError = null;
 		try {
 			models = await loadSelectableModels();
+			// Seed draft inputs with the on-disk alias so an unchanged
+			// row doesn't show a "save" affordance.
+			aliasDrafts = Object.fromEntries(models.map((m) => [modelKey(m), m.alias ?? '']));
+			aliasError = {};
 		} catch (err) {
 			loadError = err instanceof Error ? err.message : String(err);
 		} finally {
 			loading = false;
 		}
+	}
+
+	async function saveAlias(m: ModelEntry) {
+		const key = modelKey(m);
+		const next = (aliasDrafts[key] ?? '').trim();
+		const current = (m.alias ?? '').trim();
+		if (next === current) return;
+		aliasSaving[key] = true;
+		delete aliasError[key];
+		aliasError = { ...aliasError };
+		try {
+			await setModelAlias(m.provider, m.id, next);
+			// Reflect locally so the row's "dirty" state clears
+			// without a full reload. A subsequent Refresh would
+			// also pick this up.
+			m.alias = next || undefined;
+		} catch (err) {
+			aliasError = { ...aliasError, [key]: err instanceof Error ? err.message : String(err) };
+		} finally {
+			aliasSaving = { ...aliasSaving, [key]: false };
+		}
+	}
+
+	function isDirty(m: ModelEntry): boolean {
+		const key = modelKey(m);
+		return (aliasDrafts[key] ?? '').trim() !== (m.alias ?? '').trim();
 	}
 
 	$effect(() => {
@@ -95,15 +130,47 @@
 							<th scope="col">name</th>
 							<th scope="col" class="num">ctx</th>
 							<th scope="col">reasoning</th>
+							<th scope="col">alias</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#each g.entries as m (m.id)}
+							{@const key = modelKey(m)}
 							<tr class={!m.authOk ? 'unauthed' : ''}>
 								<td class="t-mono id">{m.provider}/{m.id}</td>
 								<td>{m.name}</td>
 								<td class="t-num num">{ctxLabel(m.contextWindow)}</td>
 								<td>{m.reasoning ? 'yes' : ''}</td>
+								<td class="alias-cell">
+									<form
+										class="alias-form"
+										onsubmit={(e) => {
+											e.preventDefault();
+											saveAlias(m);
+										}}
+									>
+										<input
+											class="alias-input t-mono"
+											type="text"
+											placeholder="(no alias)"
+											aria-label="Alias for {m.provider}/{m.id}"
+											bind:value={aliasDrafts[key]}
+											disabled={aliasSaving[key]}
+										/>
+										{#if isDirty(m)}
+											<button
+												type="submit"
+												class="alias-save"
+												disabled={aliasSaving[key]}
+											>
+												{aliasSaving[key] ? '…' : 'save'}
+											</button>
+										{/if}
+									</form>
+									{#if aliasError[key]}
+										<div class="alias-err t-mono" role="status">{aliasError[key]}</div>
+									{/if}
+								</td>
 							</tr>
 						{/each}
 					</tbody>
@@ -235,6 +302,81 @@
 	}
 	.models-table tr.unauthed td {
 		color: var(--ink-3);
+	}
+	.alias-cell {
+		min-width: 160px;
+	}
+	.alias-form {
+		display: inline-flex;
+		gap: 4px;
+		align-items: center;
+	}
+	.alias-input {
+		background: var(--canvas);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		padding: 3px var(--s-2);
+		font-size: var(--fs-xs);
+		color: var(--ink);
+		min-height: 28px;
+		width: 100%;
+		min-width: 0;
+	}
+	.alias-input:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 1px;
+	}
+	.alias-input:disabled {
+		opacity: 0.6;
+	}
+	.alias-save {
+		background: var(--accent);
+		color: white;
+		border: 0;
+		border-radius: var(--radius);
+		padding: 3px var(--s-2);
+		font-size: var(--fs-xs);
+		cursor: pointer;
+		min-height: 28px;
+	}
+	.alias-save:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+	.alias-err {
+		font-size: var(--fs-xs);
+		color: var(--accent-strong, var(--ink));
+		margin-top: 2px;
+	}
+
+	@media (max-width: 720px) {
+		/* Mobile: stack table rows as cards; the multi-column
+		   layout is unusable below ~600px wide. Sticky header gone. */
+		.models-table thead {
+			display: none;
+		}
+		.models-table tbody,
+		.models-table tr,
+		.models-table td {
+			display: block;
+			width: 100%;
+		}
+		.models-table tr {
+			border: 1px solid var(--border);
+			border-radius: var(--radius);
+			padding: var(--s-2);
+			margin-bottom: var(--s-2);
+		}
+		.models-table td {
+			border: 0;
+			padding: 2px 0;
+		}
+		.models-table .num {
+			text-align: left;
+		}
+		.alias-cell {
+			margin-top: var(--s-2);
+		}
 	}
 
 	code {

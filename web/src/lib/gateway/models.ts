@@ -8,7 +8,9 @@
 // the FE can render it disabled rather than hiding it (useful for
 // debugging which provider needs credentials).
 
-import { getModelsClient } from './connect';
+import { create } from '@bufbuild/protobuf';
+import { ConfigSetRequestSchema } from './gen/talon/v1/config_pb.js';
+import { getConfigClient, getModelsClient } from './connect';
 
 export type ModelEntry = {
 	provider: string;
@@ -17,6 +19,7 @@ export type ModelEntry = {
 	contextWindow?: number;
 	reasoning?: boolean;
 	authOk: boolean;
+	alias?: string;
 };
 
 type RawListed = {
@@ -26,6 +29,7 @@ type RawListed = {
 		name?: string;
 		contextWindow?: number;
 		reasoning?: boolean;
+		alias?: string;
 	}>;
 };
 
@@ -52,7 +56,8 @@ export async function loadSelectableModels(): Promise<ModelEntry[]> {
 			name: m.name ?? m.id,
 			contextWindow: m.contextWindow,
 			reasoning: m.reasoning,
-			authOk: okProviders.has(m.provider)
+			authOk: okProviders.has(m.provider),
+			alias: m.alias
 		});
 	}
 	// Stable sort: authed-providers first, then alphabetical by
@@ -70,4 +75,29 @@ export async function loadSelectableModels(): Promise<ModelEntry[]> {
 // what chat.send + sessions.patch consume on the server.
 export function modelKey(m: Pick<ModelEntry, 'provider' | 'id'>): string {
 	return `${m.provider}/${m.id}`;
+}
+
+// setModelAlias writes the alias for one model into the talon
+// overlay under agents.defaults.models.<provider/id>.alias. An
+// empty alias deletes the entry's alias field (passing an empty
+// valueJson which the server interprets as delete).
+//
+// This is the simplest editable surface on /models: aliases are
+// short user-friendly handles for long model IDs (e.g.
+// "deepseek" → "deepseek/deepseek-reasoner"). Other model
+// edits (hide flags, default-fallback ordering) can land next.
+export async function setModelAlias(
+	provider: string,
+	modelID: string,
+	alias: string
+): Promise<void> {
+	const path = `agents.defaults.models.${provider}/${modelID}.alias`;
+	const valueJson = alias.trim() === '' ? '' : JSON.stringify(alias.trim());
+	await getConfigClient().set(
+		create(ConfigSetRequestSchema, {
+			path,
+			valueJson,
+			merge: false
+		})
+	);
 }

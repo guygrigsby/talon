@@ -12,13 +12,9 @@ import (
 )
 
 // agents.files.{list,get,set} expose the persona files talon
-// recognizes for an agent. The openclaw-era TOOLS.md / MEMORY.md /
-// HEARTBEAT.md / BOOTSTRAP.md are gone — memory moved to the RAG
-// store at ~/.talon/memory/, the others were redundant with
-// system-prompt authoring elsewhere in the harness.
-//
-// Listing order matches the load order in agentcontext.Build so
-// the UI's first row matches what the model sees first.
+// recognizes for an agent. Listing order matches the load order
+// in agentcontext.Build so the UI's first row matches what the
+// model sees first.
 var agentPersonaFiles = []string{
 	"AGENTS.md",
 	"SOUL.md",

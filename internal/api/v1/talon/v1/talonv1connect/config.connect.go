@@ -37,6 +37,8 @@ const (
 	ConfigServiceGetProcedure = "/talon.v1.ConfigService/Get"
 	// ConfigServiceSchemaProcedure is the fully-qualified name of the ConfigService's Schema RPC.
 	ConfigServiceSchemaProcedure = "/talon.v1.ConfigService/Schema"
+	// ConfigServiceSetProcedure is the fully-qualified name of the ConfigService's Set RPC.
+	ConfigServiceSetProcedure = "/talon.v1.ConfigService/Set"
 )
 
 // ConfigServiceClient is a client for the talon.v1.ConfigService service.
@@ -47,6 +49,10 @@ type ConfigServiceClient interface {
 	// Schema returns the cached config JSON schema (refreshed via
 	// `talon config schema --refresh` on the CLI side).
 	Schema(context.Context, *connect.Request[v1.ConfigSchemaRequest]) (*connect.Response[v1.JSONPayload], error)
+	// Set writes value_json at path into the talon overlay. Empty
+	// value_json deletes the path. Always writes the overlay; never
+	// the openclaw layer (which is read-only).
+	Set(context.Context, *connect.Request[v1.ConfigSetRequest]) (*connect.Response[v1.JSONPayload], error)
 }
 
 // NewConfigServiceClient constructs a client for the talon.v1.ConfigService service. By default, it
@@ -72,6 +78,12 @@ func NewConfigServiceClient(httpClient connect.HTTPClient, baseURL string, opts 
 			connect.WithSchema(configServiceMethods.ByName("Schema")),
 			connect.WithClientOptions(opts...),
 		),
+		set: connect.NewClient[v1.ConfigSetRequest, v1.JSONPayload](
+			httpClient,
+			baseURL+ConfigServiceSetProcedure,
+			connect.WithSchema(configServiceMethods.ByName("Set")),
+			connect.WithClientOptions(opts...),
+		),
 	}
 }
 
@@ -79,6 +91,7 @@ func NewConfigServiceClient(httpClient connect.HTTPClient, baseURL string, opts 
 type configServiceClient struct {
 	get    *connect.Client[v1.ConfigGetRequest, v1.JSONPayload]
 	schema *connect.Client[v1.ConfigSchemaRequest, v1.JSONPayload]
+	set    *connect.Client[v1.ConfigSetRequest, v1.JSONPayload]
 }
 
 // Get calls talon.v1.ConfigService.Get.
@@ -91,6 +104,11 @@ func (c *configServiceClient) Schema(ctx context.Context, req *connect.Request[v
 	return c.schema.CallUnary(ctx, req)
 }
 
+// Set calls talon.v1.ConfigService.Set.
+func (c *configServiceClient) Set(ctx context.Context, req *connect.Request[v1.ConfigSetRequest]) (*connect.Response[v1.JSONPayload], error) {
+	return c.set.CallUnary(ctx, req)
+}
+
 // ConfigServiceHandler is an implementation of the talon.v1.ConfigService service.
 type ConfigServiceHandler interface {
 	// Get returns the value at the requested dotted path, or the
@@ -99,6 +117,10 @@ type ConfigServiceHandler interface {
 	// Schema returns the cached config JSON schema (refreshed via
 	// `talon config schema --refresh` on the CLI side).
 	Schema(context.Context, *connect.Request[v1.ConfigSchemaRequest]) (*connect.Response[v1.JSONPayload], error)
+	// Set writes value_json at path into the talon overlay. Empty
+	// value_json deletes the path. Always writes the overlay; never
+	// the openclaw layer (which is read-only).
+	Set(context.Context, *connect.Request[v1.ConfigSetRequest]) (*connect.Response[v1.JSONPayload], error)
 }
 
 // NewConfigServiceHandler builds an HTTP handler from the service implementation. It returns the
@@ -120,12 +142,20 @@ func NewConfigServiceHandler(svc ConfigServiceHandler, opts ...connect.HandlerOp
 		connect.WithSchema(configServiceMethods.ByName("Schema")),
 		connect.WithHandlerOptions(opts...),
 	)
+	configServiceSetHandler := connect.NewUnaryHandler(
+		ConfigServiceSetProcedure,
+		svc.Set,
+		connect.WithSchema(configServiceMethods.ByName("Set")),
+		connect.WithHandlerOptions(opts...),
+	)
 	return "/talon.v1.ConfigService/", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case ConfigServiceGetProcedure:
 			configServiceGetHandler.ServeHTTP(w, r)
 		case ConfigServiceSchemaProcedure:
 			configServiceSchemaHandler.ServeHTTP(w, r)
+		case ConfigServiceSetProcedure:
+			configServiceSetHandler.ServeHTTP(w, r)
 		default:
 			http.NotFound(w, r)
 		}
@@ -141,4 +171,8 @@ func (UnimplementedConfigServiceHandler) Get(context.Context, *connect.Request[v
 
 func (UnimplementedConfigServiceHandler) Schema(context.Context, *connect.Request[v1.ConfigSchemaRequest]) (*connect.Response[v1.JSONPayload], error) {
 	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("talon.v1.ConfigService.Schema is not implemented"))
+}
+
+func (UnimplementedConfigServiceHandler) Set(context.Context, *connect.Request[v1.ConfigSetRequest]) (*connect.Response[v1.JSONPayload], error) {
+	return nil, connect.NewError(connect.CodeUnimplemented, errors.New("talon.v1.ConfigService.Set is not implemented"))
 }

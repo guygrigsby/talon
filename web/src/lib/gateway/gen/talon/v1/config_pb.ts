@@ -12,7 +12,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file talon/v1/config.proto.
  */
 export const file_talon_v1_config: GenFile = /*@__PURE__*/
-  fileDesc("ChV0YWxvbi92MS9jb25maWcucHJvdG8SCHRhbG9uLnYxIiAKEENvbmZpZ0dldFJlcXVlc3QSDAoEcGF0aBgBIAEoCSImChNDb25maWdTY2hlbWFSZXF1ZXN0Eg8KB3NlY3Rpb24YASABKAkyiQEKDUNvbmZpZ1NlcnZpY2USOAoDR2V0EhoudGFsb24udjEuQ29uZmlnR2V0UmVxdWVzdBoVLnRhbG9uLnYxLkpTT05QYXlsb2FkEj4KBlNjaGVtYRIdLnRhbG9uLnYxLkNvbmZpZ1NjaGVtYVJlcXVlc3QaFS50YWxvbi52MS5KU09OUGF5bG9hZEI+WjxnaXRodWIuY29tL2d1eWdyaWdzYnkvdGFsb24vaW50ZXJuYWwvYXBpL3YxL3RhbG9uL3YxO3RhbG9udjFiBnByb3RvMw", [file_talon_v1_common]);
+  fileDesc("ChV0YWxvbi92MS9jb25maWcucHJvdG8SCHRhbG9uLnYxIiAKEENvbmZpZ0dldFJlcXVlc3QSDAoEcGF0aBgBIAEoCSImChNDb25maWdTY2hlbWFSZXF1ZXN0Eg8KB3NlY3Rpb24YASABKAkiQwoQQ29uZmlnU2V0UmVxdWVzdBIMCgRwYXRoGAEgASgJEhIKCnZhbHVlX2pzb24YAiABKAkSDQoFbWVyZ2UYAyABKAgywwEKDUNvbmZpZ1NlcnZpY2USOAoDR2V0EhoudGFsb24udjEuQ29uZmlnR2V0UmVxdWVzdBoVLnRhbG9uLnYxLkpTT05QYXlsb2FkEj4KBlNjaGVtYRIdLnRhbG9uLnYxLkNvbmZpZ1NjaGVtYVJlcXVlc3QaFS50YWxvbi52MS5KU09OUGF5bG9hZBI4CgNTZXQSGi50YWxvbi52MS5Db25maWdTZXRSZXF1ZXN0GhUudGFsb24udjEuSlNPTlBheWxvYWRCPlo8Z2l0aHViLmNvbS9ndXlncmlnc2J5L3RhbG9uL2ludGVybmFsL2FwaS92MS90YWxvbi92MTt0YWxvbnYxYgZwcm90bzM", [file_talon_v1_common]);
 
 /**
  * @generated from message talon.v1.ConfigGetRequest
@@ -53,8 +53,46 @@ export const ConfigSchemaRequestSchema: GenMessage<ConfigSchemaRequest> = /*@__P
   messageDesc(file_talon_v1_config, 1);
 
 /**
+ * @generated from message talon.v1.ConfigSetRequest
+ */
+export type ConfigSetRequest = Message<"talon.v1.ConfigSetRequest"> & {
+  /**
+   * Path is the dotted target (e.g. "agents.defaults.models.openai/gpt-4o.alias").
+   *
+   * @generated from field: string path = 1;
+   */
+  path: string;
+
+  /**
+   * ValueJson is the JSON-encoded value to write. Empty deletes
+   * the path. Parsed server-side, so an empty string means
+   * "delete" — to write the string "" pass "\"\"".
+   *
+   * @generated from field: string value_json = 2;
+   */
+  valueJson: string;
+
+  /**
+   * Merge controls how object/array values merge into existing
+   * ones. When false (default), the value replaces; when true,
+   * objects deep-merge and id-keyed arrays merge by id.
+   *
+   * @generated from field: bool merge = 3;
+   */
+  merge: boolean;
+};
+
+/**
+ * Describes the message talon.v1.ConfigSetRequest.
+ * Use `create(ConfigSetRequestSchema)` to create a new message.
+ */
+export const ConfigSetRequestSchema: GenMessage<ConfigSetRequest> = /*@__PURE__*/
+  messageDesc(file_talon_v1_config, 2);
+
+/**
  * ConfigService surfaces the merged talon config (~/.talon over
- * ~/.openclaw) and the cached config schema.
+ * ~/.openclaw) and the cached config schema, plus write access
+ * against the talon overlay.
  *
  * @generated from service talon.v1.ConfigService
  */
@@ -79,6 +117,18 @@ export const ConfigService: GenService<{
   schema: {
     methodKind: "unary";
     input: typeof ConfigSchemaRequestSchema;
+    output: typeof JSONPayloadSchema;
+  },
+  /**
+   * Set writes value_json at path into the talon overlay. Empty
+   * value_json deletes the path. Always writes the overlay; never
+   * the openclaw layer (which is read-only).
+   *
+   * @generated from rpc talon.v1.ConfigService.Set
+   */
+  set: {
+    methodKind: "unary";
+    input: typeof ConfigSetRequestSchema;
     output: typeof JSONPayloadSchema;
   },
 }> = /*@__PURE__*/

@@ -42,6 +42,7 @@ func (h *ReadHandler) Register(r *Registry) {
 	r.Register("agents.files.set", h.handleAgentsFilesSet)
 	r.Register("models.list", h.handleModelsList)
 	r.Register("config.get", h.handleConfigGet)
+	r.Register("config.set", h.handleConfigSet)
 	r.Register("config.schema", h.handleConfigSchema)
 	r.Register("agent.identity.get", h.handleAgentIdentityGet)
 	r.Register("skills.status", h.handleSkillsStatus)
@@ -637,6 +638,51 @@ func (h *ReadHandler) handleConfigGet(ctx context.Context, hc HandlerCtx, _ json
 		"valid":  valid,
 		"config": parsed,
 		"issues": []any{},
+	}, nil
+}
+
+// --- config.set ------------------------------------------------------------
+
+// handleConfigSet writes a value at a dotted path in the talon
+// overlay. Params: {path: "<dotted>", valueJson: "<JSON>", merge: bool?}.
+// Empty valueJson deletes the path; otherwise the JSON is parsed
+// and config.Set applies it under SetMerge or SetReplaceSafe
+// depending on the merge flag.
+func (h *ReadHandler) handleConfigSet(_ context.Context, _ HandlerCtx, params json.RawMessage) (any, *FrameError) {
+	var p struct {
+		Path      string `json:"path"`
+		ValueJSON string `json:"valueJson"`
+		Merge     bool   `json:"merge"`
+	}
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "config.set: " + err.Error()}
+	}
+	if strings.TrimSpace(p.Path) == "" {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "config.set: path is required"}
+	}
+	segments, err := config.ParsePath(p.Path)
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "config.set: parse path: " + err.Error()}
+	}
+	var value any
+	if p.ValueJSON != "" {
+		if err := json.Unmarshal([]byte(p.ValueJSON), &value); err != nil {
+			return nil, &FrameError{Code: ErrCodeBadRequest, Message: "config.set: parse valueJson: " + err.Error()}
+		}
+	}
+	mode := config.SetReplaceSafe
+	if p.Merge {
+		mode = config.SetMerge
+	}
+	res, err := config.Set(h.paths, segments, value, config.SetOpts{Mode: mode})
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "config.set: " + err.Error()}
+	}
+	return map[string]any{
+		"path":               res.Path,
+		"wrote":              res.Wrote,
+		"prunedPaths":        res.PrunedPaths,
+		"staleOpenclawPaths": res.StaleOpenclawPaths,
 	}, nil
 }
 

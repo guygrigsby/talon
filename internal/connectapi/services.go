@@ -59,6 +59,18 @@ func (s *ConfigService) Get(ctx context.Context, req *connect.Request[talonv1.Co
 	return connect.NewResponse(&talonv1.JSONPayload{Json: string(raw)}), nil
 }
 
+func (s *ConfigService) Set(ctx context.Context, req *connect.Request[talonv1.ConfigSetRequest]) (*connect.Response[talonv1.JSONPayload], error) {
+	raw, err := dispatchJSON(ctx, s.Reg, "config.set", map[string]any{
+		"path":      req.Msg.GetPath(),
+		"valueJson": req.Msg.GetValueJson(),
+		"merge":     req.Msg.GetMerge(),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&talonv1.JSONPayload{Json: string(raw)}), nil
+}
+
 func (s *ConfigService) Schema(ctx context.Context, req *connect.Request[talonv1.ConfigSchemaRequest]) (*connect.Response[talonv1.JSONPayload], error) {
 	params := map[string]any{}
 	if sec := req.Msg.GetSection(); sec != "" {
