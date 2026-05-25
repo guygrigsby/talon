@@ -34,18 +34,19 @@ func TestBuild_NoRecognizedFilesReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestBuild_OrderMatchesOpenclaw(t *testing.T) {
+func TestBuild_LoadsCanonicalSetInOrder(t *testing.T) {
 	dir := mkWS(t, map[string]string{
 		// Write in reverse-canonical order to confirm Build sorts.
-		"MEMORY.md":   "memory body",
-		"TOOLS.md":    "tools body",
 		"USER.md":     "user body",
 		"IDENTITY.md": "identity body",
 		"SOUL.md":     "soul body",
 		"AGENTS.md":   "agents body",
+		// Retired files — should NOT appear.
+		"MEMORY.md": "memory body",
+		"TOOLS.md":  "tools body",
 	})
 	got := Build(dir)
-	want := []string{"AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md", "TOOLS.md", "MEMORY.md"}
+	want := []string{"AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"}
 	prev := -1
 	for _, w := range want {
 		idx := strings.Index(got, "## "+w)
@@ -57,6 +58,11 @@ func TestBuild_OrderMatchesOpenclaw(t *testing.T) {
 			t.Errorf("section %q at idx %d, expected after previous (%d)", w, idx, prev)
 		}
 		prev = idx
+	}
+	for _, retired := range []string{"## MEMORY.md", "## TOOLS.md"} {
+		if strings.Contains(got, retired) {
+			t.Errorf("retired file leaked into prompt: %s", retired)
+		}
 	}
 }
 
@@ -123,129 +129,16 @@ func TestBuild_TrimsTrailingNewlines(t *testing.T) {
 	}
 }
 
-// --- recent memory --------------------------------------------------------
+// --- recent memory (REMOVED) -------------------------------------
+//
+// The workspace memory/*.md scan was retired with the RAG store;
+// the prior TestBuild_RecentMemory* tests went with it. Memory now
+// lives in ~/.talon/memory/ via the `remember` tool, and the
+// workspace tools (write/edit) deny-list any path under
+// <workspace>/memory/ to keep the model from recreating the
+// legacy pattern.
 
-func mkMemory(t *testing.T, ws string, files map[string]string) {
-	t.Helper()
-	dir := filepath.Join(ws, "memory")
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	for name, body := range files {
-		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-}
-
-func TestBuild_RecentMemoryNewestFirst(t *testing.T) {
-	ws := mkWS(t, map[string]string{"USER.md": "u"})
-	mkMemory(t, ws, map[string]string{
-		"2026-04-25.md": "older entry",
-		"2026-04-26.md": "middle entry",
-		"2026-04-27.md": "newest entry",
-	})
-	got := Build(ws)
-	// Section header present.
-	if !strings.Contains(got, "## Recent memory") {
-		t.Fatalf("missing memory section:\n%s", got)
-	}
-	newestIdx := strings.Index(got, "newest entry")
-	middleIdx := strings.Index(got, "middle entry")
-	oldestIdx := strings.Index(got, "older entry")
-	if newestIdx < 0 || middleIdx < 0 || oldestIdx < 0 {
-		t.Fatalf("memory bodies missing:\n%s", got)
-	}
-	if !(newestIdx < middleIdx && middleIdx < oldestIdx) {
-		t.Errorf("memory entries not sorted newest-first")
-	}
-}
-
-func TestBuild_RecentMemoryRespectsBudget(t *testing.T) {
-	ws := mkWS(t, nil)
-	// Three entries that together exceed the budget. Filenames sort
-	// reverse-chronologically, so 27 is the newest.
-	bigBody := strings.Repeat("x", MemoryBudgetBytes/2+1024)
-	mkMemory(t, ws, map[string]string{
-		"2026-04-25.md": bigBody,
-		"2026-04-26.md": bigBody,
-		"2026-04-27.md": bigBody,
-	})
-	got := Build(ws)
-
-	// Newest entry must be present in full.
-	if !strings.Contains(got, "### memory/2026-04-27.md") {
-		t.Errorf("newest entry should always be present")
-	}
-	// Output must be roughly capped — allow some slop for headers and
-	// the truncation marker, but not 3× the budget.
-	if len(got) > MemoryBudgetBytes*2 {
-		t.Errorf("memory section blew the budget: %d bytes", len(got))
-	}
-	// Either a trailing entry was truncated OR the oldest was dropped
-	// entirely. Either is acceptable; just check that we didn't include
-	// all three full bodies.
-	allThreePresent := strings.Contains(got, "### memory/2026-04-25.md") &&
-		strings.Contains(got, "### memory/2026-04-26.md") &&
-		strings.Contains(got, "### memory/2026-04-27.md")
-	if allThreePresent && !strings.Contains(got, "[truncated to fit memory budget]") {
-		t.Errorf("budget exceeded but no truncation marker:\nlen=%d", len(got))
-	}
-}
-
-func TestBuild_RecentMemoryAlone_NoCanonicalFiles(t *testing.T) {
-	ws := mkWS(t, nil)
-	mkMemory(t, ws, map[string]string{"2026-04-27.md": "solo entry"})
-	got := Build(ws)
-	if !strings.Contains(got, "## Recent memory") {
-		t.Errorf("memory section should appear even without canonical files:\n%s", got)
-	}
-	if !strings.Contains(got, "solo entry") {
-		t.Errorf("memory body missing:\n%s", got)
-	}
-	// No load notice for canonical files (none loaded).
-	if strings.Contains(got, "The following project context files have been loaded") {
-		t.Errorf("load notice should be skipped when no canonical files were loaded:\n%s", got)
-	}
-}
-
-func TestBuild_RecentMemorySkipsNonMarkdown(t *testing.T) {
-	ws := mkWS(t, map[string]string{"USER.md": "u"})
-	mkMemory(t, ws, map[string]string{
-		"2026-04-27.md":  "real",
-		"notes.txt":      "should be skipped",
-		"2026-04-27.bak": "should be skipped",
-	})
-	got := Build(ws)
-	if strings.Contains(got, "should be skipped") {
-		t.Errorf("non-md files leaked into memory section:\n%s", got)
-	}
-	if !strings.Contains(got, "real") {
-		t.Errorf("md entry missing")
-	}
-}
-
-func TestBuild_RecentMemorySkipsBlankFiles(t *testing.T) {
-	ws := mkWS(t, map[string]string{"USER.md": "u"})
-	mkMemory(t, ws, map[string]string{
-		"2026-04-27.md": "    \n\n\t  \n",
-	})
-	got := Build(ws)
-	if strings.Contains(got, "## Recent memory") {
-		t.Errorf("blank-only memory entry should not produce a section:\n%s", got)
-	}
-}
-
-func TestBuild_NoMemoryDirIsHarmless(t *testing.T) {
-	ws := mkWS(t, map[string]string{"USER.md": "u"})
-	// no memory/ dir at all
-	got := Build(ws)
-	if strings.Contains(got, "## Recent memory") {
-		t.Errorf("memory section should be omitted when memory/ is absent:\n%s", got)
-	}
-}
-
-func TestBuild_RealOpenclawFixture(t *testing.T) {
+func TestBuild_PersonaFilesFixture(t *testing.T) {
 	// Mirror the real workspace's IDENTITY.md template (whitespace-aware).
 	identity := `# IDENTITY.md - Who Am I?
 

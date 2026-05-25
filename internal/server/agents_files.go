@@ -11,40 +11,27 @@ import (
 	"github.com/guygrigsby/talon/internal/config"
 )
 
-// agents.files.{list,get,set} mirror the openclaw RPC set the web UI's
-// /agents tab calls into. The canonical list of files an agent owns is
-// the bootstrap markdown set plus MEMORY.md — listed below so it stays
-// in sync with the openclaw constants under
-// openclaw/src/agents/workspace.ts. Order matters: the UI renders rows
-// in the order returned, and BOOTSTRAP.md is shown last (when present)
-// because it's only relevant pre-onboarding.
+// agents.files.{list,get,set} expose the persona files talon
+// recognizes for an agent. The openclaw-era TOOLS.md / MEMORY.md /
+// HEARTBEAT.md / BOOTSTRAP.md are gone — memory moved to the RAG
+// store at ~/.talon/memory/, the others were redundant with
+// system-prompt authoring elsewhere in the harness.
 //
-// AGENTS.md is the agent's user-facing system prompt. SOUL/TOOLS/IDENTITY/
-// USER/HEARTBEAT are persona/runtime files the model edits during a
-// conversation. BOOTSTRAP.md is openclaw's onboarding sentinel; once the
-// workspace is "set up" it disappears from openclaw's view, but talon
-// has no equivalent state machine yet so we always emit it (with
-// missing=true when absent).
-var bootstrapFileNames = []string{
+// Listing order matches the load order in agentcontext.Build so
+// the UI's first row matches what the model sees first.
+var agentPersonaFiles = []string{
 	"AGENTS.md",
 	"SOUL.md",
-	"TOOLS.md",
 	"IDENTITY.md",
 	"USER.md",
-	"HEARTBEAT.md",
-	"BOOTSTRAP.md",
 }
 
-const memoryFileName = "MEMORY.md"
-
-// allowedAgentFile is the union of canonical files agents.files.{get,set}
-// accept. Any other name is rejected as INVALID_REQUEST so the UI can't
-// be tricked into reading/writing arbitrary workspace paths.
+// allowedAgentFile gates agents.files.{get,set}. Any name not on
+// the canonical list is rejected as INVALID_REQUEST so the UI
+// (or a misbehaving caller) can't read or write arbitrary
+// workspace paths through these RPCs.
 func allowedAgentFile(name string) bool {
-	if name == memoryFileName {
-		return true
-	}
-	for _, n := range bootstrapFileNames {
+	for _, n := range agentPersonaFiles {
 		if n == name {
 			return true
 		}
@@ -84,11 +71,10 @@ func (h *ReadHandler) handleAgentsFilesList(_ context.Context, _ HandlerCtx, par
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "agents.files.list: unknown agent or no resolvable workspace: " + p.AgentID}
 	}
 
-	files := make([]agentFileEntry, 0, len(bootstrapFileNames)+1)
-	for _, name := range bootstrapFileNames {
+	files := make([]agentFileEntry, 0, len(agentPersonaFiles))
+	for _, name := range agentPersonaFiles {
 		files = append(files, statAgentFile(workspace, name))
 	}
-	files = append(files, statAgentFile(workspace, memoryFileName))
 
 	return map[string]any{
 		"agentId":   p.AgentID,

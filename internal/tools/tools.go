@@ -175,6 +175,31 @@ func resolveInWorkspace(workspace, p string) (string, error) {
 	return abs, nil
 }
 
+// denyReservedMemoryPath rejects writes/edits targeted at a
+// workspace path that's reserved for the legacy openclaw memory
+// pattern (`memory/` directory under the workspace, plus any
+// top-level `MEMORY.md`). Talon's active memory is the RAG store
+// at ~/.talon/memory/ via the `remember` tool, not workspace
+// files; without this check the model can ignore AGENTS.md and
+// recreate the old file-based memory we just archived. Read /
+// grep / glob aren't policed here — the empty filesystem is
+// signal enough on the read side.
+//
+// abs is the already-resolved absolute path (post-
+// resolveInWorkspace). workspace is the cleaned workspace root.
+func denyReservedMemoryPath(workspace, abs string) error {
+	cleanWS := filepath.Clean(workspace)
+	rel, err := filepath.Rel(cleanWS, abs)
+	if err != nil {
+		return nil // out-of-workspace already rejected upstream
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == "memory" || strings.HasPrefix(rel, "memory/") || rel == "MEMORY.md" {
+		return fmt.Errorf("path %q is reserved for the legacy memory model and is not writable; use the `remember` tool to persist user-supplied facts into the RAG memory store at ~/.talon/memory/", rel)
+	}
+	return nil
+}
+
 func sortStrings(s []string) {
 	for i := 1; i < len(s); i++ {
 		for j := i; j > 0 && s[j-1] > s[j]; j-- {

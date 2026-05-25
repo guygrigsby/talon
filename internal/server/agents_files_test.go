@@ -44,8 +44,9 @@ func TestAgentsFilesList_AllCanonicalEntries(t *testing.T) {
 		t.Fatalf("envelope mismatch: %+v", m)
 	}
 	files := m["files"].([]agentFileEntry)
-	// 7 bootstrap names + MEMORY.md = 8 entries, in the documented order.
-	wantNames := []string{"AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md", "USER.md", "HEARTBEAT.md", "BOOTSTRAP.md", "MEMORY.md"}
+	// Canonical persona set: AGENTS.md, SOUL.md, IDENTITY.md,
+	// USER.md (in load order).
+	wantNames := []string{"AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"}
 	if len(files) != len(wantNames) {
 		t.Fatalf("got %d files, want %d", len(files), len(wantNames))
 	}

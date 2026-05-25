@@ -42,6 +42,9 @@ func (t *writeTool) Run(ctx context.Context, input json.RawMessage) (string, err
 	if err != nil {
 		return "", err
 	}
+	if err := denyReservedMemoryPath(t.ws, abs); err != nil {
+		return "", err
+	}
 	if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
 		return "", fmt.Errorf("write %s: mkdir: %w", p.Path, err)
 	}
