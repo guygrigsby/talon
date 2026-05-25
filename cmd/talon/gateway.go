@@ -304,7 +304,7 @@ func gatewayRunCmd() *cobra.Command {
 			if host == "0.0.0.0" {
 				gwHost = "localhost" // 0.0.0.0 isn't dialable; show loopback
 			}
-			ui := buildUIURL(defaultUIHost, gwHost, port, token, "main", "/chat")
+			ui := buildUIURL(defaultUIHost, gwHost, port, token, "main", "/")
 			// Log-safe form: redact the token's value so the URL
 			// is still diagnostic but no credential lands in
 			// stdout / Docker logs / terminal scrollback. The

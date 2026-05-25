@@ -11,23 +11,31 @@ import (
 	"github.com/spf13/cobra"
 )
 
-// defaultUIHost is where the openclaw web UI's vite dev server runs by
-// convention. Override per-command with --ui-host.
-const defaultUIHost = "http://localhost:5173"
+// defaultUIHost is empty by default, signaling "open the UI the
+// gateway serves itself" (the embedded SvelteKit SPA at
+// http://<gw-host>:<gw-port>/). Override with --ui-host to point
+// at a separate dev server (e.g. `make dev` runs vite at
+// http://localhost:5173 which proxies /talon.v1.* + /ws back to
+// the gateway).
+const defaultUIHost = ""
 
 // uiCmd parents `talon ui url` and `talon ui open`.
 func uiCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "ui",
-		Short: "Generate a deep-link URL into the openclaw web UI for this gateway",
-		Long: `Build (or open) a URL that pre-configures the openclaw web UI to talk
-to this talon gateway. The UI host defaults to ` + defaultUIHost + ` (vite
-dev server); override with --ui-host. Pass --token if the gateway is
-running with --auth=token. Pass --session to route directly to a chat
-session.
+		Short: "Generate a deep-link URL into the talon web UI for this gateway",
+		Long: `Build (or open) a URL that pre-configures the talon web UI to talk
+to this talon gateway.
 
-The generated URL uses a fragment-based fragment (#gatewayUrl=...&token=...)
-so the token never appears in server logs or referrers.`,
+By default the URL points at the embedded SPA served from the gateway's
+own port (same origin). Pass --ui-host http://localhost:5173 to target
+the Vite dev server during ` + "`make dev`" + ` iteration. Pass --token if the
+gateway is running with --auth=token. Pass --session to route directly
+to a chat session.
+
+The token lands in the URL fragment (#token=...) so it never appears in
+server logs or referrers; the FE reads it client-side and forwards it
+as Authorization: Bearer ... on every Connect call.`,
 	}
 	c.AddCommand(uiURLCmd())
 	c.AddCommand(uiOpenCmd())
@@ -86,34 +94,32 @@ func uiOpenCmd() *cobra.Command {
 }
 
 func addUIFlags(c *cobra.Command, uiHost, gwHost *string, gwPort *int, token, session, path *string) {
-	c.Flags().StringVar(uiHost, "ui-host", defaultUIHost, "openclaw web UI base URL")
+	c.Flags().StringVar(uiHost, "ui-host", defaultUIHost, "UI base URL (empty = gateway's own URL; e.g. http://localhost:5173 for Vite dev)")
 	c.Flags().StringVar(gwHost, "gateway-host", "localhost", "host the UI should dial for the gateway")
 	c.Flags().IntVar(gwPort, "gateway-port", 18789, "port the UI should dial for the gateway")
 	c.Flags().StringVar(token, "token", "", "gateway auth token (for --auth=token gateways)")
 	c.Flags().StringVar(session, "session", "", "session key to open (e.g. main)")
-	c.Flags().StringVar(path, "path", "/chat", "UI route to open (e.g. /chat, /agents)")
+	c.Flags().StringVar(path, "path", "/", "UI route to open (e.g. /, /agents)")
 }
 
 // buildUIURL composes the deep-link form:
 //
-//	<uiHost><path>?session=<s>#gatewayUrl=<encoded>&token=<encoded>
+//	<uiHost><path>?session=<s>#token=<encoded>
 //
-// Token + gatewayUrl land in the fragment to avoid showing up in HTTP
-// request logs and referrers. session goes in the query so refreshes keep
-// the user on the same conversation.
+// Token lands in the fragment so it never appears in server logs or
+// referrers; the FE reads it client-side and forwards as
+// Authorization: Bearer ... on every Connect call.
 //
-// The gatewayUrl fragment is omitted when it would just restate the UI's
-// own default — port 18789 on the UI's hostname. Concretely: running
-// talon-gateway on the canonical openclaw port (18789) on localhost while
-// the UI runs at http://localhost:5173 yields a clean URL with only
-// ?session=... and no fragment.
+// When uiHost is empty (the default), the URL targets the embedded
+// SPA at http://<gwHost>:<gwPort>/ — same origin as the gateway. Pass
+// an explicit --ui-host to target a separate dev server (e.g. Vite
+// at http://localhost:5173 during `make dev`).
 func buildUIURL(uiHost, gwHost string, gwPort int, token, session, routePath string) string {
-	wsURL := "ws://" + gwHost + ":" + strconv.Itoa(gwPort)
+	if uiHost == "" {
+		uiHost = "http://" + gwHost + ":" + strconv.Itoa(gwPort)
+	}
 
 	frag := url.Values{}
-	if !gatewayMatchesUIDefault(uiHost, gwHost, gwPort) {
-		frag.Set("gatewayUrl", wsURL)
-	}
 	if token != "" {
 		frag.Set("token", token)
 	}
@@ -128,32 +134,6 @@ func buildUIURL(uiHost, gwHost string, gwPort int, token, session, routePath str
 		return base
 	}
 	return base + "#" + frag.Encode()
-}
-
-// gatewayMatchesUIDefault reports whether ws://<gwHost>:<gwPort> equals
-// the UI's implicit default (ws://<ui-hostname>:18789). Loopback aliases
-// (localhost / 127.0.0.1) are treated as equivalent.
-func gatewayMatchesUIDefault(uiHost, gwHost string, gwPort int) bool {
-	if gwPort != 18789 {
-		return false
-	}
-	u, err := url.Parse(uiHost)
-	if err != nil {
-		return false
-	}
-	uiHostname := u.Hostname()
-	if uiHostname == "" {
-		return false
-	}
-	return sameHostname(uiHostname, gwHost)
-}
-
-func sameHostname(a, b string) bool {
-	if a == b {
-		return true
-	}
-	loopback := func(s string) bool { return s == "localhost" || s == "127.0.0.1" || s == "::1" }
-	return loopback(a) && loopback(b)
 }
 
 // openInBrowser launches the system default browser for u. Best-effort;

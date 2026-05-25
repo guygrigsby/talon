@@ -44,7 +44,7 @@ export function makeChatStore(sessionKey: string) {
 			status = 'idle';
 		} catch (err) {
 			status = 'error';
-			errorMessage = err instanceof Error ? err.message : String(err);
+			errorMessage = friendlyAuthError(err);
 		}
 	}
 
@@ -66,7 +66,7 @@ export function makeChatStore(sessionKey: string) {
 		} catch (err) {
 			if (abort.signal.aborted) return;
 			status = 'error';
-			errorMessage = err instanceof Error ? err.message : String(err);
+			errorMessage = friendlyAuthError(err);
 		}
 	}
 
@@ -99,7 +99,7 @@ export function makeChatStore(sessionKey: string) {
 			activeRunId = res.runId || null;
 		} catch (err) {
 			status = 'error';
-			errorMessage = err instanceof Error ? err.message : String(err);
+			errorMessage = friendlyAuthError(err);
 		}
 	}
 
@@ -296,6 +296,21 @@ function parseJSON(raw: string): Record<string, unknown> | null {
 	} catch {
 		return null;
 	}
+}
+
+// friendlyAuthError rewrites the bare Connect "unauthenticated"
+// surface into actionable guidance. Token auth is the only
+// scenario where this fires today — the gateway accepted the
+// request but rejected the Authorization header (or its absence).
+// Pointing users at the `talon dashboard` command resolves the
+// most-common case (browser opened directly without the token
+// fragment).
+function friendlyAuthError(err: unknown): string {
+	const raw = err instanceof Error ? err.message : String(err);
+	if (/unauthenticated|invalid or missing auth token/i.test(raw)) {
+		return 'Gateway requires a token. Run `talon dashboard` to open the UI with auto-auth, or append #token=<your-token> to the URL.';
+	}
+	return raw;
 }
 
 function nowLabel(): string {

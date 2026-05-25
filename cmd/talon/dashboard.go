@@ -58,7 +58,11 @@ func dashboardCmd() *cobra.Command {
 					token = resolved
 				}
 			}
-			u := buildUIURL(uiHost, "localhost", port, token, session, "/chat")
+			// Default path is "/" — the SvelteKit chat lives at the
+			// root route. The legacy openclaw UI used "/chat";
+			// pass --ui-host together with a route override if you
+			// need to target it.
+			u := buildUIURL(uiHost, "localhost", port, token, session, "/")
 			fmt.Fprintln(cmd.OutOrStdout(), "Dashboard URL:", u)
 			if token != "" {
 				fmt.Fprintln(cmd.OutOrStdout(), "Token auto-auth included in URL.")

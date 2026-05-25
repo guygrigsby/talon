@@ -6,89 +6,58 @@ import (
 	"testing"
 )
 
-func TestBuildUIURL_NonDefaultPortKeepsGatewayFragment(t *testing.T) {
-	got := buildUIURL("http://localhost:5173", "localhost", 18790, "", "", "/chat")
+// Default uiHost ("") means "use the gateway's own URL". The
+// embedded SvelteKit SPA is served same-origin from the gateway,
+// so the URL needs no separate UI host nor a gatewayUrl fragment.
+func TestBuildUIURL_EmptyUIHostUsesGateway(t *testing.T) {
+	got := buildUIURL("", "localhost", 18789, "", "", "/")
+	if got != "http://localhost:18789/" {
+		t.Errorf("got %q, want http://localhost:18789/", got)
+	}
+}
+
+func TestBuildUIURL_EmptyUIHostCustomPort(t *testing.T) {
+	got := buildUIURL("", "127.0.0.1", 28800, "", "main", "/")
+	if got != "http://127.0.0.1:28800/?session=main" {
+		t.Errorf("got %q", got)
+	}
+}
+
+// Explicit uiHost (Vite dev server, custom proxy, etc.) is passed
+// through as-is. No more gatewayUrl fragment — the FE always uses
+// location.origin for Connect calls; in dev Vite's proxy stitches
+// /talon.v1.* back to the gateway.
+func TestBuildUIURL_ExplicitUIHostPassthrough(t *testing.T) {
+	got := buildUIURL("http://localhost:5173", "localhost", 18789, "", "", "/")
+	if got != "http://localhost:5173/" {
+		t.Errorf("got %q", got)
+	}
+}
+
+// Token always lands in the URL fragment so it stays out of HTTP
+// request logs + referrers. The FE reads it client-side and
+// forwards as Authorization: Bearer ... on Connect calls.
+func TestBuildUIURL_TokenLandsInFragment(t *testing.T) {
+	got := buildUIURL("", "localhost", 18789, "secret-tok", "main", "/")
 	parsed, err := url.Parse(got)
 	if err != nil {
-		t.Fatalf("invalid URL produced: %v\n%s", err, got)
+		t.Fatalf("invalid URL: %v\n%s", err, got)
 	}
-	if parsed.Host != "localhost:5173" {
-		t.Errorf("host = %q, want localhost:5173", parsed.Host)
-	}
-	if parsed.Path != "/chat" {
-		t.Errorf("path = %q, want /chat", parsed.Path)
-	}
-	frag, err := url.ParseQuery(parsed.Fragment)
-	if err != nil {
-		t.Fatalf("fragment not query-shaped: %v", err)
-	}
-	if frag.Get("gatewayUrl") != "ws://localhost:18790" {
-		t.Errorf("gatewayUrl fragment = %q, want ws://localhost:18790 (non-default port)", frag.Get("gatewayUrl"))
-	}
-	if frag.Has("token") {
-		t.Errorf("token should be absent when not provided: %q", frag.Get("token"))
-	}
-}
-
-func TestBuildUIURL_DefaultPortOmitsFragment(t *testing.T) {
-	// 18789 on localhost is the UI's implicit default — fragment is noise.
-	got := buildUIURL("http://localhost:5173", "localhost", 18789, "", "main", "/chat")
-	if strings.Contains(got, "#") {
-		t.Errorf("URL should have no fragment when gatewayUrl matches UI default: %s", got)
-	}
-	if !strings.HasSuffix(got, "?session=main") {
+	if parsed.Query().Get("session") != "main" {
 		t.Errorf("session query missing: %s", got)
 	}
-}
-
-func TestBuildUIURL_LoopbackAliasMatchesDefault(t *testing.T) {
-	// 127.0.0.1 and localhost should be treated as equivalent.
-	got := buildUIURL("http://127.0.0.1:5173", "localhost", 18789, "", "", "/chat")
-	if strings.Contains(got, "#") {
-		t.Errorf("loopback alias mismatch should not force a fragment: %s", got)
-	}
-}
-
-func TestBuildUIURL_DefaultPortStillKeepsTokenFragment(t *testing.T) {
-	// Token must always go in the fragment, even when the UI's default
-	// would otherwise resolve.
-	got := buildUIURL("http://localhost:5173", "localhost", 18789, "secret-tok", "main", "/chat")
-	parsed, _ := url.Parse(got)
-	if parsed.Fragment == "" {
-		t.Fatalf("expected token fragment, got %s", got)
-	}
 	frag, _ := url.ParseQuery(parsed.Fragment)
 	if frag.Get("token") != "secret-tok" {
-		t.Errorf("token = %q", frag.Get("token"))
+		t.Errorf("token fragment = %q", frag.Get("token"))
 	}
-	// gatewayUrl should NOT be redundantly included.
-	if frag.Has("gatewayUrl") {
-		t.Errorf("gatewayUrl should be omitted when port matches UI default: %s", got)
-	}
-}
-
-func TestBuildUIURL_TokenAndSession(t *testing.T) {
-	got := buildUIURL("http://example.test", "127.0.0.1", 9000, "secret-tok", "agent:main:main", "/chat")
-	parsed, _ := url.Parse(got)
-	// session in query, percent-encoded.
-	if parsed.Query().Get("session") != "agent:main:main" {
-		t.Errorf("session query = %q, want agent:main:main", parsed.Query().Get("session"))
-	}
-	frag, _ := url.ParseQuery(parsed.Fragment)
-	if frag.Get("token") != "secret-tok" {
-		t.Errorf("token fragment = %q, want secret-tok", frag.Get("token"))
-	}
-	if frag.Get("gatewayUrl") != "ws://127.0.0.1:9000" {
-		t.Errorf("gatewayUrl fragment = %q", frag.Get("gatewayUrl"))
-	}
-	// Token must NOT appear in the query portion.
+	// Token must NOT leak into the query string.
 	if strings.Contains(parsed.RawQuery, "token") {
 		t.Errorf("token leaked into query: %s", parsed.RawQuery)
 	}
 }
 
 func TestBuildUIURL_NoSessionMeansNoQuery(t *testing.T) {
-	got := buildUIURL("http://localhost:5173", "localhost", 18790, "", "", "/chat")
+	got := buildUIURL("", "localhost", 18790, "", "", "/")
 	parsed, _ := url.Parse(got)
 	if parsed.RawQuery != "" {
 		t.Errorf("expected empty query when no session: %q", parsed.RawQuery)
@@ -96,9 +65,26 @@ func TestBuildUIURL_NoSessionMeansNoQuery(t *testing.T) {
 }
 
 func TestBuildUIURL_CustomPath(t *testing.T) {
-	got := buildUIURL("http://localhost:5173", "localhost", 18790, "", "", "/agents")
+	got := buildUIURL("", "localhost", 18789, "", "", "/agents")
 	parsed, _ := url.Parse(got)
 	if parsed.Path != "/agents" {
 		t.Errorf("path = %q, want /agents", parsed.Path)
+	}
+}
+
+// Token + session + custom path + custom UI host: the canonical
+// `talon dashboard --ui-host http://localhost:5173 --token X` shape.
+func TestBuildUIURL_FullShape(t *testing.T) {
+	got := buildUIURL("http://localhost:5173", "localhost", 18789, "tok", "agent:main:main", "/")
+	parsed, _ := url.Parse(got)
+	if parsed.Host != "localhost:5173" {
+		t.Errorf("host = %q", parsed.Host)
+	}
+	if parsed.Query().Get("session") != "agent:main:main" {
+		t.Errorf("session = %q", parsed.Query().Get("session"))
+	}
+	frag, _ := url.ParseQuery(parsed.Fragment)
+	if frag.Get("token") != "tok" {
+		t.Errorf("token = %q", frag.Get("token"))
 	}
 }
