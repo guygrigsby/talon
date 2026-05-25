@@ -18,7 +18,7 @@ func TestDefaultPaths_Defaults(t *testing.T) {
 	if want := "/tmp/home-fixture/.openclaw"; p.Openclaw.Dir != want {
 		t.Errorf("openclaw dir = %q, want %q", p.Openclaw.Dir, want)
 	}
-	if want := "/tmp/home-fixture/.talon/openclaw.json"; p.Talon.Config != want {
+	if want := "/tmp/home-fixture/.talon/talon.json"; p.Talon.Config != want {
 		t.Errorf("talon config = %q, want %q", p.Talon.Config, want)
 	}
 }
@@ -32,7 +32,7 @@ func TestDefaultPaths_EnvOverrides(t *testing.T) {
 	if p.Talon.Dir != "/custom/talon" {
 		t.Errorf("talon dir = %q", p.Talon.Dir)
 	}
-	if p.Talon.Config != "/custom/talon/openclaw.json" {
+	if p.Talon.Config != "/custom/talon/talon.json" {
 		t.Errorf("talon config = %q", p.Talon.Config)
 	}
 	if p.Openclaw.Config != "/etc/openclaw.json" {

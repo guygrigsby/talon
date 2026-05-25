@@ -17,9 +17,14 @@ import (
 )
 
 const (
-	configFilename = "openclaw.json"
-	lastGoodSuffix = ".last-good"
-	bakSuffix      = ".bak"
+	// talonConfigFilename is the talon overlay config file. Older
+	// installs used "openclaw.json" for compatibility with the
+	// openclaw runtime — resolveConfigPath transparently renames
+	// that on first read so existing users don't lose state.
+	talonConfigFilename    = "talon.json"
+	openclawConfigFilename = "openclaw.json"
+	lastGoodSuffix         = ".last-good"
+	bakSuffix              = ".bak"
 )
 
 // Paths describes the talon overlay and the openclaw fallback layer.
@@ -54,11 +59,11 @@ func DefaultPaths() Paths {
 	return Paths{
 		Talon: Layer{
 			Dir:    talonDir,
-			Config: resolveConfigPath("TALON_CONFIG_PATH", talonDir),
+			Config: resolveTalonConfigPath(talonDir),
 		},
 		Openclaw: Layer{
 			Dir:    openclawDir,
-			Config: resolveConfigPath("OPENCLAW_CONFIG_PATH", openclawDir),
+			Config: resolveOpenclawConfigPath(openclawDir),
 		},
 		SkipOpenclaw: true,
 	}
@@ -75,11 +80,39 @@ func resolveStateDir(envKey, defaultName string) string {
 	return filepath.Join(home, defaultName)
 }
 
-func resolveConfigPath(envKey, stateDir string) string {
-	if v := strings.TrimSpace(os.Getenv(envKey)); v != "" {
+// resolveTalonConfigPath returns the talon overlay config path,
+// honoring $TALON_CONFIG_PATH. Auto-renames a legacy
+// `openclaw.json` in the same dir to `talon.json` on first read
+// so users upgrading across the rename don't lose state; if both
+// files exist the talon.json one wins and openclaw.json is left
+// alone (user can prune manually).
+func resolveTalonConfigPath(stateDir string) string {
+	if v := strings.TrimSpace(os.Getenv("TALON_CONFIG_PATH")); v != "" {
 		return expandHome(v)
 	}
-	return filepath.Join(stateDir, configFilename)
+	target := filepath.Join(stateDir, talonConfigFilename)
+	if _, err := os.Stat(target); err == nil {
+		return target
+	}
+	// One-time auto-rename: the talon overlay used to ship as
+	// `openclaw.json` for compatibility with the openclaw runtime.
+	// Move it to the new filename so future reads / writes /
+	// backups all target `talon.json` consistently.
+	legacy := filepath.Join(stateDir, openclawConfigFilename)
+	if _, err := os.Stat(legacy); err == nil {
+		_ = os.Rename(legacy, target)
+	}
+	return target
+}
+
+// resolveOpenclawConfigPath returns the openclaw layer config
+// path, honoring $OPENCLAW_CONFIG_PATH. No rename here — the
+// openclaw runtime still writes to `openclaw.json` on its side.
+func resolveOpenclawConfigPath(stateDir string) string {
+	if v := strings.TrimSpace(os.Getenv("OPENCLAW_CONFIG_PATH")); v != "" {
+		return expandHome(v)
+	}
+	return filepath.Join(stateDir, openclawConfigFilename)
 }
 
 func expandHome(p string) string {

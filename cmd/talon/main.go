@@ -65,7 +65,7 @@ func main() {
 	root.SetVersionTemplate("{{.Version}}\n")
 	root.Flags().BoolP("version", "V", false, "Print version and exit")
 
-	root.PersistentFlags().StringVar(&flagTalonConfig, "config", "", "path to the talon overlay config (default: $TALON_CONFIG_PATH or ~/.talon/openclaw.json)")
+	root.PersistentFlags().StringVar(&flagTalonConfig, "config", "", "path to the talon overlay config (default: $TALON_CONFIG_PATH or ~/.talon/talon.json)")
 	root.PersistentFlags().StringVar(&flagOpenclawConfig, "openclaw-config", "", "path to the read-only openclaw config (default: $OPENCLAW_CONFIG_PATH or ~/.openclaw/openclaw.json)")
 	root.PersistentFlags().BoolVar(&flagOpenclawFallback, "openclaw-fallback", false, "ALSO read from the legacy ~/.openclaw layer (default: talon-only)")
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "emit raw JSON response")
@@ -342,7 +342,7 @@ func configCmd() *cobra.Command {
 		Use:   "set <path> <value>",
 		Short: "Set a config value by path (atomic file edit)",
 		Long: `Set a config value at <path>. Writes always target the talon overlay
-(~/.talon/openclaw.json); the openclaw layer is read-only.
+(~/.talon/talon.json); the openclaw layer is read-only.
 
 <value> is parsed as JSON when possible and falls back to a raw string. With
 --strict-json, value must be valid JSON.

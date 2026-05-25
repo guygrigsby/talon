@@ -92,39 +92,15 @@ func (h *ChatHandler) augmentSystemPrompt(ctx context.Context, base, agentID, co
 	}
 	core := h.coreMemories(ctx, agentID)
 	relevant := h.relevantMemories(ctx, agentID, conversationHint, len(core))
-	primer := memorySystemPrimer
 	if len(core) == 0 && len(relevant) == 0 {
-		if base == "" {
-			return primer
-		}
-		return primer + "\n\n" + base
+		return base
 	}
 	block := h.formatMemoryBlock(core, relevant)
-	parts := []string{primer, block}
-	if base != "" {
-		parts = append(parts, base)
+	if base == "" {
+		return block
 	}
-	return strings.Join(parts, "\n\n")
+	return block + "\n\n" + base
 }
-
-// memorySystemPrimer overrides whatever the workspace docs say
-// about memory. Workspace files (MEMORY.md, SOUL.md, etc.)
-// inherited from openclaw describe an obsolete file-based memory
-// system; the model would parrot that back to users. This block
-// lands ahead of every system prompt so the model has the right
-// mental model regardless of stale workspace docs.
-const memorySystemPrimer = `## Memory (talon)
-Memory is a vector-backed RAG store at ~/.talon/memory/, not files
-in the workspace.
-
-- The ` + "`remember`" + ` tool writes new entries. Call it when the user
-  says "remember this", "save that", or volunteers information
-  worth keeping (preferences, goals, decisions, references).
-- Relevant entries are recalled into your context automatically
-  on each turn — you do not need to "look them up".
-- MEMORY.md / memory/YYYY-MM-DD.md style files in the workspace
-  are legacy notes, not the active memory store. Do not write to
-  them and do not describe them as how memory works.`
 
 // coreMemories pulls AlwaysInclude entries straight from the store.
 // Per-Kind policy caps the count. Order across Kinds is registry
