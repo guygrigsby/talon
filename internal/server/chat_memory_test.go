@@ -175,7 +175,7 @@ func TestWrapWithRemember_AddsRememberToolSpec(t *testing.T) {
 	inner := &stubRunner{
 		specs: []provider.ToolSpec{{Name: "bash", Description: "run a shell command"}},
 	}
-	wrapped := wrapWithRemember(inner, remember)
+	wrapped := wrapWithMemoryTools(inner, remember, nil)
 	specs := wrapped.Specs()
 	if len(specs) != 2 {
 		t.Fatalf("expected inner + remember = 2 specs, got %d", len(specs))
@@ -190,7 +190,7 @@ func TestWrapWithRemember_DispatchesByName(t *testing.T) {
 	mc := newTestMemory(t)
 	remember := memory.NewRememberTool(mc.Store, memory.RememberOptions{AgentID: "main"})
 	inner := &stubRunner{output: map[string]string{"bash": "echo'd"}}
-	wrapped := wrapWithRemember(inner, remember)
+	wrapped := wrapWithMemoryTools(inner, remember, nil)
 
 	// inner tool dispatches via the inner runner.
 	got, err := wrapped.Run(context.Background(), "bash", json.RawMessage(`{"cmd":"echo hi"}`))
@@ -225,7 +225,7 @@ func TestWrapWithRemember_DispatchesByName(t *testing.T) {
 
 func TestWrapWithRemember_NilRememberPassesThrough(t *testing.T) {
 	inner := &stubRunner{}
-	got := wrapWithRemember(inner, nil)
+	got := wrapWithMemoryTools(inner, nil, nil)
 	if got != inner {
 		t.Error("nil remember should leave inner untouched (returned as-is)")
 	}

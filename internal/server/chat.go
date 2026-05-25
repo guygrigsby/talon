@@ -587,17 +587,25 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 	}
 	systemPrompt := agentcontext.Build(workspace)
 
-	// Memory sidecar: wrap the tool runner with the RememberTool
-	// so the model can save memories during a turn, and stamp the
-	// run's source onto ctx so saves carry provenance. The system
-	// prompt gets augmented per-iteration below (after we have a
-	// fresh history snapshot for the recall hint).
+	// Memory sidecar: wrap the tool runner with the RememberTool +
+	// RecallTool so the model can save AND query memory during a
+	// turn, and stamp the run's source onto ctx so saves carry
+	// provenance. The system prompt also gets augmented per-
+	// iteration below (auto-recall) — explicit `recall` calls
+	// cover the "what did you tell me about X" case auto-recall
+	// missed.
 	if h.memory != nil && h.memory.Store != nil {
 		ctx = stampSourceCtx(ctx, emit.sessionKey, emit.runID)
 		remember := memory.NewRememberTool(h.memory.Store, memory.RememberOptions{
 			AgentID: agentID,
 		})
-		runner = wrapWithRemember(runner, remember)
+		var recall *memory.RecallTool
+		if h.memory.Recaller != nil {
+			recall = memory.NewRecallTool(h.memory.Store, h.memory.Recaller, memory.RecallOptions{
+				AgentID: agentID,
+			})
+		}
+		runner = wrapWithMemoryTools(runner, remember, recall)
 	}
 
 	var seq int

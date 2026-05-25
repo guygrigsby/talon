@@ -197,39 +197,62 @@ func lastUserText(history []ChatMessage) string {
 }
 
 // memoryAugmentedRunner wraps the workspace ToolRunner with the
-// jess RememberTool so the model can save memories during a turn.
-// Tool name dispatch: the inner runner gets first crack; "remember"
-// falls through to the jess tool here. Specs() reports the union.
+// jess RememberTool + RecallTool so the model can save AND query
+// memory during a turn. Tool name dispatch: the inner runner gets
+// first crack; "remember" / "recall" fall through to the jess
+// tools here. Specs() reports the union (memory tools last so
+// they don't shadow a same-named host tool).
 type memoryAugmentedRunner struct {
 	inner      ToolRunner
 	remember   *memory.RememberTool
+	recall     *memory.RecallTool
 	rememberSp provider.ToolSpec
+	recallSp   provider.ToolSpec
 }
 
-// wrapWithRemember returns a ToolRunner that handles "remember"
-// via jess's RememberTool and delegates everything else to inner.
-// inner may be nil when no workspace tools are configured —
-// remember is still available.
-func wrapWithRemember(inner ToolRunner, remember *memory.RememberTool) ToolRunner {
-	if remember == nil {
+// wrapWithMemoryTools returns a ToolRunner that handles "remember"
+// + "recall" via jess and delegates everything else to inner.
+// inner may be nil when no workspace tools are configured — the
+// memory tools are still available. Either jess tool may be nil
+// (host wired only one); the runner skips registration for
+// whichever is missing.
+func wrapWithMemoryTools(inner ToolRunner, remember *memory.RememberTool, recall *memory.RecallTool) ToolRunner {
+	if remember == nil && recall == nil {
 		return inner
 	}
-	schema, _ := json.Marshal(remember.Schema())
-	return &memoryAugmentedRunner{
-		inner:    inner,
-		remember: remember,
-		rememberSp: provider.ToolSpec{
+	m := &memoryAugmentedRunner{inner: inner, remember: remember, recall: recall}
+	if remember != nil {
+		schema, _ := json.Marshal(remember.Schema())
+		m.rememberSp = provider.ToolSpec{
 			Name:             remember.Name(),
 			Description:      remember.Description(),
 			ParametersSchema: schema,
-		},
+		}
 	}
+	if recall != nil {
+		schema, _ := json.Marshal(recall.Schema())
+		m.recallSp = provider.ToolSpec{
+			Name:             recall.Name(),
+			Description:      recall.Description(),
+			ParametersSchema: schema,
+		}
+	}
+	return m
 }
 
-// Run dispatches by tool name.
+// Run dispatches by tool name. Memory tools win over inner so a
+// host can't accidentally shadow them with a workspace tool of
+// the same name; inner runner takes everything else.
 func (m *memoryAugmentedRunner) Run(ctx context.Context, name string, input json.RawMessage) (string, error) {
-	if name == m.remember.Name() {
+	if m.remember != nil && name == m.remember.Name() {
 		out, err := m.remember.Execute(ctx, input)
+		if err != nil {
+			return "", err
+		}
+		return string(out), nil
+	}
+	if m.recall != nil && name == m.recall.Name() {
+		out, err := m.recall.Execute(ctx, input)
 		if err != nil {
 			return "", err
 		}
@@ -241,17 +264,20 @@ func (m *memoryAugmentedRunner) Run(ctx context.Context, name string, input json
 	return m.inner.Run(ctx, name, input)
 }
 
-// Specs returns the union of inner tools + remember. Remember
-// always appears last so it doesn't shadow a host-defined tool
-// that happens to share its name (host wins via Run's first-check
-// order — actually inner is checked first, but Specs ordering is
-// for the model's tool index, not dispatch).
+// Specs returns the union of inner tools + memory tools. Memory
+// tools appear last so they don't shadow same-named host tools in
+// the model's tool index.
 func (m *memoryAugmentedRunner) Specs() []provider.ToolSpec {
 	var out []provider.ToolSpec
 	if m.inner != nil {
 		out = m.inner.Specs()
 	}
-	out = append(out, m.rememberSp)
+	if m.remember != nil {
+		out = append(out, m.rememberSp)
+	}
+	if m.recall != nil {
+		out = append(out, m.recallSp)
+	}
 	return out
 }
 
