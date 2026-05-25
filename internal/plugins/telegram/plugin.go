@@ -337,6 +337,18 @@ func (s *telegramPlugin) pollLoop(ctx context.Context, token string, allow map[s
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			// 4xx auth errors (401 Unauthorized = bad/revoked
+			// token; 404 Not Found = wrong token shape) won't fix
+			// themselves during this process lifetime. Log once
+			// with an actionable hint and stop polling rather
+			// than spamming the gateway log every 30s forever.
+			// The user fixes the token via `talon config set
+			// channels.telegram.botToken …` and restarts.
+			if isPermanentAuthErr(err) {
+				slog.Error("telegram polling stopped — bot token is invalid; fix with `talon config set channels.telegram.botToken <token>` and restart the gateway",
+					"plugin", "telegram", "err", err)
+				return err
+			}
 			slog.Warn("telegram getUpdates error", "plugin", "telegram", "err", err, "backoff", backoff)
 			select {
 			case <-time.After(backoff):
@@ -377,6 +389,19 @@ func (s *telegramPlugin) pollLoop(ctx context.Context, token string, allow map[s
 			}
 		}
 	}
+}
+
+// isPermanentAuthErr reports whether err looks like a Telegram
+// auth failure that won't recover by retrying. 401 means the
+// token is bad; 404 means the URL is malformed (typically a
+// completely wrong token shape). Neither resolves itself during
+// this process lifetime — the user has to update config + restart.
+func isPermanentAuthErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "http 401") || strings.Contains(msg, "http 404")
 }
 
 // getMe pings Telegram's bot-identity endpoint to confirm the
