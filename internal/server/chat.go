@@ -433,6 +433,7 @@ func (h *ChatHandler) handleSend(ctx context.Context, hc HandlerCtx, params json
 
 	model, err := h.resolver.PrimaryModel(agentID)
 	if err != nil {
+		slog.Error("chat.send resolve agent failed", "agent", agentID, "session", p.SessionKey, "err", err)
 		return nil, &FrameError{Code: ErrCodeInternal, Message: "chat.send: resolve agent: " + err.Error()}
 	}
 	// Per-session UI override (sessions.patch model:"...") wins over the
@@ -444,11 +445,13 @@ func (h *ChatHandler) handleSend(ctx context.Context, hc HandlerCtx, params json
 	}
 	providerName := model.Provider()
 	if providerName == "" {
+		slog.Error("chat.send model has no provider segment", "agent", agentID, "model", string(model))
 		return nil, &FrameError{Code: ErrCodeInternal, Message: "chat.send: model is missing a provider segment: " + string(model)}
 	}
 
 	prov, err := h.factory.For(providerName, agentID)
 	if err != nil {
+		slog.Error("chat.send provider unavailable", "agent", agentID, "provider", providerName, "model", string(model), "err", err)
 		return nil, &FrameError{Code: ErrCodeInternal, Message: "chat.send: provider: " + err.Error()}
 	}
 

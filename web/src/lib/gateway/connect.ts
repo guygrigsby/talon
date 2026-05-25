@@ -8,10 +8,11 @@
 // vite.config.ts), so same-origin still applies.
 //
 // Auth: Bearer token from the URL fragment (matches the WS client's
-// `talon dashboard` handoff convention). Pulled once per transport
-// creation; if the token rotates mid-session, callers can force a
-// reset by reloading the page — this matches what the WS client
-// does today.
+// `talon dashboard` handoff convention), cached to sessionStorage
+// so it survives reloads within the same tab. On any visit that
+// carries a fresh #token=, the cached value is replaced and the
+// fragment is scrubbed from the visible URL so it doesn't end up
+// in screenshots, history, or sharing copy-paste.
 
 import { createConnectTransport } from '@connectrpc/connect-web';
 import { createClient, type Client } from '@connectrpc/connect';
@@ -26,10 +27,41 @@ import { PluginsService } from './gen/talon/v1/plugins_pb.js';
 import { CronService } from './gen/talon/v1/cron_pb.js';
 import { ChannelsService } from './gen/talon/v1/channels_pb.js';
 
+// Storage key for the cached auth token. sessionStorage scope so
+// it survives reloads but dies with the tab.
+const TOKEN_KEY = 'talon.token';
+
 function bearerToken(): string | undefined {
 	if (typeof location === 'undefined') return undefined;
 	const params = new URLSearchParams(location.hash.slice(1));
-	return params.get('token') ?? undefined;
+	const fromFragment = params.get('token') ?? undefined;
+	if (fromFragment) {
+		try {
+			sessionStorage.setItem(TOKEN_KEY, fromFragment);
+		} catch {
+			// Storage denied (private mode, hardened browser) — fall
+			// through with the in-memory value. User reloads will
+			// need a fresh dashboard URL until storage works again.
+		}
+		// Scrub the token from the visible URL so reloads don't keep
+		// leaking it into screenshots / screen-share / history.
+		// Other fragment params (none today; future-proof) survive.
+		params.delete('token');
+		const cleaned = params.toString();
+		const nextHash = cleaned ? `#${cleaned}` : '';
+		try {
+			history.replaceState(null, '', location.pathname + location.search + nextHash);
+		} catch {
+			// Some embedded contexts disallow replaceState; the URL
+			// just stays as-is. Harmless.
+		}
+		return fromFragment;
+	}
+	try {
+		return sessionStorage.getItem(TOKEN_KEY) ?? undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 let cachedTransport: ReturnType<typeof createConnectTransport> | undefined;

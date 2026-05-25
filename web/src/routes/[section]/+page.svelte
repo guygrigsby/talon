@@ -11,7 +11,10 @@
 	// from other chat apps lands users there too. Bounce client-
 	// side so the URL self-corrects without a "not found" flash.
 	$effect(() => {
-		if (param === 'chat') goto('/', { replaceState: true });
+		// Preserve any auth-token fragment so the redirect doesn't
+		// log the user out. goto() honors the supplied URL verbatim;
+		// `location.hash` already includes the leading '#'.
+		if (param === 'chat') goto('/' + location.search + location.hash, { replaceState: true });
 	});
 </script>
 

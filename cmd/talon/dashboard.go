@@ -29,9 +29,10 @@ import (
 
 func dashboardCmd() *cobra.Command {
 	var (
-		noOpen  bool
-		uiHost  string
-		session string
+		noOpen    bool
+		uiHost    string
+		session   string
+		tokenFlag string
 	)
 	c := &cobra.Command{
 		Use:   "dashboard",
@@ -46,16 +47,27 @@ func dashboardCmd() *cobra.Command {
 			if port == 0 {
 				port = 18789
 			}
-			tokenRef := gjson.GetBytes(merged, "gateway.auth.token").Str
-			token := ""
-			if tokenRef != "" {
-				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-				defer cancel()
-				resolved, err := secrets.NewResolver().Resolve(ctx, tokenRef)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "talon: dashboard: token resolve failed (%v); URL will not include auto-auth\n", err)
-				} else {
-					token = resolved
+			// Token resolution order:
+			//   1. --token flag (explicit override; covers gateways
+			//      running with a CLI-only --token that isn't in
+			//      config)
+			//   2. gateway.auth.token from merged config, routed
+			//      through the secrets resolver so op://...,
+			//      keychain://..., and literal values all work
+			//   3. empty — URL goes out without #token=, the FE
+			//      surfaces a friendly auth-required message
+			token := tokenFlag
+			if token == "" {
+				tokenRef := gjson.GetBytes(merged, "gateway.auth.token").Str
+				if tokenRef != "" {
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					resolved, err := secrets.NewResolver().Resolve(ctx, tokenRef)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "talon: dashboard: token resolve failed (%v); URL will not include auto-auth\n", err)
+					} else {
+						token = resolved
+					}
 				}
 			}
 			// Default path is "/" — the SvelteKit chat lives at the
@@ -84,8 +96,9 @@ func dashboardCmd() *cobra.Command {
 		},
 	}
 	c.Flags().BoolVar(&noOpen, "no-open", false, "skip browser launch (still prints + copies the URL)")
-	c.Flags().StringVar(&uiHost, "ui-host", defaultUIHost, "openclaw web UI base URL")
+	c.Flags().StringVar(&uiHost, "ui-host", defaultUIHost, "UI base URL (empty = gateway's own URL)")
 	c.Flags().StringVar(&session, "session", "main", "session key to open (defaults to main)")
+	c.Flags().StringVar(&tokenFlag, "token", "", "explicit token override (use when the gateway runs with --token but no gateway.auth.token in config)")
 	return c
 }
 
