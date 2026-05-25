@@ -727,6 +727,20 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 		for i, tc := range toolCalls {
 			h.store.AppendToolResult(storeKey, tc.ID, tc.Name, outputs[i])
 		}
+
+		// Paragraph break before the next iteration's text segment.
+		// Providers stream text deltas without any boundary signal
+		// between a pre-tool segment and the resumed post-tool
+		// segment, so concatenating raw produces things like
+		// "Let me check.I'm here" — missing space, no visual cue
+		// that the tool call sat between them. Two newlines render
+		// as a paragraph break in the UI's white-space:pre-wrap
+		// transcript. Only inject when this iteration actually
+		// emitted text so a pure tool-call iteration doesn't
+		// orphan a blank line at the top.
+		if iterText.Len() > 0 {
+			accumulated.WriteString("\n\n")
+		}
 	}
 
 	// Iteration cap reached — model kept invoking tools without

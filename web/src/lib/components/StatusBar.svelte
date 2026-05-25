@@ -1,9 +1,4 @@
 <script lang="ts">
-	import { channels, bySource, sourceLabel } from '$lib/data/channels';
-	import SourceDot from './SourceDot.svelte';
-
-	const grouped = bySource(channels);
-
 	const fmt = () =>
 		new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 	let now = $state(fmt());
@@ -11,36 +6,18 @@
 		const id = setInterval(() => (now = fmt()), 1000);
 		return () => clearInterval(id);
 	});
+
+	// host renders as `127.0.0.1:18789` (or wherever the SPA is
+	// served from). No scheme prefix — Connect uses HTTP and the
+	// hostname is the only useful diagnostic when the user wants
+	// to confirm which gateway they're talking to.
+	const host = $derived(typeof location === 'undefined' ? '' : location.host);
 </script>
 
 <footer class="bar" aria-hidden="true">
 	<div class="cell">
 		<span class="t-label">gw</span>
-		<span class="t-mono live">● ws://127.0.0.1:18789</span>
-	</div>
-
-	<div class="cell">
-		<span class="t-label">channels</span>
-		<span class="pips">
-			{#each [...grouped.entries()] as [source, list] (source)}
-				<span class="pip" title="{sourceLabel[source]} · {list.length}">
-					<SourceDot {source} status={list[0].status} size={6} />
-					<span class="t-num">{list.length}</span>
-				</span>
-			{/each}
-		</span>
-	</div>
-
-	<div class="cell hide-sm">
-		<span class="t-label">model</span>
-		<span class="t-mono">sonnet-4.6</span>
-		<span class="t-num muted">ctx 12.4%</span>
-	</div>
-
-	<div class="cell hide-md">
-		<span class="t-label">last rpc</span>
-		<span class="t-mono">chat.send</span>
-		<span class="t-num muted">142ms</span>
+		<span class="t-mono live">● {host}</span>
 	</div>
 
 	<div class="cell spacer"></div>
@@ -86,22 +63,8 @@
 	.live {
 		color: var(--good);
 	}
-	.pips {
-		display: inline-flex;
-		gap: var(--s-2);
-		align-items: center;
-	}
-	.pip {
-		display: inline-flex;
-		align-items: center;
-		gap: 4px;
-		color: var(--ink-2);
-	}
 
 	@media (max-width: 720px) {
 		.hide-sm { display: none; }
-	}
-	@media (max-width: 960px) {
-		.hide-md { display: none; }
 	}
 </style>

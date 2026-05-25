@@ -6,6 +6,18 @@
 		message,
 		channel,
 	}: { message: Message; channel: Channel } = $props();
+
+	// Tracks which tool-call rows are expanded. Key by index — stable
+	// within a message because the order is the model's call order
+	// and rows don't get reordered.
+	let expanded = $state<Set<number>>(new Set());
+
+	function toggle(i: number) {
+		const next = new Set(expanded);
+		if (next.has(i)) next.delete(i);
+		else next.add(i);
+		expanded = next;
+	}
 </script>
 
 <article class="row r-{message.role}">
@@ -39,16 +51,47 @@
 			</h4>
 			<ol>
 				{#each message.toolCalls as tc, i (i)}
+					{@const isOpen = expanded.has(i)}
 					<li>
-						<span class="tc-idx t-num" aria-hidden="true">{String(i + 1).padStart(2, '0')}</span>
-						<code class="tc-name t-mono">{tc.name}</code>
-						<code class="tc-args t-mono">{JSON.stringify(tc.args)}</code>
-						{#if tc.result}
-							<span class="tc-arrow" aria-hidden="true">→</span>
-							<code class="tc-result t-mono">{tc.result}</code>
-						{/if}
-						{#if tc.durationMs != null}
-							<span class="tc-dur t-num">{tc.durationMs}ms</span>
+						<button
+							type="button"
+							class="tc-summary"
+							aria-expanded={isOpen}
+							aria-controls="tc-{message.id}-{i}-detail"
+							onclick={() => toggle(i)}
+						>
+							<span class="tc-caret" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
+							<span class="tc-idx t-num" aria-hidden="true">{String(i + 1).padStart(2, '0')}</span>
+							<code class="tc-name t-mono">{tc.name}</code>
+							{#if !isOpen}
+								<code class="tc-args tc-args-compact t-mono">{JSON.stringify(tc.args)}</code>
+								{#if tc.result}
+									<span class="tc-arrow" aria-hidden="true">→</span>
+									<code class="tc-result tc-result-compact t-mono">{tc.result}</code>
+								{/if}
+							{/if}
+							{#if tc.durationMs != null}
+								<span class="tc-dur t-num">{tc.durationMs}ms</span>
+							{/if}
+						</button>
+						{#if isOpen}
+							<div
+								class="tc-detail"
+								id="tc-{message.id}-{i}-detail"
+								role="region"
+								aria-label="{tc.name} details"
+							>
+								<div class="tc-block">
+									<span class="t-label tc-block-label">args</span>
+									<pre class="tc-pre t-mono">{JSON.stringify(tc.args, null, 2)}</pre>
+								</div>
+								{#if tc.result}
+									<div class="tc-block">
+										<span class="t-label tc-block-label">result</span>
+										<pre class="tc-pre t-mono">{tc.result}</pre>
+									</div>
+								{/if}
+							</div>
 						{/if}
 					</li>
 				{/each}
@@ -130,14 +173,72 @@
 		gap: 2px;
 	}
 	.tools li {
-		display: flex;
-		gap: var(--s-2);
-		align-items: baseline;
 		font-family: var(--ff-mono);
 		font-size: var(--fs-sm);
 		color: var(--ink-2);
 		line-height: var(--lh-snug);
 		padding: 2px 0;
+	}
+	.tc-summary {
+		display: flex;
+		gap: var(--s-2);
+		align-items: baseline;
+		width: 100%;
+		background: transparent;
+		border: 0;
+		padding: 4px 0;
+		text-align: left;
+		font: inherit;
+		color: inherit;
+		cursor: pointer;
+		min-height: var(--tap, 32px);
+	}
+	.tc-summary:hover {
+		color: var(--ink);
+	}
+	.tc-summary:focus-visible {
+		outline: 2px solid var(--accent);
+		outline-offset: 2px;
+		border-radius: var(--radius);
+	}
+	.tc-caret {
+		width: 12px;
+		color: var(--ink-3);
+		flex-shrink: 0;
+	}
+	.tc-args-compact,
+	.tc-result-compact {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		min-width: 0;
+	}
+	.tc-detail {
+		margin: var(--s-2) 0 var(--s-3) calc(12px + var(--s-2) + 24px);
+		display: flex;
+		flex-direction: column;
+		gap: var(--s-3);
+	}
+	.tc-block {
+		display: flex;
+		flex-direction: column;
+		gap: 4px;
+	}
+	.tc-block-label {
+		color: var(--ink-3);
+	}
+	.tc-pre {
+		margin: 0;
+		padding: var(--s-2) var(--s-3);
+		background: var(--canvas);
+		border: 1px solid var(--border);
+		border-radius: var(--radius);
+		font-size: var(--fs-xs);
+		color: var(--ink);
+		white-space: pre-wrap;
+		word-break: break-word;
+		max-height: 320px;
+		overflow: auto;
 	}
 	.tc-idx {
 		color: var(--ink-3);
