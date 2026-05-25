@@ -3,7 +3,6 @@ package connectapi
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"connectrpc.com/connect"
@@ -31,6 +30,10 @@ import (
 
 type ChatService struct {
 	Reg *server.Registry
+	// Sinks is the fan-out registry shared with the WS path. When
+	// non-nil, Subscribe registers a connectSink against it for the
+	// duration of the stream. nil = Subscribe returns Unimplemented.
+	Sinks *server.SinkRegistry
 }
 
 type chatSendResp struct {
@@ -173,17 +176,9 @@ func firstText(parts []chatHistoryContent) string {
 	return ""
 }
 
-// Subscribe is the typed streaming RPC the frontend will use in
-// place of the WS chat event stream. Stage 2 work: refactor
-// ChatHandler so the event-emit path can route to an EventSink
-// implementation (WS frame or Connect's ServerStream). Until then,
-// the WS path is the only way to receive chat events. The proto
-// contract (ChatEvent oneof variants) is locked here so the FE
-// can codegen against it now and stage 2 lands transparently.
-func (s *ChatService) Subscribe(_ context.Context, _ *connect.Request[talonv1.ChatSubscribeRequest], _ *connect.ServerStream[talonv1.ChatEvent]) error {
-	return connect.NewError(connect.CodeUnimplemented,
-		errors.New("chat.Subscribe not yet implemented over Connect (talon-y6v stage 2); use the WS /ws path for streams"))
-}
+// Subscribe lives in chat_stream.go — wires connectSink into the
+// server.SinkRegistry so the FE gets the same event stream the WS
+// path emits, translated into the typed ChatEvent oneof.
 
 // ---- SessionsService ------------------------------------------------------
 

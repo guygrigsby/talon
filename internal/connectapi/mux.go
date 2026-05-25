@@ -29,7 +29,7 @@ func Register(mux *http.ServeMux, srv *server.Server) {
 	agents := &AgentsService{Reg: reg}
 	models := &ModelsService{Reg: reg}
 	sessions := &SessionsService{Reg: reg}
-	chat := &ChatService{Reg: reg}
+	chat := &ChatService{Reg: reg, Sinks: srv.Sinks()}
 	plugins := &PluginsService{Reg: reg}
 	cron := &CronService{Reg: reg}
 	channels := &ChannelsService{Reg: reg}
