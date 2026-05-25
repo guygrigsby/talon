@@ -339,6 +339,23 @@ func configureTelegram(in io.Reader, out io.Writer) error {
 	chat, err := telegram.WaitForMessage(waitCtx, token, startOffset, 90*time.Second)
 	if err != nil {
 		fmt.Fprintln(out)
+		// 409 Conflict means another process (typically the
+		// running gateway's telegram plugin) is already long-
+		// polling this bot — Telegram only allows one. Surface
+		// the actionable fix instead of the raw HTTP error.
+		if strings.Contains(err.Error(), "http 409") {
+			fmt.Fprintln(out)
+			fmt.Fprintln(out, "Another process is already polling this bot. Telegram allows only one")
+			fmt.Fprintln(out, "long-poll consumer per token, so the running gateway is blocking the")
+			fmt.Fprintln(out, "wizard. Options:")
+			fmt.Fprintln(out, "  1. Stop the gateway (Ctrl-C), re-run this wizard, then restart.")
+			fmt.Fprintln(out, "  2. Set the sender id manually:")
+			fmt.Fprintln(out, "       talon config set channels.telegram.allowFrom '[\"<your-numeric-id>\"]'")
+			fmt.Fprintln(out, "     Find your id by DMing @userinfobot on Telegram, or by checking the")
+			fmt.Fprintln(out, "     gateway log for `telegram first inbound message sender=…` when you")
+			fmt.Fprintln(out, "     message the bot.")
+			return errors.New("telegram capture aborted: bot is being polled by another process")
+		}
 		return fmt.Errorf("wait for first message: %w", err)
 	}
 	fmt.Fprintln(out, " got it.")
