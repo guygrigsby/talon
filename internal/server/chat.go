@@ -693,6 +693,9 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 				if d.Text == "" {
 					break
 				}
+				if iterThinking.Len() == 0 {
+					slog.Info("chat reasoning stream started", "run", emit.runID, "session", emit.sessionKey)
+				}
 				iterThinking.WriteString(d.Text)
 				seq++
 				_ = h.emitChat(emit.chatSess, emit.runID, emit.sessionKey, seq, "thinking", iterThinking.String(), d.Text)

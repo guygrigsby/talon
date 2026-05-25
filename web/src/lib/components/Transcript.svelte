@@ -43,6 +43,36 @@
 		activeAgent?.primaryModelName || activeAgent?.primaryModel || null
 	);
 
+	// Auto-pin the stream to the bottom on new content. Track the
+	// last user-scroll position so a user mid-scrollback doesn't get
+	// yanked when a delta lands. Threshold of 80px gives a little
+	// slack — if you're within a hair of the bottom we assume you
+	// want to keep tracking.
+	let stream: HTMLDivElement | undefined;
+	let pinToBottom = $state(true);
+	const messageCount = $derived(messages.length);
+	const lastBodyLen = $derived(messages[messageCount - 1]?.body.length ?? 0);
+
+	$effect(() => {
+		// Re-runs on any change in count or growing body. pinToBottom
+		// is updated in the onscroll handler below; honor it here.
+		void messageCount;
+		void lastBodyLen;
+		if (!pinToBottom || !stream) return;
+		// scrollTop = scrollHeight scrolls to the very bottom; queue
+		// to next animation frame so the DOM has settled after the
+		// reactive update.
+		requestAnimationFrame(() => {
+			if (stream) stream.scrollTop = stream.scrollHeight;
+		});
+	});
+
+	function onStreamScroll() {
+		if (!stream) return;
+		const distance = stream.scrollHeight - stream.scrollTop - stream.clientHeight;
+		pinToBottom = distance < 80;
+	}
+
 	let draft = $state('');
 	let textarea: HTMLTextAreaElement | undefined;
 
@@ -108,7 +138,7 @@
 		</div>
 	</header>
 
-	<div class="stream" tabindex="-1">
+	<div class="stream" tabindex="-1" bind:this={stream} onscroll={onStreamScroll}>
 		{#each messages as msg (msg.id)}
 			<MessageRow message={msg} {channel} />
 		{/each}

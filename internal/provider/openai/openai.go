@@ -204,6 +204,11 @@ func (p *Provider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<- pr
 		}
 		for _, c := range chunk.Choices {
 			// Text fragment.
+			if c.Delta.ReasoningContent != "" {
+				if !send(provider.Delta{Kind: provider.DeltaReasoning, Text: c.Delta.ReasoningContent}) {
+					return
+				}
+			}
 			if c.Delta.Content != "" {
 				if !send(provider.Delta{Kind: provider.DeltaText, Text: c.Delta.Content}) {
 					return
@@ -366,6 +371,13 @@ type streamChunk struct {
 			Role      string             `json:"role,omitempty"`
 			Content   string             `json:"content,omitempty"`
 			ToolCalls []streamToolCallFr `json:"tool_calls,omitempty"`
+			// ReasoningContent is DeepSeek Reasoner's hidden
+			// reasoning trace; OpenAI's o-series uses the same
+			// field name on the responses-streaming variant.
+			// Surfaces as provider.DeltaReasoning so the chat
+			// handler can emit a "thinking" event distinct from
+			// the visible reply.
+			ReasoningContent string `json:"reasoning_content,omitempty"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason,omitempty"`
 	} `json:"choices"`
