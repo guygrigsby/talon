@@ -181,6 +181,7 @@ type ChatHandler struct {
 	sessions  *SessionStore
 	costs     *CostTracker
 	memory    *MemoryConfig // optional jess/memory sidecar; nil = no augmentation
+	sinks     *SinkRegistry // optional fan-out registry; emit broadcasts in addition to the direct WS push
 
 	// runs tracks active runs by "sessionKey|idempotencyKey" so a duplicate
 	// chat.send returns the same runId without spawning a second stream.
@@ -237,6 +238,16 @@ func (h *ChatHandler) WithSessions(sessions *SessionStore) *ChatHandler {
 // per provider DeltaUsage event.
 func (h *ChatHandler) WithCostTracker(c *CostTracker) *ChatHandler {
 	h.costs = c
+	return h
+}
+
+// WithSinks attaches a fan-out registry. emit functions broadcast
+// every event to subscribers of the session-key in addition to the
+// direct WS push. Nil keeps the legacy WS-only behavior. Wired by
+// server.New so Connect's ChatService.Subscribe and the WS handler
+// see the same event stream.
+func (h *ChatHandler) WithSinks(r *SinkRegistry) *ChatHandler {
+	h.sinks = r
 	return h
 }
 
@@ -871,7 +882,7 @@ func messagesFromHistory(history []ChatMessage) []provider.Message {
 	return out
 }
 
-// chatEventPayload is the openclaw-shaped chat event payload.
+// ChatEventPayload is the openclaw-shaped chat event payload.
 //
 // Protocol v4 (openclaw 150bebcd0c) split this into a discriminated union
 // per state with `additionalProperties:false`. We keep one struct and rely
@@ -885,12 +896,12 @@ func messagesFromHistory(history []ChatMessage) []provider.Message {
 // is set when the new text is not a prefix-extension (e.g. provider
 // revision). talon's provider abstraction is append-only today, so Replace
 // is never set in practice — kept for spec-level v4 compatibility.
-type chatEventPayload struct {
+type ChatEventPayload struct {
 	RunID        string            `json:"runId"`
 	SessionKey   string            `json:"sessionKey"`
 	Seq          int               `json:"seq"`
 	State        string            `json:"state"`
-	Message      *chatEventMessage `json:"message,omitempty"`
+	Message      *ChatEventMessage `json:"message,omitempty"`
 	DeltaText    string            `json:"deltaText,omitempty"`
 	Replace      bool              `json:"replace,omitempty"`
 	StopReason   string            `json:"stopReason,omitempty"`
@@ -898,13 +909,13 @@ type chatEventPayload struct {
 	ErrorMessage string            `json:"errorMessage,omitempty"`
 }
 
-type chatEventMessage struct {
+type ChatEventMessage struct {
 	Phase   string                  `json:"phase"`
 	Role    string                  `json:"role"`
-	Content []chatEventContentPart  `json:"content"`
+	Content []ChatEventContentPart  `json:"content"`
 }
 
-type chatEventContentPart struct {
+type ChatEventContentPart struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
 }
@@ -914,29 +925,30 @@ type chatEventContentPart struct {
 // and is only valid (and required) on state="delta"; callers pass "" for
 // final/aborted/error.
 func (h *ChatHandler) emitChat(sess *Session, runID, sessionKey string, seq int, state, text, deltaText string) error {
-	payload := chatEventPayload{
+	payload := ChatEventPayload{
 		RunID:      runID,
 		SessionKey: sessionKey,
 		Seq:        seq,
 		State:      state,
 		DeltaText:  deltaText,
-		Message: &chatEventMessage{
+		Message: &ChatEventMessage{
 			Phase: "assistant",
 			Role:  "assistant",
-			Content: []chatEventContentPart{
+			Content: []ChatEventContentPart{
 				{Type: "text", Text: text},
 			},
 		},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	h.sinks.Broadcast(ctx, sessionKey, "chat", payload)
 	return sess.PushEvent(ctx, "chat", payload)
 }
 
-// agentEventPayload is the openclaw "agent" event envelope. The web UI's
+// AgentEventPayload is the openclaw "agent" event envelope. The web UI's
 // handleAgentEvent dispatches on payload.stream — for our tool execution
 // surface the only one we emit is stream="tool".
-type agentEventPayload struct {
+type AgentEventPayload struct {
 	Stream     string         `json:"stream"`
 	SessionKey string         `json:"sessionKey"`
 	RunID      string         `json:"runId"`
@@ -948,7 +960,7 @@ type agentEventPayload struct {
 // renders the in-flight tool card.
 func (h *ChatHandler) emitAgentToolStart(sess *Session, runID, sessionKey, toolCallID, name, argumentsJSON string) {
 	payload := buildToolStartPayload(runID, sessionKey, toolCallID, name, argumentsJSON, time.Now().UnixMilli())
-	pushAgentEvent(sess, payload)
+	h.pushAgentEvent(sess, sessionKey, payload)
 }
 
 // emitAgentToolResult fires after runner.Run completes (whether or not
@@ -956,21 +968,21 @@ func (h *ChatHandler) emitAgentToolStart(sess *Session, runID, sessionKey, toolC
 // "ERROR: ...").
 func (h *ChatHandler) emitAgentToolResult(sess *Session, runID, sessionKey, toolCallID, name, output string) {
 	payload := buildToolResultPayload(runID, sessionKey, toolCallID, name, output, time.Now().UnixMilli())
-	pushAgentEvent(sess, payload)
+	h.pushAgentEvent(sess, sessionKey, payload)
 }
 
 // buildToolStartPayload constructs the agent.tool start event. argumentsJSON
 // is decoded into an object when possible (matches openclaw's data.args
 // shape); a parse failure falls back to the raw string so the UI still has
 // something to show.
-func buildToolStartPayload(runID, sessionKey, toolCallID, name, argumentsJSON string, ts int64) agentEventPayload {
+func buildToolStartPayload(runID, sessionKey, toolCallID, name, argumentsJSON string, ts int64) AgentEventPayload {
 	var args any
 	if argumentsJSON != "" {
 		if err := json.Unmarshal([]byte(argumentsJSON), &args); err != nil {
 			args = argumentsJSON
 		}
 	}
-	return agentEventPayload{
+	return AgentEventPayload{
 		Stream:     "tool",
 		SessionKey: sessionKey,
 		RunID:      runID,
@@ -984,8 +996,8 @@ func buildToolStartPayload(runID, sessionKey, toolCallID, name, argumentsJSON st
 	}
 }
 
-func buildToolResultPayload(runID, sessionKey, toolCallID, name, output string, ts int64) agentEventPayload {
-	return agentEventPayload{
+func buildToolResultPayload(runID, sessionKey, toolCallID, name, output string, ts int64) AgentEventPayload {
+	return AgentEventPayload{
 		Stream:     "tool",
 		SessionKey: sessionKey,
 		RunID:      runID,
@@ -999,14 +1011,19 @@ func buildToolResultPayload(runID, sessionKey, toolCallID, name, output string, 
 	}
 }
 
-func pushAgentEvent(sess *Session, payload agentEventPayload) {
+// pushAgentEvent fans an agent-event payload out to the direct WS
+// session AND to any registry subscribers for the same session-key.
+// Method on ChatHandler so we have h.sinks in scope; the broadcast
+// is a no-op when sinks is nil.
+func (h *ChatHandler) pushAgentEvent(sess *Session, sessionKey string, payload AgentEventPayload) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	h.sinks.Broadcast(ctx, sessionKey, "agent", payload)
 	_ = sess.PushEvent(ctx, "agent", payload)
 }
 
 func (h *ChatHandler) emitError(sess *Session, runID, sessionKey string, seq int, kind, msg string) error {
-	payload := chatEventPayload{
+	payload := ChatEventPayload{
 		RunID:        runID,
 		SessionKey:   sessionKey,
 		Seq:          seq,
@@ -1016,6 +1033,7 @@ func (h *ChatHandler) emitError(sess *Session, runID, sessionKey string, seq int
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	h.sinks.Broadcast(ctx, sessionKey, "chat", payload)
 	return sess.PushEvent(ctx, "chat", payload)
 }
 

@@ -399,16 +399,16 @@ func TestCompat_ChatEventDeltaShape(t *testing.T) {
 	//
 	// Protocol v4 (openclaw 150bebcd0c) makes `deltaText` required on
 	// delta events; `message` remains the cumulative assistant snapshot.
-	payload := chatEventPayload{
+	payload := ChatEventPayload{
 		RunID:      "run1",
 		SessionKey: "agent:main:main",
 		Seq:        3,
 		State:      "delta",
 		DeltaText:  "hi",
-		Message: &chatEventMessage{
+		Message: &ChatEventMessage{
 			Phase:   "assistant",
 			Role:    "assistant",
-			Content: []chatEventContentPart{{Type: "text", Text: "hi"}},
+			Content: []ChatEventContentPart{{Type: "text", Text: "hi"}},
 		},
 	}
 	raw := jsonOf(t, payload)
@@ -441,11 +441,11 @@ func TestCompat_ChatEventFinalShape(t *testing.T) {
 	// v4 schema for ChatFinalEventSchema is `additionalProperties:false`
 	// and does not include `deltaText` — `omitempty` on the payload keeps
 	// the wire form valid.
-	payload := chatEventPayload{
+	payload := ChatEventPayload{
 		RunID: "r", SessionKey: "k", Seq: 7, State: "final",
-		Message: &chatEventMessage{
+		Message: &ChatEventMessage{
 			Phase: "assistant", Role: "assistant",
-			Content: []chatEventContentPart{{Type: "text", Text: "done"}},
+			Content: []ChatEventContentPart{{Type: "text", Text: "done"}},
 		},
 	}
 	raw := jsonOf(t, payload)
@@ -458,7 +458,7 @@ func TestCompat_ChatEventFinalShape(t *testing.T) {
 }
 
 func TestCompat_ChatEventErrorShape(t *testing.T) {
-	payload := chatEventPayload{
+	payload := ChatEventPayload{
 		RunID: "r", SessionKey: "k", Seq: 1, State: "error",
 		ErrorKind:    "provider",
 		ErrorMessage: "rate limit",
@@ -477,7 +477,7 @@ func TestCompat_ChatEventStateValuesAreClosedSet(t *testing.T) {
 	// is a documentation test: it doesn't fail unless someone deletes
 	// one of the names from emit usage.
 	for _, want := range []string{"delta", "final", "aborted", "error"} {
-		raw := jsonOf(t, chatEventPayload{State: want})
+		raw := jsonOf(t, ChatEventPayload{State: want})
 		if mustString(t, raw, "state") != want {
 			t.Errorf("state %q didn't roundtrip", want)
 		}

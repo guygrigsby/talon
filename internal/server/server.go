@@ -86,7 +86,21 @@ type Server struct {
 	// bootstrap).
 	sessionsMu sync.Mutex
 	sessions   map[string]*Session
+
+	// sinks fans server-pushed events out to additional subscribers
+	// (Connect's ChatService.Subscribe today; debug taps in future).
+	// The WS path still receives events the direct way via
+	// Session.PushEvent — broadcasting is purely additive so the
+	// legacy path stays exactly as it was. nil-safe; methods no-op
+	// when the registry hasn't been wired.
+	sinks *SinkRegistry
 }
+
+// Sinks returns the server's event sink registry so callers
+// outside this package (notably internal/connectapi) can subscribe
+// to a session-key's event stream without touching internal state.
+// Always non-nil after server.New returns.
+func (s *Server) Sinks() *SinkRegistry { return s.sinks }
 
 // ChatHandler returns the in-process chat handler. nil if Config.AgentResolver
 // or ProviderFactory was not set (chat disabled). Used by the Host service
@@ -118,13 +132,16 @@ func New(cfg Config) *Server {
 		registry:  NewRegistry(),
 		startedAt: time.Now(),
 		sessions:  make(map[string]*Session),
+		sinks:     NewSinkRegistry(),
 	}
 	chatStore := NewChatStore()
 	sessionStore := NewSessionStore()
 	s.chatStore = chatStore
 	s.sessions_ = sessionStore
 	if cfg.AgentResolver != nil && cfg.ProviderFactory != nil {
-		ch := NewChatHandler(cfg.AgentResolver, cfg.ProviderFactory, chatStore).WithSessions(sessionStore)
+		ch := NewChatHandler(cfg.AgentResolver, cfg.ProviderFactory, chatStore).
+			WithSessions(sessionStore).
+			WithSinks(s.sinks)
 		if cfg.WorkspaceResolver != nil && cfg.ToolRunnerFor != nil {
 			// Wrap the user's factory so it always sees ch as the
 			// SubagentRunner. ChatHandler implements RunInline, so it
