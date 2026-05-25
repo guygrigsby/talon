@@ -9,12 +9,47 @@
 		messages,
 		onToggleInspector,
 		inspectorOpen = true,
+		onSend,
+		status = 'idle',
+		errorMessage = null,
 	}: {
 		channel: Channel;
 		messages: Message[];
 		onToggleInspector?: () => void;
 		inspectorOpen?: boolean;
+		onSend?: (text: string) => void | Promise<void>;
+		status?: 'idle' | 'loading' | 'streaming' | 'error';
+		errorMessage?: string | null;
 	} = $props();
+
+	let draft = $state('');
+	let textarea: HTMLTextAreaElement | undefined;
+
+	const wired = $derived(onSend != null);
+	const busy = $derived(status === 'streaming' || status === 'loading');
+
+	async function submit() {
+		if (!onSend) return;
+		const text = draft.trim();
+		if (!text) return;
+		draft = '';
+		try {
+			await onSend(text);
+		} finally {
+			// Focus stays in the composer so the next message
+			// flows without re-clicking.
+			textarea?.focus();
+		}
+	}
+
+	function onComposerKeydown(e: KeyboardEvent) {
+		// ⏎ sends, ⇧⏎ inserts a newline. Matches the placeholder
+		// hint + every chat app the user has muscle memory for.
+		if (e.key === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey) {
+			e.preventDefault();
+			submit();
+		}
+	}
 </script>
 
 <section class="transcript" aria-labelledby="ch-title">
@@ -47,23 +82,48 @@
 		{/each}
 	</div>
 
-	<form class="composer" onsubmit={(e) => e.preventDefault()}>
+	<form
+		class="composer"
+		onsubmit={(e) => {
+			e.preventDefault();
+			submit();
+		}}
+	>
 		<label class="composer-label" for="composer-input">
 			<span class="t-label">Send as</span>
-			<span class="via t-mono">web · this session</span>
+			<span class="via t-mono">
+				{wired ? `web · ${channel.name}` : 'web · this session (not wired)'}
+				{#if status === 'streaming'}
+					· streaming
+				{:else if status === 'loading'}
+					· loading
+				{:else if status === 'error'}
+					· error
+				{/if}
+			</span>
 		</label>
 		<div class="input-wrap">
 			<textarea
 				id="composer-input"
 				class="input"
 				rows="2"
-				placeholder="Write a message…  (⇧⏎ newline · ⏎ send)"
+				bind:this={textarea}
+				bind:value={draft}
+				onkeydown={onComposerKeydown}
+				disabled={!wired}
+				placeholder={wired
+					? 'Write a message…  (⇧⏎ newline · ⏎ send)'
+					: 'Composer disabled for this channel.'}
 				aria-describedby="composer-help"
 			></textarea>
 		</div>
 		<span id="composer-help" class="sr-only">
-			Compose a message to {channel.name} on {sourceLabel[channel.source]}. Not yet wired.
+			Compose a message to {channel.name} on {sourceLabel[channel.source]}.
+			{wired ? 'Press Enter to send, Shift+Enter for newline.' : 'Not yet wired.'}
 		</span>
+		{#if errorMessage}
+			<div class="err t-mono" role="status">{errorMessage}</div>
+		{/if}
 	</form>
 </section>
 
@@ -188,6 +248,15 @@
 	}
 	.input::placeholder {
 		color: var(--ink-3);
+	}
+	.input:disabled {
+		opacity: 0.6;
+		cursor: not-allowed;
+	}
+	.err {
+		margin-top: var(--s-2);
+		font-size: var(--fs-xs);
+		color: var(--accent-strong, var(--ink));
 	}
 
 	@media (max-width: 720px) {
