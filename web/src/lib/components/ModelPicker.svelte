@@ -4,11 +4,16 @@
 	let {
 		value = '',
 		onChange,
-		disabled = false
+		disabled = false,
+		defaultLabel = null
 	}: {
 		value?: string;
 		onChange?: (modelId: string) => void;
 		disabled?: boolean;
+		// When the picker offers an "agent default" option, render
+		// what that default actually resolves to (e.g.
+		// "deepseek/deepseek-chat") instead of the bare phrase.
+		defaultLabel?: string | null;
 	} = $props();
 
 	let models = $state<ModelEntry[]>([]);
@@ -46,7 +51,7 @@
 		onchange={onSelect}
 		aria-label="Model for this session"
 	>
-		<option value="">agent default</option>
+		<option value="">{defaultLabel ? `agent default · ${defaultLabel}` : 'agent default'}</option>
 		{#each groups as [provider, entries] (provider)}
 			<optgroup label={provider}>
 				{#each entries as m (m.id)}

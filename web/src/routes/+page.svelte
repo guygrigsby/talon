@@ -5,7 +5,7 @@
 	import { channels, messages } from '$lib/data/channels';
 	import { chrome } from '$lib/state/chrome.svelte';
 	import { makeChatStore } from '$lib/gateway/chatStore.svelte';
-	import { getAgentsClient } from '$lib/gateway/connect';
+	import { loadAgents, type AgentEntry } from '$lib/gateway/agents';
 
 	let activeId = $state('web-here');
 
@@ -13,24 +13,27 @@
 
 	// 'web-here' is the channel wired to the live gateway. Session-key
 	// shape is `agent:<id>:<conv>`; the agentId is resolved from
-	// agents.list at mount so we don't hardcode an agent name that
-	// might not exist on this gateway. <conv> stays "web" so reloads
-	// land back in the same conversation.
+	// agents.list at mount, with the agent picker letting the user
+	// switch between configured agents on the fly. <conv> stays "web"
+	// so reloads land back in the same conversation.
 	const LIVE_CHANNEL_ID = 'web-here';
 	const LIVE_CONV = 'web';
 
+	let agents = $state<AgentEntry[]>([]);
 	let agentId = $state<string | null>(null);
 	let agentsLoadError = $state<string | null>(null);
 	let liveStore: ReturnType<typeof makeChatStore> | null = $state(null);
 
-	async function loadAgents() {
+	async function refreshAgents() {
 		try {
-			const client = getAgentsClient();
-			const res = await client.list({});
-			const parsed = JSON.parse(res.json);
-			const def = typeof parsed.defaultId === 'string' ? parsed.defaultId : '';
-			const first = Array.isArray(parsed.agents) && parsed.agents[0]?.id;
-			agentId = def || first || null;
+			const view = await loadAgents();
+			agents = view.entries;
+			// Prefer the user's current selection if it's still present;
+			// otherwise fall back to the gateway's defaultId or the
+			// first agent.
+			if (!agentId || !view.entries.some((a) => a.id === agentId)) {
+				agentId = view.defaultId || view.entries[0]?.id || null;
+			}
 			if (!agentId) {
 				agentsLoadError = 'No agents configured on this gateway.';
 			}
@@ -40,8 +43,13 @@
 	}
 
 	$effect(() => {
-		loadAgents();
+		refreshAgents();
 	});
+
+	function selectAgent(next: string) {
+		if (!next || next === agentId) return;
+		agentId = next;
+	}
 
 	// (Re)create the chat store any time the agentId resolves to a
 	// new value. Mount the history + subscribe loop on the new
@@ -113,6 +121,9 @@
 	errorMessage={composerError}
 	model={composerModel}
 	{onModelChange}
+	{agents}
+	agentId={agentId ?? ''}
+	onAgentChange={selectAgent}
 />
 <Inspector
 	{channel}
