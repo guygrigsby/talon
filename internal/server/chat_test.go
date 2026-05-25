@@ -207,7 +207,7 @@ func TestChatHandler_RejectsMissingFields(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, []byte(tc.params))
+			_, ferr := h.handleSend(t.Context(), HandlerCtx{}, []byte(tc.params))
 			if ferr == nil {
 				t.Errorf("expected error, got nil")
 			}
@@ -221,7 +221,7 @@ func TestChatHandler_AgentLookupFailureSurfacedAsInternal(t *testing.T) {
 		&stubFactory{provider: provider.NewStub("openai", nil)},
 		NewChatStore(),
 	)
-	_, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, []byte(`{"sessionKey":"agent:main:main","message":"hi"}`))
+	_, ferr := h.handleSend(t.Context(), HandlerCtx{}, []byte(`{"sessionKey":"agent:main:main","message":"hi"}`))
 	if ferr == nil || ferr.Code != ErrCodeInternal {
 		t.Errorf("want INTERNAL on missing agent, got %+v", ferr)
 	}
@@ -233,7 +233,7 @@ func TestChatHandler_ProviderRejectionSurfacedAsInternal(t *testing.T) {
 		&stubFactory{err: ErrProviderUnavailable},
 		NewChatStore(),
 	)
-	_, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, []byte(`{"sessionKey":"agent:main:main","message":"hi"}`))
+	_, ferr := h.handleSend(t.Context(), HandlerCtx{}, []byte(`{"sessionKey":"agent:main:main","message":"hi"}`))
 	if ferr == nil || ferr.Code != ErrCodeInternal {
 		t.Errorf("want INTERNAL on missing provider, got %+v", ferr)
 	}
@@ -248,7 +248,7 @@ func TestChatHandler_ModelMissingProviderSegment(t *testing.T) {
 		&stubFactory{provider: provider.NewStub("openai", nil)},
 		NewChatStore(),
 	)
-	_, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, []byte(`{"sessionKey":"agent:main:main","message":"hi"}`))
+	_, ferr := h.handleSend(t.Context(), HandlerCtx{}, []byte(`{"sessionKey":"agent:main:main","message":"hi"}`))
 	if ferr == nil || ferr.Code != ErrCodeInternal {
 		t.Errorf("want INTERNAL on missing provider segment, got %+v", ferr)
 	}
@@ -267,13 +267,13 @@ func TestChatHandler_IdempotencyReturnsSameRunID(t *testing.T) {
 	h.StreamTimeout = 50 * time.Millisecond
 
 	body := []byte(`{"sessionKey":"agent:main:main","message":"hi","idempotencyKey":"abc"}`)
-	res1, err1 := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	res1, err1 := h.handleSend(t.Context(), HandlerCtx{}, body)
 	if err1 != nil {
 		t.Fatalf("first call: %+v", err1)
 	}
 	runID1 := res1.(map[string]any)["runId"].(string)
 
-	res2, err2 := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	res2, err2 := h.handleSend(t.Context(), HandlerCtx{}, body)
 	if err2 != nil {
 		t.Fatalf("second call: %+v", err2)
 	}
@@ -296,7 +296,7 @@ func TestChatHandler_RunIDEqualsIdempotencyKey(t *testing.T) {
 		NewChatStore(),
 	)
 	body := []byte(`{"sessionKey":"agent:main:main","message":"hi","idempotencyKey":"a1b2-c3d4-e5f6"}`)
-	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{}, body)
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
@@ -312,8 +312,8 @@ func TestChatHandler_NoIdempotencyKeyMeansNewRun(t *testing.T) {
 		NewChatStore(),
 	)
 	body := []byte(`{"sessionKey":"agent:main:main","message":"hi"}`)
-	res1, _ := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
-	res2, _ := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	res1, _ := h.handleSend(t.Context(), HandlerCtx{}, body)
+	res2, _ := h.handleSend(t.Context(), HandlerCtx{}, body)
 	r1 := res1.(map[string]any)["runId"].(string)
 	r2 := res2.(map[string]any)["runId"].(string)
 	if r1 == r2 {
@@ -333,7 +333,7 @@ func TestChatHandler_HistoryReturnsStoredMessages(t *testing.T) {
 		store,
 	)
 
-	res, ferr := h.handleHistory(t.Context(), HandlerCtx{Session: nil}, []byte(`{"sessionKey":"agent:main:main","limit":50}`))
+	res, ferr := h.handleHistory(t.Context(), HandlerCtx{}, []byte(`{"sessionKey":"agent:main:main","limit":50}`))
 	if ferr != nil {
 		t.Fatalf("handleHistory: %+v", ferr)
 	}
@@ -372,7 +372,7 @@ func TestChatHandler_HistoryReturnsStoredMessages(t *testing.T) {
 		}
 	}
 	// Stability: same input → same ids.
-	res2, _ := h.handleHistory(t.Context(), HandlerCtx{Session: nil}, []byte(`{"sessionKey":"agent:main:main","limit":50}`))
+	res2, _ := h.handleHistory(t.Context(), HandlerCtx{}, []byte(`{"sessionKey":"agent:main:main","limit":50}`))
 	msgs2 := res2.(map[string]any)["messages"].([]map[string]any)
 	for i := range msgs {
 		o1 := msgs[i]["__openclaw"].(openclawMeta)
@@ -598,7 +598,7 @@ func TestChatHandler_MultiTurn_ToolCallExecutionAndReStream(t *testing.T) {
 	).WithTools(&stubWorkspace{dir: "/tmp/ws"}, func(ws string) ToolRunner { return runner })
 
 	body := []byte(`{"sessionKey":"agent:main:main","message":"do it","idempotencyKey":"r1"}`)
-	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{}, body)
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
@@ -677,7 +677,7 @@ func TestChatHandler_MultiTurn_IterationCapEmitsErrorState(t *testing.T) {
 	h.MaxToolIterations = 4
 
 	body := []byte(`{"sessionKey":"agent:main:main","message":"loop","idempotencyKey":"r2"}`)
-	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{}, body)
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
@@ -712,7 +712,7 @@ func TestChatHandler_MultiTurn_ToolRunnerUnavailableEmitsError(t *testing.T) {
 	)
 
 	body := []byte(`{"sessionKey":"agent:main:main","message":"hi","idempotencyKey":"r3"}`)
-	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{}, body)
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
@@ -751,7 +751,7 @@ func TestChatHandler_AgentContextFilesPopulateSystemPrompt(t *testing.T) {
 	})
 
 	body := []byte(`{"sessionKey":"agent:main:main","message":"hi","idempotencyKey":"r-ctx"}`)
-	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{}, body)
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
@@ -788,7 +788,7 @@ func TestChatHandler_TextOnlyChatStillWorksWithoutTools(t *testing.T) {
 	)
 
 	body := []byte(`{"sessionKey":"agent:main:main","message":"hi","idempotencyKey":"r4"}`)
-	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{}, body)
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
@@ -957,7 +957,7 @@ func TestChatHandler_MultipleToolsRunInParallel(t *testing.T) {
 
 	body := []byte(`{"sessionKey":"agent:main:main","message":"go","idempotencyKey":"r-par"}`)
 	start := time.Now()
-	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{}, body)
 	if ferr != nil {
 		t.Fatal(ferr)
 	}

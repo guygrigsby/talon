@@ -97,7 +97,6 @@ func main() {
 	root.AddCommand(configureCmd())
 	root.AddCommand(modelsCmd())
 	root.AddCommand(agentsCmd())
-	root.AddCommand(chatCmd())
 	root.AddCommand(chatHistoryCmd())
 	root.AddCommand(statusCmd())
 	root.AddCommand(uiCmd())

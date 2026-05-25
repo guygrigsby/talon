@@ -4,7 +4,6 @@ go 1.26.2
 
 require (
 	connectrpc.com/connect v1.20.0
-	github.com/coder/websocket v1.8.14
 	github.com/guygrigsby/jess v0.0.0-20260524020629-824e918a4c0e
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.8.0

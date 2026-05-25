@@ -1,0 +1,40 @@
+syntax = "proto3";
+
+package talon.v1;
+
+option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1";
+
+import "talon/v1/common.proto";
+
+// RpcService is the generic "call by registry name" surface that
+// bridges talon's internal RPC registry to external clients. Used
+// by the talon CLI for methods that don't have a typed Connect
+// service yet (cron.*, secrets.reload, diagnostics.*, usage.*).
+//
+// Prefer a typed service when one exists — Dispatch is the escape
+// hatch, not the recommended path. New surfaces should grow their
+// own typed service in this package so the FE / SDK get proper
+// types and the contract gets `buf breaking` coverage.
+service RpcService {
+  // Dispatch invokes one method on the gateway's registry by name.
+  // The params are passed through as opaque JSON; the response is
+  // returned the same way.
+  rpc Dispatch(DispatchRequest) returns (DispatchResponse);
+}
+
+message DispatchRequest {
+  // Method name as registered on the gateway (e.g. "cron.list",
+  // "secrets.reload"). Same shape the legacy WS path used.
+  string method = 1;
+  // Params is the JSON-encoded argument object for the handler;
+  // empty means the method takes no args.
+  string params_json = 2;
+}
+
+message DispatchResponse {
+  // Result is the JSON-encoded handler return value. Empty for
+  // methods that return nothing. Errors come back as Connect
+  // status codes (InvalidArgument, Unauthenticated, NotFound,
+  // Internal) and never reach this field.
+  string result_json = 1;
+}

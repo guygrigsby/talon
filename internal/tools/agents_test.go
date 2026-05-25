@@ -47,6 +47,9 @@ func TestAgentsTool_MergesTalonOverlayOverOpenclaw(t *testing.T) {
 	t.Setenv("OPENCLAW_CONFIG_PATH", filepath.Join(openclawDir, "openclaw.json"))
 
 	paths := openclaw.DefaultPaths()
+	// DefaultPaths() now skips the openclaw layer; this test
+	// exercises the merge semantics specifically, so opt back in.
+	paths.SkipOpenclaw = false
 	tool := NewAgentsTool(paths)
 
 	out, err := tool.Run(t.Context(), nil)

@@ -10,10 +10,8 @@ import (
 	"os"
 	"path"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/coder/websocket"
 	"github.com/guygrigsby/talon/internal/openclaw"
 	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
 	"github.com/guygrigsby/talon/web"
@@ -68,31 +66,19 @@ type Server struct {
 
 	// Handler instances retained so cmd/talon can wire other surfaces
 	// (the gRPC plugin Host service) against the same in-process
-	// ChatStore/SessionStore as the WS surface — without these, plugins
-	// would see a different view of session state than the UI does.
-	chat       *ChatHandler
-	chatStore  *ChatStore
-	sessions_  *SessionStore // trailing _ to avoid collision with the field below
-	reads      *ReadHandler
-	cron       *CronHandler
+	// ChatStore/SessionStore as the Connect surface — without these
+	// shared references, plugins would see a different view of
+	// session state than the UI does.
+	chat      *ChatHandler
+	chatStore *ChatStore
+	sessions_ *SessionStore // kept name from the WS era
+	reads     *ReadHandler
+	cron      *CronHandler
 
-	// sessions tracks active authenticated sessions keyed by
-	// "<clientId>|<instanceId>" (only registered when both are
-	// non-empty). When a new connect handshake completes with a key
-	// already in the map, the older session is closed with a structured
-	// reason. This guards against the openclaw web UI's habit of
-	// occasionally opening two simultaneous WS connections from a single
-	// page load (Lit re-mount, HMR, or a connectGateway race during
-	// bootstrap).
-	sessionsMu sync.Mutex
-	sessions   map[string]*Session
-
-	// sinks fans server-pushed events out to additional subscribers
-	// (Connect's ChatService.Subscribe today; debug taps in future).
-	// The WS path still receives events the direct way via
-	// Session.PushEvent — broadcasting is purely additive so the
-	// legacy path stays exactly as it was. nil-safe; methods no-op
-	// when the registry hasn't been wired.
+	// sinks fans every server-pushed event out to subscribers of
+	// a session-key. The ChatService.Subscribe handler in
+	// internal/connectapi registers one sink per active client.
+	// nil-safe; methods no-op when the registry hasn't been wired.
 	sinks *SinkRegistry
 }
 
@@ -131,7 +117,6 @@ func New(cfg Config) *Server {
 		mux:       http.NewServeMux(),
 		registry:  NewRegistry(),
 		startedAt: time.Now(),
-		sessions:  make(map[string]*Session),
 		sinks:     NewSinkRegistry(),
 	}
 	chatStore := NewChatStore()
@@ -186,7 +171,6 @@ func New(cfg Config) *Server {
 
 func (s *Server) routes() {
 	s.mux.HandleFunc("/healthz", s.handleHealthz)
-	s.mux.HandleFunc("/ws", s.handleWS)
 
 	staticFS, spaFallback := s.resolveStaticFS()
 	var staticHandler http.Handler
@@ -194,10 +178,6 @@ func (s *Server) routes() {
 		staticHandler = http.FileServer(http.FS(staticFS))
 	}
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if isWebSocketUpgrade(r) {
-			s.handleWS(w, r)
-			return
-		}
 		if staticHandler == nil {
 			http.NotFound(w, r)
 			return
@@ -249,10 +229,6 @@ func shouldServeSPAFallback(staticFS fs.FS, r *http.Request) bool {
 	return true
 }
 
-func isWebSocketUpgrade(r *http.Request) bool {
-	return strings.EqualFold(r.Header.Get("Upgrade"), "websocket")
-}
-
 func (s *Server) Run(ctx context.Context) error {
 	hs := &http.Server{
 		Addr:              s.cfg.Addr,
@@ -277,11 +253,8 @@ func (s *Server) Run(ctx context.Context) error {
 		// FIRST so they unblock and return. http.Server.Shutdown
 		// otherwise waits its whole timeout for each stream to
 		// time out individually — Ctrl-C felt like 5+ seconds of
-		// hang before this. Also force-close any active WS
-		// sessions; Shutdown doesn't track hijacked conns and
-		// they'd hold the process up indefinitely otherwise.
+		// hang before this.
 		s.sinks.Close()
-		s.closeAllSessions("gateway shutting down")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 		return hs.Shutdown(shutdownCtx)
@@ -290,23 +263,6 @@ func (s *Server) Run(ctx context.Context) error {
 			return nil
 		}
 		return err
-	}
-}
-
-// closeAllSessions issues a normal-closure on every registered WS
-// session. Called from the shutdown path so Ctrl-C drains within
-// the http.Server.Shutdown window rather than hitting the timeout.
-// Sessions deregister themselves from Session.Run's defer chain, so
-// we just trigger the close; the map clean-up happens for free.
-func (s *Server) closeAllSessions(reason string) {
-	s.sessionsMu.Lock()
-	snapshot := make([]*Session, 0, len(s.sessions))
-	for _, sess := range s.sessions {
-		snapshot = append(snapshot, sess)
-	}
-	s.sessionsMu.Unlock()
-	for _, sess := range snapshot {
-		sess.shutdown(reason)
 	}
 }
 
@@ -321,59 +277,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true,
-	})
-	if err != nil {
-		return
-	}
-	conn.SetReadLimit(64 * 1024 * 1024)
-
-	sess := newSession(s, conn)
-	slog.Info("ws connected", "conn", sess.connID, "remote", r.RemoteAddr)
-	sess.Run(r.Context())
-	slog.Info("ws closed", "conn", sess.connID)
-}
-
 func (s *Server) uptimeMs() int64 {
 	return time.Since(s.startedAt).Milliseconds()
-}
-
-// registerSession swaps sess into the sessions map under key. If a prior
-// session was registered there, it's closed with a structured reason — the
-// caller (Session.handshake) does this immediately after hello-ok so the
-// stale half of a duplicate-connect race exits cleanly.
-//
-// Returns the displaced session (nil if none) so the caller can wait for
-// it to drain if needed.
-func (s *Server) registerSession(key string, sess *Session) *Session {
-	if key == "" {
-		return nil
-	}
-	s.sessionsMu.Lock()
-	old := s.sessions[key]
-	s.sessions[key] = sess
-	s.sessionsMu.Unlock()
-	if old != nil && old != sess {
-		slog.Info("ws session replaced",
-			"old_conn", old.connID, "new_conn", sess.connID, "key", key)
-		old.shutdown("replaced-by-newer-instance")
-	}
-	return old
-}
-
-// unregisterSession removes sess from the map iff it's still the active
-// entry under key. Compare-and-delete avoids the case where the
-// just-displaced session deregisters its successor on the way out.
-func (s *Server) unregisterSession(key string, sess *Session) {
-	if key == "" {
-		return
-	}
-	s.sessionsMu.Lock()
-	defer s.sessionsMu.Unlock()
-	if s.sessions[key] == sess {
-		delete(s.sessions, key)
-	}
 }
 

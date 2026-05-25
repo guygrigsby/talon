@@ -166,7 +166,7 @@ func TestChatHandler_PerSessionModelOverrideWinsOverAgentDefault(t *testing.T) {
 	).WithSessions(store)
 
 	body := []byte(`{"sessionKey":"agent:main:main","message":"hi","idempotencyKey":"r-override"}`)
-	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{}, body)
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
@@ -194,7 +194,7 @@ func TestChatHandler_NoOverrideUsesAgentDefault(t *testing.T) {
 	).WithSessions(NewSessionStore())
 
 	body := []byte(`{"sessionKey":"agent:main:main","message":"hi","idempotencyKey":"r-default"}`)
-	res, ferr := h.handleSend(t.Context(), HandlerCtx{Session: nil}, body)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{}, body)
 	if ferr != nil {
 		t.Fatal(ferr)
 	}

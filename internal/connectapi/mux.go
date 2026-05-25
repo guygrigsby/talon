@@ -33,6 +33,7 @@ func Register(mux *http.ServeMux, srv *server.Server) {
 	plugins := &PluginsService{Reg: reg}
 	cron := &CronService{Reg: reg}
 	channels := &ChannelsService{Reg: reg}
+	rpc := &RpcService{Reg: reg}
 
 	// Interceptors mirror the WS handshake's pre-dispatch checks
 	// (auth today; logging / rate-limit / scope when those land).
@@ -53,4 +54,5 @@ func Register(mux *http.ServeMux, srv *server.Server) {
 	mux.Handle(talonv1connect.NewPluginsServiceHandler(plugins, opts...))
 	mux.Handle(talonv1connect.NewCronServiceHandler(cron, opts...))
 	mux.Handle(talonv1connect.NewChannelsServiceHandler(channels, opts...))
+	mux.Handle(talonv1connect.NewRpcServiceHandler(rpc, opts...))
 }
