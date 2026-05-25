@@ -1,12 +1,26 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { sectionMap } from '$lib/data/sections';
 
-	const section = $derived(sectionMap[page.params.section ?? '']);
+	const param = $derived(page.params.section ?? '');
+	const section = $derived(sectionMap[param]);
+
+	// /chat is a friendly alias for the chat workspace at /. The
+	// previous dashboard default routed there, and muscle memory
+	// from other chat apps lands users there too. Bounce client-
+	// side so the URL self-corrects without a "not found" flash.
+	$effect(() => {
+		if (param === 'chat') goto('/', { replaceState: true });
+	});
 </script>
 
 <section class="panel" aria-labelledby="section-title">
-	{#if section}
+	{#if param === 'chat'}
+		<!-- Redirecting to /. Effect above handles the navigation; this
+		     branch keeps the page from rendering a not-found flash. -->
+		<p class="sub">Opening chat…</p>
+	{:else if section}
 		<header class="head">
 			<h1 id="section-title" class="title">{section.label}</h1>
 			<span class="unwired t-mono">unwired</span>
@@ -23,7 +37,7 @@
 		<header class="head">
 			<h1 id="section-title" class="title">Not found</h1>
 		</header>
-		<p class="sub">No section named “{page.params.section}”.</p>
+		<p class="sub">No section named “{param}”.</p>
 	{/if}
 </section>
 
