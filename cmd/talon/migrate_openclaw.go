@@ -146,6 +146,14 @@ func mergeConfigInto(paths openclaw.Paths, dryRun, force bool, out io.Writer) (b
 	// dropping talon-side overrides. We pretty-print the result so
 	// it stays human-editable. Backup the pre-existing overlay if
 	// any, so a botched run is recoverable.
+	//
+	// Then rewrite workspace paths: agents.defaults.workspace and
+	// agents.list[].workspace fields that point at the openclaw
+	// state dir get retargeted at the matching talon location.
+	// Otherwise the agent reads its system prompt + memory from
+	// ~/.openclaw/ even though the migration just copied the
+	// content to ~/.talon/.
+	merged = rewriteWorkspacePaths(merged, paths.Openclaw.Dir, paths.Talon.Dir)
 	pretty, err := jsonPretty(merged)
 	if err != nil {
 		return false, err
@@ -303,6 +311,74 @@ func copyFile(src, dst string, mode os.FileMode) error {
 		return err
 	}
 	return out.Close()
+}
+
+// rewriteWorkspacePaths walks the agent-shaped config keys and
+// retargets any workspace value that lives under the openclaw
+// state dir onto the matching talon location. Specifically:
+//
+//	agents.defaults.workspace
+//	agents.list[].workspace
+//
+// Other paths (model files, plugin binaries, ...) are left alone —
+// they're typically absolute paths that don't shadow openclaw or
+// they live somewhere stable like /usr/local/bin. No-op when src
+// or dst is empty, or when no replaceable path is present.
+func rewriteWorkspacePaths(raw []byte, srcDir, dstDir string) []byte {
+	if srcDir == "" || dstDir == "" || srcDir == dstDir || len(raw) == 0 {
+		return raw
+	}
+	var doc map[string]any
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		return raw
+	}
+	rewrite := func(s string) (string, bool) {
+		// Only rewrite when the value is rooted at srcDir/. The
+		// trailing slash check avoids matching a srcDir-prefixed
+		// directory that happens to share a name prefix.
+		if strings.HasPrefix(s, srcDir+"/") {
+			return dstDir + strings.TrimPrefix(s, srcDir), true
+		}
+		if s == srcDir {
+			return dstDir, true
+		}
+		return s, false
+	}
+	agents, _ := doc["agents"].(map[string]any)
+	if agents == nil {
+		return raw
+	}
+	changed := false
+	if defaults, ok := agents["defaults"].(map[string]any); ok {
+		if v, ok := defaults["workspace"].(string); ok {
+			if next, hit := rewrite(v); hit {
+				defaults["workspace"] = next
+				changed = true
+			}
+		}
+	}
+	if list, ok := agents["list"].([]any); ok {
+		for _, entry := range list {
+			obj, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			if v, ok := obj["workspace"].(string); ok {
+				if next, hit := rewrite(v); hit {
+					obj["workspace"] = next
+					changed = true
+				}
+			}
+		}
+	}
+	if !changed {
+		return raw
+	}
+	out, err := json.Marshal(doc)
+	if err != nil {
+		return raw
+	}
+	return out
 }
 
 // jsonPretty re-marshals JSON bytes with 2-space indent. The merged

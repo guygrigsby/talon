@@ -472,6 +472,19 @@ func BuiltinPluginCmd(name string) []string {
 	return nil
 }
 
+// BuiltinPluginNames returns every first-party plugin name in the
+// order they're registered. Used by the gateway plugin loader to
+// auto-enable bundled plugins that aren't explicitly listed in
+// plugins.entries — so a user who never touches plugin config
+// still gets mac-notify, mac-open, telegram, etc.
+func BuiltinPluginNames() []string {
+	out := make([]string, 0, len(builtinPlugins))
+	for _, b := range builtinPlugins {
+		out = append(out, b.EntryName)
+	}
+	return out
+}
+
 // extensionSource pairs a directory with a label for the lookup-chain
 // merge. Order matters: earlier entries win on name collision.
 type extensionSource struct {

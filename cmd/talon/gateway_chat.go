@@ -140,7 +140,7 @@ type pluginSpec struct {
 // That makes the post-install talon-overlay copy (with node_modules)
 // win over the bundled read-only copy that has no deps installed.
 func defaultPluginDefaults(paths openclaw.Paths) pluginParseDefaults {
-	out := pluginParseDefaults{}
+	out := pluginParseDefaults{autoFillBuiltin: true}
 	if paths.Talon.Dir != "" {
 		out.bundledPaths = append(out.bundledPaths, filepath.Join(paths.Talon.Dir, "extensions"))
 	}
@@ -162,6 +162,13 @@ func defaultPluginDefaults(paths openclaw.Paths) pluginParseDefaults {
 type pluginParseDefaults struct {
 	bundledPaths []string
 	shimCmd      []string
+	// autoFillBuiltin tells parsePluginSpecs to also include every
+	// builtinPlugin name that isn't explicitly listed in
+	// plugins.entries. The gateway sets this so a user who never
+	// touches plugin config still gets the bundled tools; tests
+	// leave it false so the focused-on-config-shape assertions
+	// don't have to account for the auto-fill set.
+	autoFillBuiltin bool
 }
 
 // parsePluginSpecs walks plugins.entries.<name> in the merged config
@@ -200,7 +207,9 @@ func parsePluginSpecs(merged []byte, defaults pluginParseDefaults) []pluginSpec 
 	}
 
 	var specs []pluginSpec
+	seen := map[string]struct{}{}
 	gjson.GetBytes(merged, "plugins.entries").ForEach(func(nameKey, entry gjson.Result) bool {
+		seen[nameKey.Str] = struct{}{}
 		if !entry.Get("enabled").Bool() {
 			return true
 		}
@@ -231,6 +240,26 @@ func parsePluginSpecs(merged []byte, defaults pluginParseDefaults) []pluginSpec 
 		}
 		return true
 	})
+	// Auto-enable first-party plugins that aren't explicitly listed
+	// in plugins.entries. Opt-in (gateway sets autoFillBuiltin=true;
+	// tests default off) so the focused parse-shape tests don't
+	// have to enumerate the entire bundled set. Plugins that need
+	// config (telegram → botToken, brave → apiKey) still load
+	// fine; the missing config surfaces as a channel-start / tool-
+	// run error rather than a load failure.
+	if defaults.autoFillBuiltin {
+		for _, name := range server.BuiltinPluginNames() {
+			if _, explicit := seen[name]; explicit {
+				continue
+			}
+			cmd := server.BuiltinPluginCmd(name)
+			if len(cmd) == 0 {
+				continue
+			}
+			env := buildPluginEnv(name, gjson.Result{})
+			specs = append(specs, pluginSpec{name: name, cmd: cmd, env: env, kind: kindNative})
+		}
+	}
 	return specs
 }
 
