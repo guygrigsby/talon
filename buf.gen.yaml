@@ -1,7 +1,9 @@
 version: v2
-# Generated stubs land under internal/api/v1/ so they're not
-# importable by external consumers yet — promote when the API
-# stabilizes (likely paired with the WS deprecation in talon-y6v).
+# Go stubs land under internal/api/v1/; TS stubs land under
+# web/src/lib/gateway/gen/ so the SvelteKit app can codegen against
+# the same proto contract the gateway implements. The clean flag
+# wipes both trees before regenerating so deleted protos leave no
+# orphans behind.
 clean: true
 plugins:
   - remote: buf.build/protocolbuffers/go
@@ -12,3 +14,15 @@ plugins:
     out: internal/api/v1
     opt:
       - paths=source_relative
+  # @bufbuild/protoc-gen-es v2 generates the typed message classes
+  # AND the GenService descriptors @connectrpc/connect-web needs.
+  # No separate connect-es plugin (deprecated for v2 — service
+  # descriptors are emitted directly into the *_pb.ts files now).
+  # import_extension=.js so the emitted imports work both in the
+  # SvelteKit dev server (ESM) and in the static-adapter output
+  # without a tsconfig moduleResolution dance.
+  - remote: buf.build/bufbuild/es
+    out: web/src/lib/gateway/gen
+    opt:
+      - target=ts
+      - import_extension=.js

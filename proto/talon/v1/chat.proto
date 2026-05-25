@@ -7,11 +7,6 @@ option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv
 // ChatService is the typed contract for chat send + history reads +
 // the long-lived event stream that delivers assistant deltas and
 // tool execution events back to the caller.
-//
-// The Subscribe stream returns CodeUnimplemented in stage 1 of the
-// WS→Connect migration (talon-y6v). The wire-level event shapes
-// below are the contract for both stages — once the server-side
-// EventSink lands, no proto changes here.
 service ChatService {
   // Send appends a user turn and starts the assistant run. Returns
   // the run_id immediately; events for the run flow on Subscribe.

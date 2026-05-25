@@ -7,6 +7,16 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@bufbuild/protobuf':
+        specifier: ^2.12.0
+        version: 2.12.0
+      '@connectrpc/connect':
+        specifier: ^2.1.1
+        version: 2.1.1(@bufbuild/protobuf@2.12.0)
+      '@connectrpc/connect-web':
+        specifier: ^2.1.1
+        version: 2.1.1(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.1.1(@bufbuild/protobuf@2.12.0))
     devDependencies:
       '@fontsource/atkinson-hyperlegible':
         specifier: ^5.2.8
@@ -43,6 +53,20 @@ importers:
         version: 8.0.14(@types/node@25.9.1)
 
 packages:
+
+  '@bufbuild/protobuf@2.12.0':
+    resolution: {integrity: sha512-B/XlCaFIP8LOwzo+bz5uFzATYokcwCKQcghqnlfwSmM5eX/qTkvDBnDPs+gXtX/RyjxJ4DRikECcPJbyALA8FA==}
+
+  '@connectrpc/connect-web@2.1.1':
+    resolution: {integrity: sha512-J8317Q2MaFRCT1jzVR1o06bZhDIBmU0UAzWx6xOIXzOq8+k71/+k7MUF7AwcBUX+34WIvbm5syRgC5HXQA8fOg==}
+    peerDependencies:
+      '@bufbuild/protobuf': ^2.7.0
+      '@connectrpc/connect': 2.1.1
+
+  '@connectrpc/connect@2.1.1':
+    resolution: {integrity: sha512-JzhkaTvM73m2K1URT6tv53k2RwngSmCXLZJgK580qNQOXRzZRR/BCMfZw3h+90JpnG6XksP5bYT+cz0rpUzUWQ==}
+    peerDependencies:
+      '@bufbuild/protobuf': ^2.7.0
 
   '@emnapi/core@1.10.0':
     resolution: {integrity: sha512-yq6OkJ4p82CAfPl0u9mQebQHKPJkY7WrIuk205cTYnYe+k2Z8YBh11FrbRG/H6ihirqcacOgl2BIO8oyMQLeXw==}
@@ -524,6 +548,17 @@ packages:
     resolution: {integrity: sha512-B58NGBEoc8Y9MWWCQGl/gq9xBCe4IiKM0a2x7GZdQKOW5Exr8S1W24J6OgM1njK8xCRGvAJIL/MxXHf6SkmQKQ==}
 
 snapshots:
+
+  '@bufbuild/protobuf@2.12.0': {}
+
+  '@connectrpc/connect-web@2.1.1(@bufbuild/protobuf@2.12.0)(@connectrpc/connect@2.1.1(@bufbuild/protobuf@2.12.0))':
+    dependencies:
+      '@bufbuild/protobuf': 2.12.0
+      '@connectrpc/connect': 2.1.1(@bufbuild/protobuf@2.12.0)
+
+  '@connectrpc/connect@2.1.1(@bufbuild/protobuf@2.12.0)':
+    dependencies:
+      '@bufbuild/protobuf': 2.12.0
 
   '@emnapi/core@1.10.0':
     dependencies:

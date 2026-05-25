@@ -20,6 +20,14 @@ export default defineConfig({
 				target: gatewayURL.replace(/^ws/, 'http'),
 				changeOrigin: true,
 			},
+			// Connect RPC routes: /talon.v1.<Service>/<Method>. Proxy
+			// to the gateway over HTTP so the typed clients in
+			// lib/gateway/connect.ts can talk to the running gateway
+			// from `vite dev` without CORS gymnastics.
+			'/talon.v1.': {
+				target: gatewayURL.replace(/^ws/, 'http'),
+				changeOrigin: true,
+			},
 		},
 	},
 });
