@@ -19,12 +19,17 @@ const sourceForChannel: Record<string, Source> = {
 };
 
 type ChannelsBlock = Record<string, Record<string, unknown> | undefined>;
+type ConfigEnvelope = { config?: { channels?: ChannelsBlock } };
 
 export async function loadConfiguredChannels(): Promise<Channel[]> {
-	const res = await getConfigClient().get(create(ConfigGetRequestSchema, { path: 'channels' }));
+	// ConfigService.Get ignores the path param today and always
+	// returns the full merged config; we drill into config.channels
+	// ourselves. When config.get gains real path support we can
+	// pass "channels" again and use the response directly.
+	const res = await getConfigClient().get(create(ConfigGetRequestSchema, { path: '' }));
 	if (!res.json) return [];
-	const envelope = JSON.parse(res.json) as { config?: ChannelsBlock };
-	const cfg = envelope?.config ?? {};
+	const envelope = JSON.parse(res.json) as ConfigEnvelope;
+	const cfg = envelope?.config?.channels ?? {};
 	const out: Channel[] = [];
 	for (const [name, sub] of Object.entries(cfg)) {
 		if (!sub || typeof sub !== 'object') continue;
