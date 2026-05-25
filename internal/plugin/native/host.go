@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"os/exec"
 	"time"
 
@@ -72,6 +73,14 @@ func Spawn(
 		AllowedProtocols: []goplugin.Protocol{goplugin.ProtocolGRPC},
 		AutoMTLS:         true,
 		Logger:           newHCLogAdapter(logger),
+		// Plugin's stderr → host's stderr verbatim. Without this,
+		// go-plugin tries to parse each line as hclog JSON, drops
+		// unparseable lines to Debug level via Logger, and our
+		// host slog filters Debug out — so the plugin's slog.Info
+		// / slog.Warn calls (text-formatted by talonlog) never
+		// reach the gateway log. Direct piping bypasses the parser
+		// entirely; plugin owns its own format.
+		Stderr: os.Stderr,
 	})
 
 	rpc, err := client.Client()
