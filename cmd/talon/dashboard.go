@@ -97,7 +97,7 @@ func dashboardCmd() *cobra.Command {
 	}
 	c.Flags().BoolVar(&noOpen, "no-open", false, "skip browser launch (still prints + copies the URL)")
 	c.Flags().StringVar(&uiHost, "ui-host", defaultUIHost, "UI base URL (empty = gateway's own URL)")
-	c.Flags().StringVar(&session, "session", "main", "session key to open (defaults to main)")
+	c.Flags().StringVar(&session, "session", "", "session key to put in the URL (empty = omit; the SPA currently ignores this param)")
 	c.Flags().StringVar(&tokenFlag, "token", "", "explicit token override (use when the gateway runs with --token but no gateway.auth.token in config)")
 	return c
 }

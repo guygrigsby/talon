@@ -89,12 +89,12 @@ func gatewayRunCmd() *cobra.Command {
 				}
 			}
 			for flag, val := range map[string]bool{
-				"--dev":                       dev,
-				"--reset":                     reset,
-				"--allow-unconfigured":        allowUnconfigured,
-				"--raw-stream":                rawStream,
-				"--compact":                   compact,
-				"--cli-backend-logs":          cliBackendLogs,
+				"--dev":                dev,
+				"--reset":              reset,
+				"--allow-unconfigured": allowUnconfigured,
+				"--raw-stream":         rawStream,
+				"--compact":            compact,
+				"--cli-backend-logs":   cliBackendLogs,
 			} {
 				if val {
 					fmt.Fprintf(os.Stderr, "talon: %s accepted but not yet wired\n", flag)
@@ -199,15 +199,15 @@ func gatewayRunCmd() *cobra.Command {
 			defer pluginHost.Shutdown()
 
 			srv := server.New(server.Config{
-				Addr:                 addr,
-				WebDir:               webDir,
-				Auth:                 server.AuthConfig{Mode: authMode, Token: token},
-				AgentResolver:        resolver,
-				ProviderFactory:      &agentProviderFactory{paths: paths, host: pluginHost},
-				WorkspaceResolver:    resolver,
-				ToolRunnerFor:        newToolRunnerFactory(pluginHost, paths),
-				Paths:                paths,
-				PluginHost:           pluginHost,
+				Addr:              addr,
+				WebDir:            webDir,
+				Auth:              server.AuthConfig{Mode: authMode, Token: token},
+				AgentResolver:     resolver,
+				ProviderFactory:   &agentProviderFactory{paths: paths, host: pluginHost},
+				WorkspaceResolver: resolver,
+				ToolRunnerFor:     newToolRunnerFactory(pluginHost, paths),
+				Paths:             paths,
+				PluginHost:        pluginHost,
 			})
 
 			// Memory sidecar (talon-2dn): opt-in via memory.enabled
@@ -218,12 +218,25 @@ func gatewayRunCmd() *cobra.Command {
 			// HuggingFace on first chat.send — we don't pre-warm
 			// here so a stuck network at startup doesn't block the
 			// gateway. Storage path overridable via memory.path.
-			if mem := buildMemorySidecar(paths); mem != nil {
+			mem := buildMemorySidecar(paths)
+			if mem != nil {
 				srv.ChatHandler().WithMemory(mem)
 				slog.Info("memory sidecar wired",
 					"store_path", filepath.Join(paths.Talon.Dir, "memory"),
 				)
 			}
+
+			// Agentcore chat dispatch (Phase 3 of migration plan).
+			// Wires the alternative chat-loop path through
+			// internal/agentcore_chat. Selected per-call by model
+			// provider; OpenAI and Anthropic currently stay on the
+			// legacy provider path. Memory
+			// sidecar (when present) is reused — same store +
+			// recaller back the jess Remember/Recall tools the
+			// agentcore agent sees.
+			srv.ChatHandler().
+				WithPaths(paths).
+				WithAgentcoreRunner(buildAgentcoreRunner(paths, mem))
 
 			// Connect API (talon-y6v): expose every RPC the WS
 			// path serves over Connect (HTTP/JSON for browsers,

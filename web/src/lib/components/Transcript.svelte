@@ -66,6 +66,18 @@
 
 	const wired = $derived(onSend != null);
 	const busy = $derived(status === 'streaming' || status === 'loading');
+	// Disable only when the composer is permanently dead for this
+	// channel. While the gateway is still wiring up (status=loading)
+	// keep it enabled so the user can reload and start typing — the
+	// draft buffers until onSend lands.
+	const composerDisabled = $derived(!wired && status !== 'loading');
+
+	// Action: focus on mount. Runs once, deterministically, when the
+	// element is in the DOM. rAF lets any post-hydration focus reset
+	// (SvelteKit a11y, scroll restore) settle before we claim focus.
+	function focusOnMount(node: HTMLTextAreaElement) {
+		requestAnimationFrame(() => node.focus());
+	}
 
 	async function submit() {
 		if (!onSend) return;
@@ -157,10 +169,13 @@
 				bind:this={textarea}
 				bind:value={draft}
 				onkeydown={onComposerKeydown}
-				disabled={!wired}
+				disabled={composerDisabled}
+				use:focusOnMount
 				placeholder={wired
 					? 'Write a message…  (⇧⏎ newline · ⏎ send)'
-					: 'Composer disabled for this channel.'}
+					: status === 'loading'
+						? 'Connecting…  start typing, send once ready'
+						: 'Composer disabled for this channel.'}
 				aria-describedby="composer-help"
 			></textarea>
 		</div>

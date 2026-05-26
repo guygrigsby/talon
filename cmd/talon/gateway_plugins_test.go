@@ -65,7 +65,7 @@ func TestParsePluginSpecs_AutoFillsFromBuiltinRegistry(t *testing.T) {
 	body := []byte(`{
 		"plugins": {
 			"entries": {
-				"deepseek": {"enabled": true},
+				"openai-compat": {"enabled": true},
 				"telegram": {"enabled": true},
 				"brave":    {"enabled": true},
 				"whisper":  {"enabled": true},
@@ -78,7 +78,7 @@ func TestParsePluginSpecs_AutoFillsFromBuiltinRegistry(t *testing.T) {
 	for _, s := range got {
 		byName[s.name] = s.cmd
 	}
-	for _, name := range []string{"deepseek", "telegram", "brave", "whisper"} {
+	for _, name := range []string{"openai-compat", "telegram", "brave", "whisper"} {
 		want := server.BuiltinPluginCmd(name)
 		if !reflect.DeepEqual(byName[name], want) {
 			t.Errorf("%s cmd = %v, want %v", name, byName[name], want)
@@ -97,10 +97,10 @@ func TestParsePluginSpecs_KindDispatch(t *testing.T) {
 		"plugins": {
 			"bundled": {"paths": ["/some/extensions"]},
 			"entries": {
-				"deepseek":  {"enabled": true},
-				"telegram":  {"enabled": true},
-				"explicit":  {"enabled": true, "cmd": ["/usr/local/bin/talon-thirdparty"]},
-				"bundled1":  {"enabled": true, "bundled": "anthropic"}
+				"openai-compat": {"enabled": true},
+				"telegram":      {"enabled": true},
+				"explicit":      {"enabled": true, "cmd": ["/usr/local/bin/talon-thirdparty"]},
+				"bundled1":      {"enabled": true, "bundled": "anthropic"}
 			}
 		}
 	}`)
@@ -109,8 +109,8 @@ func TestParsePluginSpecs_KindDispatch(t *testing.T) {
 	for _, s := range got {
 		byName[s.name] = s.kind
 	}
-	if byName["deepseek"] != kindNative {
-		t.Errorf("deepseek kind = %v, want kindNative", byName["deepseek"])
+	if byName["openai-compat"] != kindNative {
+		t.Errorf("openai-compat kind = %v, want kindNative", byName["openai-compat"])
 	}
 	if byName["telegram"] != kindNative {
 		t.Errorf("telegram kind = %v, want kindNative", byName["telegram"])
@@ -368,9 +368,9 @@ func TestNewToolRunnerFactory_NilHostDelegatesToBase(t *testing.T) {
 		names = append(names, s.Name)
 	}
 	// With nil host, factory should return the base runner directly —
-	// just the builtins (read/write/edit/bash/glob/grep/remember).
-	// Crucially, no plugin-injected tools.
-	for _, n := range []string{"read", "bash", "remember"} {
+	// just the builtins (read/write/edit/bash/glob/grep). Crucially,
+	// no plugin-injected tools.
+	for _, n := range []string{"read", "bash", "grep"} {
 		if !contains(names, n) {
 			t.Errorf("base builtin %q missing: %v", n, names)
 		}

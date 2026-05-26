@@ -150,6 +150,110 @@ func TestMergedBytes_SkipOpenclaw(t *testing.T) {
 	}
 }
 
+func TestMergedBytes_NativeTOMLPreferredWithLegacySecretFallback(t *testing.T) {
+	t.Setenv("TALON_CONFIG_PATH", "")
+	p := fixture(t, "", `{
+		"gateway": {"port": 18000, "auth": {"token": "legacy-gateway-token"}},
+		"agents": {"list": [{"id": "coding", "workspace": "/tmp/legacy-subagent"}]},
+		"plugins": {"entries": {
+			"brave": {"config": {"webSearch": {"apiKey": "legacy-brave-key"}}},
+			"openai-compat": {"config": {"providers": {"openai": {"apiKey": "legacy-openai-key"}}}}
+		}},
+		"channels": {"telegram": {"botToken": "legacy-telegram-token"}}
+	}`)
+	if err := os.WriteFile(filepath.Join(p.Talon.Dir, "config.toml"), []byte(`
+[gateway]
+mode = "local"
+bind = "loopback"
+port = 19000
+auth_mode = "token"
+auth_token_ref = "<redacted:literal>"
+
+[agent]
+model = "openai/gpt-4o-mini"
+workspace = "/tmp/main"
+tools_profile = "full"
+
+[[subagents]]
+id = "coding"
+model = "anthropic/claude-opus-4-7"
+
+[tools]
+profile = "full"
+web_search_enabled = true
+web_search_provider = "brave"
+web_search_api_key_ref = "<redacted:literal>"
+
+[models.providers.openai]
+api = "responses"
+base_url = "https://api.openai.com/v1"
+api_key_ref = "op://vault/openai/key"
+
+[channels.telegram]
+enabled = true
+bot_token_ref = "<redacted:literal>"
+
+[plugins]
+enabled = ["brave", "openai-compat"]
+load_paths = ["/plugins"]
+legacy_openclaw_shim = true
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := MergedBytes(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := gjson.GetBytes(merged, "gateway.port").Int(); v != 19000 {
+		t.Errorf("gateway.port = %d, want native TOML value 19000", v)
+	}
+	if v := gjson.GetBytes(merged, "gateway.auth.token").Str; v != "legacy-gateway-token" {
+		t.Errorf("gateway auth token = %q, want legacy fallback", v)
+	}
+	if v := gjson.GetBytes(merged, "channels.telegram.botToken").Str; v != "legacy-telegram-token" {
+		t.Errorf("telegram token = %q, want legacy fallback", v)
+	}
+	if v := gjson.GetBytes(merged, "plugins.entries.brave.config.webSearch.apiKey").Str; v != "legacy-brave-key" {
+		t.Errorf("brave api key = %q, want legacy fallback", v)
+	}
+	if v := gjson.GetBytes(merged, "plugins.entries.openai-compat.config.providers.openai.apiKey").Str; v != "op://vault/openai/key" {
+		t.Errorf("openai key = %q, want native TOML ref", v)
+	}
+	if gjson.GetBytes(merged, `agents.list.#(id=="coding").workspace`).Exists() {
+		t.Errorf("subagent workspace should not survive native TOML adaptation: %s", merged)
+	}
+}
+
+func TestMergedBytes_NativeTOMLCacheInvalidates(t *testing.T) {
+	t.Setenv("TALON_CONFIG_PATH", "")
+	p := fixture(t, "", `{"gateway":{"port":18000}}`)
+	native := filepath.Join(p.Talon.Dir, "config.toml")
+	if err := os.WriteFile(native, []byte(`[gateway]
+port = 19000
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	merged, err := MergedBytes(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := gjson.GetBytes(merged, "gateway.port").Int(); v != 19000 {
+		t.Fatalf("gateway.port = %d, want 19000", v)
+	}
+	if err := os.WriteFile(native, []byte(`[gateway]
+port = 191234
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	merged, err = MergedBytes(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := gjson.GetBytes(merged, "gateway.port").Int(); v != 191234 {
+		t.Fatalf("gateway.port = %d, want cache to see updated native TOML port 191234", v)
+	}
+}
+
 // --- write-target = talon only ---------------------------------------------
 
 func TestSet_WritesTalonOnly_OpenclawUntouched(t *testing.T) {

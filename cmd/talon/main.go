@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +16,7 @@ import (
 	talonlog "github.com/guygrigsby/talon/internal/log"
 	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/guygrigsby/talon/internal/secrets"
+	"github.com/guygrigsby/talon/internal/talonconfig"
 	"github.com/spf13/cobra"
 )
 
@@ -299,6 +302,46 @@ func configCmd() *cobra.Command {
 	c.AddCommand(fileCmd)
 
 	var (
+		migrateReveal      bool
+		migrateSummaryOnly bool
+	)
+	migrateTOMLCmd := &cobra.Command{
+		Use:   "migrate-toml",
+		Short: "Preview the native TOML config migration",
+		Long: `Reads the current merged JSON config and prints a proposed native
+~/.talon/config.toml. This command is read-only: it does not write config.toml
+or move state files yet.
+
+The preview keeps the main chat agent's workspace, including IDENTITY.md,
+SOUL.md, and the other existing Markdown files. Subagents migrate as task/model
+profiles only; their legacy workspaces and identity files are intentionally
+listed as cleanup candidates.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			raw, err := config.MergedBytes(resolvePaths())
+			if err != nil {
+				return err
+			}
+			next, report, err := talonconfig.FromLegacyJSON(raw)
+			if err != nil {
+				return err
+			}
+			preview := talonconfig.MarshalTOML(next, talonconfig.MarshalOptions{RedactSecrets: !migrateReveal})
+			if err := talonconfig.ValidateTOMLBytes(preview); err != nil {
+				return fmt.Errorf("generated TOML did not validate through Viper: %w", err)
+			}
+			printMigrationSummary(cmd.ErrOrStderr(), report)
+			if migrateSummaryOnly {
+				return nil
+			}
+			_, err = cmd.OutOrStdout().Write(preview)
+			return err
+		},
+	}
+	migrateTOMLCmd.Flags().BoolVar(&migrateReveal, "reveal", false, "include literal secrets in the TOML preview instead of redacting them")
+	migrateTOMLCmd.Flags().BoolVar(&migrateSummaryOnly, "summary-only", false, "print only migration notes, not the TOML preview")
+	c.AddCommand(migrateTOMLCmd)
+
+	var (
 		rawFlag    bool
 		revealFlag bool
 	)
@@ -331,12 +374,12 @@ func configCmd() *cobra.Command {
 	c.AddCommand(getCmd)
 
 	var (
-		strictJSON  bool
-		legacyJSON  bool
-		dryRun      bool
-		mergeFlag   bool
-		replaceAll  bool
-		reloadFlag  string
+		strictJSON bool
+		legacyJSON bool
+		dryRun     bool
+		mergeFlag  bool
+		replaceAll bool
+		reloadFlag string
 	)
 	setCmd := &cobra.Command{
 		Use:   "set <path> <value>",
@@ -576,6 +619,27 @@ top-level properties tree. Names may be dotted to drill in (e.g.
 	return c
 }
 
+func printMigrationSummary(w io.Writer, report talonconfig.MigrationReport) {
+	fmt.Fprintln(w, "talon: native TOML migration preview")
+	fmt.Fprintf(w, "  source keys: %s\n", strings.Join(report.SourceTopLevelKeys, ", "))
+	fmt.Fprintf(w, "  legacy OpenClaw plugin shim: %t\n", report.LegacyPluginShim)
+	if len(report.SecretCounts) > 0 {
+		parts := make([]string, 0, len(report.SecretCounts))
+		for _, kind := range []string{"literal", "op-ref", "keychain-ref", "env-ref", "empty"} {
+			if n := report.SecretCounts[kind]; n > 0 {
+				parts = append(parts, fmt.Sprintf("%s=%d", kind, n))
+			}
+		}
+		fmt.Fprintf(w, "  secret refs: %s\n", strings.Join(parts, ", "))
+	}
+	if len(report.StateCandidates) > 0 {
+		fmt.Fprintf(w, "  state candidates: %s\n", strings.Join(report.StateCandidates, ", "))
+	}
+	if len(report.DropCandidates) > 0 {
+		fmt.Fprintf(w, "  cleanup candidates: %s\n", strings.Join(report.DropCandidates, ", "))
+	}
+}
+
 func modelsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "models",
@@ -613,6 +677,26 @@ func modelsCmd() *cobra.Command {
 	c.AddCommand(modelsSetCmd())
 	c.AddCommand(modelsFallbacksCmd())
 	c.AddCommand(modelsAliasesCmd())
+	c.AddCommand(modelsTestCmd())
+	c.AddCommand(&cobra.Command{
+		Use:   "refresh",
+		Short: "Force-refresh plugin model caches and re-list",
+		Long: `Calls models.list with refresh=true so each loaded provider
+plugin bypasses its ListProviderModels cache and re-queries the
+upstream /v1/models endpoint. Use after adding a new model on the
+provider side without waiting for the cache TTL.`,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			payload, err := runRPC("models.list", map[string]any{"refresh": true})
+			if err != nil {
+				return err
+			}
+			if flagJSON {
+				emit(payload)
+				return nil
+			}
+			return renderModels(os.Stdout, payload)
+		},
+	})
 	return c
 }
 

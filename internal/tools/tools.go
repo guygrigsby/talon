@@ -46,9 +46,15 @@ type Registry struct {
 }
 
 // New constructs a Registry rooted at workspace and registers the default
-// builtin tools (read, write, edit, bash, glob, grep, remember). Pass an
-// empty workspace string to skip the builtins (useful for tests that
-// want to register their own tools).
+// builtin tools (read, write, edit, bash, glob, grep). Pass an empty
+// workspace string to skip the builtins (useful for tests that want to
+// register their own tools).
+//
+// Note: durable agent memory lives in jess (RememberTool + RecallTool),
+// wired by ChatHandler.WithMemory when `memory.enabled: true`. The
+// markdown-journal `memory.Append` writer in `internal/memory` is still
+// available via the JSON-RPC `memory.append` handler and the plugin
+// host service, but no LLM-facing tool wraps it anymore.
 func New(workspace string) *Registry {
 	r := &Registry{
 		workspace: workspace,
@@ -63,7 +69,6 @@ func New(workspace string) *Registry {
 	r.Register(&bashTool{ws: workspace})
 	r.Register(&globTool{ws: workspace})
 	r.Register(&grepTool{ws: workspace})
-	r.Register(&rememberTool{ws: workspace})
 	return r
 }
 

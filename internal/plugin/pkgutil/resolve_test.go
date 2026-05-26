@@ -70,6 +70,49 @@ func TestResolvePluginCmd_FallsBackToPATH(t *testing.T) {
 	}
 }
 
+func TestResolvePluginCmd_FallsBackToTalonPluginPath(t *testing.T) {
+	dir := t.TempDir()
+	binName := "talon-resolve-test-plugin-dir"
+	bin := filepath.Join(dir, binName)
+	if err := os.WriteFile(bin, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TALON_PLUGIN_PATH", dir)
+
+	configured := filepath.Join(t.TempDir(), binName)
+	got, err := pkgutil.ResolvePluginCmd("p", []string{configured, "--flag"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0] != bin || got[1] != "--flag" {
+		t.Errorf("got %v, want [%s --flag]", got, bin)
+	}
+}
+
+func TestResolvePluginCmd_FallsBackToHomeTalonPlugins(t *testing.T) {
+	home := t.TempDir()
+	pluginDir := filepath.Join(home, ".talon", "plugins")
+	if err := os.MkdirAll(pluginDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	binName := "talon-resolve-test-plugin-home"
+	bin := filepath.Join(pluginDir, binName)
+	if err := os.WriteFile(bin, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv("TALON_PLUGIN_PATH", "")
+
+	configured := filepath.Join(t.TempDir(), binName)
+	got, err := pkgutil.ResolvePluginCmd("p", []string{configured})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got[0] != bin {
+		t.Errorf("got %q, want ~/.talon/plugins hit %q", got[0], bin)
+	}
+}
+
 func TestResolvePluginCmd_EmptyCmd(t *testing.T) {
 	if _, err := pkgutil.ResolvePluginCmd("p", nil); err == nil || !strings.Contains(err.Error(), "empty Cmd") {
 		t.Errorf("got %v, want empty Cmd error", err)

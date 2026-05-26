@@ -15,9 +15,28 @@ import (
 	"github.com/guygrigsby/jess/memory"
 
 	"github.com/guygrigsby/talon/internal/agentcontext"
+	"github.com/guygrigsby/talon/internal/openclaw"
 	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
 	"github.com/guygrigsby/talon/internal/provider"
 )
+
+// AgentcoreRunFn is the function signature `WithAgentcoreRunner`
+// expects. Implemented by cmd/talon so that internal/server
+// doesn't take a direct dependency on internal/agentcore_chat
+// (which transitively imports agentcore + LiteLLM — heavy and
+// orthogonal to the gateway's other responsibilities).
+//
+// Returns the final assistant text and any error. Streaming
+// happens through the supplied emit closures; one closure per
+// event kind matches the legacy ChatHandler.emit* surface.
+type AgentcoreRunFn func(
+	ctx context.Context,
+	agentID, sessionKey, runID, userText, modelOverride string,
+	emitText func(seq int, state, full, delta string),
+	emitToolStart func(toolCallID, name, args string),
+	emitToolResult func(toolCallID, name, output string, isErr bool),
+	emitError func(seq int, kind, msg string),
+) (finalText string, err error)
 
 // AgentResolver looks up the model an agent should drive a chat with. The
 // gateway's chat.send handler calls this once per send to translate the
@@ -81,9 +100,9 @@ type ChatStore struct {
 //   - "user"      → Content
 //   - "assistant" → Content (may be empty if turn was tool-only) + ToolCalls
 //   - "tool"      → Content (tool output) + ToolCallID + ToolName
-//                   (ToolName is denormalized from the originating ToolCall
-//                   so chat.history rows can label the result without
-//                   re-walking the assistant turn that issued the call.)
+//     (ToolName is denormalized from the originating ToolCall
+//     so chat.history rows can label the result without
+//     re-walking the assistant turn that issued the call.)
 type ChatMessage struct {
 	Role       string
 	Content    string
@@ -180,8 +199,16 @@ type ChatHandler struct {
 	store     *ChatStore
 	sessions  *SessionStore
 	costs     *CostTracker
-	memory    *MemoryConfig // optional jess/memory sidecar; nil = no augmentation
-	sinks     *SinkRegistry // optional fan-out registry; emit broadcasts in addition to the direct WS push
+	memory    *MemoryConfig  // optional jess/memory sidecar; nil = no augmentation
+	sinks     *SinkRegistry  // optional fan-out registry; emit broadcasts in addition to the direct WS push
+	paths     openclaw.Paths // injected for gateway features that need merged config
+
+	// agentcoreRun is the alternative chat-dispatch path that goes
+	// through internal/agentcore_chat. handleSend selects it by
+	// provider when present. Settable via WithAgentcoreRunner so
+	// cmd/talon wires it without server taking a direct dep on
+	// internal/agentcore_chat.
+	agentcoreRun AgentcoreRunFn
 
 	// runs tracks active runs by "sessionKey|idempotencyKey" so a duplicate
 	// chat.send returns the same runId without spawning a second stream.
@@ -229,6 +256,22 @@ func (h *ChatHandler) WithTools(ws WorkspaceResolver, mk func(workspace string) 
 // the model that gets queried.
 func (h *ChatHandler) WithSessions(sessions *SessionStore) *ChatHandler {
 	h.sessions = sessions
+	return h
+}
+
+// WithPaths attaches the merged-config Paths for gateway wiring
+// that needs to read live config.
+func (h *ChatHandler) WithPaths(paths openclaw.Paths) *ChatHandler {
+	h.paths = paths
+	return h
+}
+
+// WithAgentcoreRunner wires the alternative chat-dispatch path
+// through internal/agentcore_chat. handleSend selects this path by
+// provider when the runner is present; without it all sends stay
+// on the legacy path.
+func (h *ChatHandler) WithAgentcoreRunner(fn AgentcoreRunFn) *ChatHandler {
+	h.agentcoreRun = fn
 	return h
 }
 
@@ -319,13 +362,13 @@ func (h *ChatHandler) handleHistory(ctx context.Context, hc HandlerCtx, params j
 //
 //   - "user":      flat {role:"user", content:[{type:"text",text}]}
 //   - "assistant": content array carries any visible text plus tool_use
-//                  blocks (one per ToolCall). Empty text is omitted so a
-//                  pure tool-call turn doesn't render a blank bubble.
+//     blocks (one per ToolCall). Empty text is omitted so a
+//     pure tool-call turn doesn't render a blank bubble.
 //   - "tool":      role re-labeled to "toolResult" — that's what
-//                  openclaw's chat-message renderer matches on. Includes
-//                  toolCallId + toolName at the row level so the UI can
-//                  label the card with the actual tool name (e.g. "glob")
-//                  instead of falling back to a generic "tool" sublabel.
+//     openclaw's chat-message renderer matches on. Includes
+//     toolCallId + toolName at the row level so the UI can
+//     label the card with the actual tool name (e.g. "glob")
+//     instead of falling back to a generic "tool" sublabel.
 func renderHistoryRow(sessionKey string, i int, m ChatMessage) map[string]any {
 	row := map[string]any{
 		"__openclaw": openclawMeta{ID: messageID(sessionKey, i), Seq: i + 1},
@@ -429,6 +472,16 @@ func (h *ChatHandler) handleSend(ctx context.Context, hc HandlerCtx, params json
 	// overhead for users not opting in.
 	if err := h.costs.Allow(agentID); err != nil {
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "chat.send: " + err.Error()}
+	}
+
+	// agentcore dispatch (Phase 3 of the migration plan). Routing
+	// is automatic per-provider: OpenAI and Anthropic stay on the
+	// legacy path while provider-specific LiteLLM issues are still
+	// being worked through; other providers go through
+	// internal/agentcore_chat. No user-facing config knob — the
+	// right path is chosen from the model id's provider segment.
+	if model, err := h.resolveModelForRouting(agentID, p.SessionKey); err == nil && h.shouldUseAgentcoreFor(model.String()) {
+		return h.handleSendViaAgentcore(ctx, p, agentID)
 	}
 
 	model, err := h.resolver.PrimaryModel(agentID)
@@ -957,9 +1010,9 @@ type ChatEventPayload struct {
 }
 
 type ChatEventMessage struct {
-	Phase   string                  `json:"phase"`
-	Role    string                  `json:"role"`
-	Content []ChatEventContentPart  `json:"content"`
+	Phase   string                 `json:"phase"`
+	Role    string                 `json:"role"`
+	Content []ChatEventContentPart `json:"content"`
 }
 
 type ChatEventContentPart struct {
@@ -1108,8 +1161,8 @@ func (h *ChatHandler) emitError(chatSessionKey, runID, sessionKey string, seq in
 //   - "agent:<agentId>:<conversationId>" → agentId   (canonical form)
 //   - "agent:<agentId>"                  → agentId   (legacy short form)
 //   - "<agentId>"                        → agentId   (bare; how the openclaw
-//                                                    web UI passes the URL
-//                                                    `?session=` param)
+//     web UI passes the URL
+//     `?session=` param)
 //
 // Anything with a colon but no `agent:` prefix is rejected as ambiguous and
 // returns "". An empty input also returns "".
@@ -1142,4 +1195,3 @@ func newRunID() (string, error) {
 	}
 	return "run_" + hex.EncodeToString(b), nil
 }
-

@@ -91,6 +91,10 @@ func (c *channelPluginClient) SendChannelMessage(ctx context.Context, in *pb.Sen
 	}
 	return &pb.SendChannelMessageResponse{Ok: true}, nil
 }
+func (c *channelPluginClient) ListProviderModels(context.Context, *pb.ListProviderModelsRequest, ...grpc.CallOption) (*pb.ListProviderModelsResponse, error) {
+	return nil, nil
+}
+
 // recordingRunner is a SessionRunner that captures every call and
 // returns a canned reply per agent. Used by the dispatcher tests to
 // verify sessionKey derivation and routing.

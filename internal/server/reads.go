@@ -14,7 +14,7 @@ import (
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/memory"
 	"github.com/guygrigsby/talon/internal/openclaw"
-	"github.com/guygrigsby/talon/internal/provider/catalog"
+	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
 	"github.com/tidwall/gjson"
 )
 
@@ -24,6 +24,10 @@ import (
 // than being bolted onto ChatHandler.
 type ReadHandler struct {
 	paths openclaw.Paths
+	// host, when non-nil, lets models.list surface models advertised
+	// by loaded plugins via their Manifest.OffersProviders. nil host
+	// = catalog + user-config only.
+	host *plugin.Host
 }
 
 // NewReadHandler constructs a ReadHandler bound to the given Paths. The
@@ -31,6 +35,15 @@ type ReadHandler struct {
 // already-cached overlay JSON).
 func NewReadHandler(paths openclaw.Paths) *ReadHandler {
 	return &ReadHandler{paths: paths}
+}
+
+// WithHost wires the plugin host so models.list can enumerate
+// plugin-advertised providers (the bridge for plugin-dispatched
+// model lists like the deepseek Go plugin's deepseekModels).
+// Chainable; returns h.
+func (h *ReadHandler) WithHost(host *plugin.Host) *ReadHandler {
+	h.host = host
+	return h
 }
 
 // Register wires agents.list, models.list, config.{get,schema},
@@ -137,13 +150,16 @@ func resolveModelDisplayName(merged []byte, fullID string) string {
 	if !ok || prov == "" || id == "" {
 		return ""
 	}
-	// User config wins.
+	// User config wins. There is no in-tree catalog fallback —
+	// names that aren't in user config come from plugin discovery
+	// at models.list time (ModelDescriptor.Name), which is a
+	// different code path. Display callers (agents.list) get the
+	// id as a final fallback.
 	q := fmt.Sprintf("models.providers.%s.models.#(id==%q).name", prov, id)
 	if v := gjson.GetBytes(merged, q); v.Exists() && v.Str != "" {
 		return v.Str
 	}
-	// Catalog fallback.
-	return catalog.LookupName(fullID)
+	return ""
 }
 
 func hasAgentID(agents []map[string]any, id string) bool {
@@ -157,7 +173,17 @@ func hasAgentID(agents []map[string]any, id string) bool {
 
 // --- models.list -----------------------------------------------------------
 
-func (h *ReadHandler) handleModelsList(ctx context.Context, hc HandlerCtx, _ json.RawMessage) (any, *FrameError) {
+func (h *ReadHandler) handleModelsList(ctx context.Context, hc HandlerCtx, params json.RawMessage) (any, *FrameError) {
+	// Optional {refresh: true} bypasses each plugin's ListProviderModels
+	// cache so a user-driven refresh sees newly-pulled / newly-released
+	// models without waiting for the TTL.
+	var p struct {
+		Refresh bool `json:"refresh"`
+	}
+	if len(params) > 0 {
+		_ = json.Unmarshal(params, &p)
+	}
+
 	merged, err := config.MergedBytes(h.paths)
 	if err != nil {
 		return nil, &FrameError{Code: ErrCodeInternal, Message: "models.list: " + err.Error()}
@@ -187,26 +213,11 @@ func (h *ReadHandler) handleModelsList(ctx context.Context, hc HandlerCtx, _ jso
 		rowsByKey[key] = row
 	}
 
-	// Built-in catalog first. Provides a sensible default model list
-	// for fresh installs that haven't filled out models.providers.<X>.
-	for _, m := range catalog.DefaultCatalog() {
-		key := m.Provider + "/" + m.ID
-		row := map[string]any{
-			"id":            m.ID,
-			"provider":      m.Provider,
-			"contextWindow": m.ContextWindow,
-			"reasoning":     m.Reasoning,
-		}
-		if m.Name != "" {
-			row["name"] = m.Name
-		}
-		if len(m.Input) > 0 {
-			row["input"] = append([]string(nil), m.Input...)
-		}
-		addRow(key, row)
-	}
-
-	// User config overlays — replace catalog entries on collision.
+	// User config overlays — first source. There is no in-tree
+	// catalog floor: models come from (1) user config, (2) plugin
+	// ListProviderModels RPC, (3) LM Studio dynamic discovery. A
+	// fresh install with no plugins loaded and no user config
+	// returns zero rows by design.
 	gjson.GetBytes(merged, "models.providers").ForEach(func(provName, prov gjson.Result) bool {
 		providerName := provName.Str
 		prov.Get("models").ForEach(func(_, m gjson.Result) bool {
@@ -224,6 +235,14 @@ func (h *ReadHandler) handleModelsList(ctx context.Context, hc HandlerCtx, _ jso
 			if name := m.Get("name").Str; name != "" {
 				row["name"] = name
 			}
+			if api := m.Get("api").Str; api != "" {
+				row["api"] = api
+			} else if api := prov.Get("api").Str; api != "" {
+				row["api"] = api
+			}
+			if maxTokens := m.Get("maxTokens").Int(); maxTokens > 0 {
+				row["maxTokens"] = maxTokens
+			}
 			var inputs []string
 			m.Get("input").ForEach(func(_, item gjson.Result) bool {
 				if item.Type == gjson.String && item.Str != "" {
@@ -234,11 +253,28 @@ func (h *ReadHandler) handleModelsList(ctx context.Context, hc HandlerCtx, _ jso
 			if inputs != nil {
 				row["input"] = inputs
 			}
+			if cost := modelCostForListRow(merged, key, m); cost != nil {
+				row["cost"] = cost
+			}
 			addRow(key, row)
 			return true
 		})
 		return true
 	})
+
+	// Plugin-advertised providers. Each loaded plugin's manifest
+	// Plugin model discovery (ListProviderModels RPC + manifest
+	// static lists) is intentionally NOT consulted here. Discovery
+	// produced too much noise — every provider's /v1/models endpoint
+	// surfaces dozens of variants the user doesn't actually use,
+	// drowning out the ones they care about. The picker now shows
+	// only what the user explicitly listed in
+	// `models.providers.<name>.models[]` (plus LM Studio's runtime
+	// probe below, which has no static equivalent).
+	//
+	// Plugins still implement ListProviderModels — it's available
+	// for `talon models discover` style commands if we add them
+	// later. It's just not auto-merged into the picker.
 
 	// LM Studio discovery: ask the local server what's actually
 	// loaded and merge in any rows we don't already have. Failures
@@ -274,6 +310,44 @@ func (h *ReadHandler) handleModelsList(ctx context.Context, hc HandlerCtx, _ jso
 	})
 
 	return map[string]any{"models": models}, nil
+}
+
+func modelCostForListRow(merged []byte, modelKey string, model gjson.Result) map[string]any {
+	cost := map[string]any{}
+	if raw := model.Get("cost"); raw.Exists() {
+		copyCostField(cost, raw, "input")
+		copyCostField(cost, raw, "output")
+		copyCostField(cost, raw, "cacheRead")
+		copyCostField(cost, raw, "cacheWrite")
+		if len(cost) > 0 {
+			cost["source"] = "catalog"
+		}
+	}
+
+	if override, ok := configuredModelPrice(merged, modelKey); ok {
+		cost["input"] = override.In
+		cost["output"] = override.Out
+		cost["source"] = "priceUsdPer1M"
+		return cost
+	}
+
+	if len(cost) > 0 {
+		return cost
+	}
+	if price, ok := builtinModelPrices[modelKey]; ok {
+		return map[string]any{
+			"input":  price.In,
+			"output": price.Out,
+			"source": "builtin",
+		}
+	}
+	return nil
+}
+
+func copyCostField(out map[string]any, raw gjson.Result, field string) {
+	if v := raw.Get(field); v.Exists() && v.Type == gjson.Number {
+		out[field] = v.Float()
+	}
 }
 
 // --- agent.identity.get ----------------------------------------------------
@@ -363,9 +437,9 @@ type identityFields struct {
 // about. The expected format (per openclaw's bootstrap) is a markdown
 // bullet list:
 //
-//	- **Name:** Clawdia
-//	- **Emoji:** 🦞
-//	- **Avatar:** avatars/openclaw.png
+//   - **Name:** Clawdia
+//   - **Emoji:** 🦞
+//   - **Avatar:** avatars/openclaw.png
 //
 // Lines may use either `- **Key:** value` or `- **Key:**\n  value`. Trailing
 // italics or markdown decorations on the value line are stripped. Empty
@@ -561,12 +635,12 @@ func resolveWorkspace(merged []byte, agentID string) string {
 // False negatives are worse than false positives here — match cautiously
 // and trust the user to grep before sharing config dumps.
 var secretLeafKeys = map[string]bool{
-	"token":     true,
-	"botToken":  true,
-	"password":  true,
-	"apiKey":    true,
-	"secret":    true,
-	"secretKey": true,
+	"token":        true,
+	"botToken":     true,
+	"password":     true,
+	"apiKey":       true,
+	"secret":       true,
+	"secretKey":    true,
 	"clientSecret": true,
 	"refreshToken": true,
 	"accessToken":  true,

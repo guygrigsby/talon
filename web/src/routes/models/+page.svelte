@@ -15,13 +15,16 @@
 	let aliasSaving = $state<Record<string, boolean>>({});
 	let aliasError = $state<Record<string, string>>({});
 
+	// Debounce window for autosave. Long enough to coalesce typing,
+	// short enough that focus-and-tab-away feels immediate.
+	const SAVE_DEBOUNCE_MS = 500;
+	const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
 	async function load() {
 		loading = true;
 		loadError = null;
 		try {
 			models = await loadSelectableModels();
-			// Seed draft inputs with the on-disk alias so an unchanged
-			// row doesn't show a "save" affordance.
 			aliasDrafts = Object.fromEntries(models.map((m) => [modelKey(m), m.alias ?? '']));
 			aliasError = {};
 		} catch (err) {
@@ -41,9 +44,6 @@
 		aliasError = { ...aliasError };
 		try {
 			await setModelAlias(m.provider, m.id, next);
-			// Reflect locally so the row's "dirty" state clears
-			// without a full reload. A subsequent Refresh would
-			// also pick this up.
 			m.alias = next || undefined;
 		} catch (err) {
 			aliasError = { ...aliasError, [key]: err instanceof Error ? err.message : String(err) };
@@ -52,13 +52,38 @@
 		}
 	}
 
-	function isDirty(m: ModelEntry): boolean {
+	function scheduleSave(m: ModelEntry) {
 		const key = modelKey(m);
-		return (aliasDrafts[key] ?? '').trim() !== (m.alias ?? '').trim();
+		const existing = saveTimers.get(key);
+		if (existing) clearTimeout(existing);
+		saveTimers.set(
+			key,
+			setTimeout(() => {
+				saveTimers.delete(key);
+				saveAlias(m);
+			}, SAVE_DEBOUNCE_MS)
+		);
+	}
+
+	function flushSave(m: ModelEntry) {
+		const key = modelKey(m);
+		const existing = saveTimers.get(key);
+		if (existing) {
+			clearTimeout(existing);
+			saveTimers.delete(key);
+		}
+		saveAlias(m);
 	}
 
 	$effect(() => {
 		load();
+	});
+
+	$effect(() => {
+		return () => {
+			for (const id of saveTimers.values()) clearTimeout(id);
+			saveTimers.clear();
+		};
 	});
 
 	type Group = {
@@ -142,31 +167,20 @@
 								<td class="t-num num">{ctxLabel(m.contextWindow)}</td>
 								<td>{m.reasoning ? 'yes' : ''}</td>
 								<td class="alias-cell">
-									<form
-										class="alias-form"
-										onsubmit={(e) => {
-											e.preventDefault();
-											saveAlias(m);
-										}}
-									>
+									<div class="alias-row">
 										<input
 											class="alias-input t-mono"
 											type="text"
 											placeholder="(no alias)"
 											aria-label="Alias for {m.provider}/{m.id}"
 											bind:value={aliasDrafts[key]}
-											disabled={aliasSaving[key]}
+											oninput={() => scheduleSave(m)}
+											onblur={() => flushSave(m)}
 										/>
-										{#if isDirty(m)}
-											<button
-												type="submit"
-												class="alias-save"
-												disabled={aliasSaving[key]}
-											>
-												{aliasSaving[key] ? '…' : 'save'}
-											</button>
+										{#if aliasSaving[key]}
+											<span class="alias-status t-mono" aria-live="polite">saving…</span>
 										{/if}
-									</form>
+									</div>
 									{#if aliasError[key]}
 										<div class="alias-err t-mono" role="status">{aliasError[key]}</div>
 									{/if}
@@ -306,10 +320,11 @@
 	.alias-cell {
 		min-width: 160px;
 	}
-	.alias-form {
+	.alias-row {
 		display: inline-flex;
-		gap: 4px;
+		gap: var(--s-2);
 		align-items: center;
+		width: 100%;
 	}
 	.alias-input {
 		background: var(--canvas);
@@ -319,29 +334,17 @@
 		font-size: var(--fs-xs);
 		color: var(--ink);
 		min-height: 28px;
-		width: 100%;
+		flex: 1;
 		min-width: 0;
 	}
 	.alias-input:focus-visible {
 		outline: 2px solid var(--accent);
 		outline-offset: 1px;
 	}
-	.alias-input:disabled {
-		opacity: 0.6;
-	}
-	.alias-save {
-		background: var(--accent);
-		color: white;
-		border: 0;
-		border-radius: var(--radius);
-		padding: 3px var(--s-2);
+	.alias-status {
 		font-size: var(--fs-xs);
-		cursor: pointer;
-		min-height: 28px;
-	}
-	.alias-save:disabled {
-		opacity: 0.6;
-		cursor: not-allowed;
+		color: var(--ink-3);
+		white-space: nowrap;
 	}
 	.alias-err {
 		font-size: var(--fs-xs);

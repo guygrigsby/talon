@@ -80,6 +80,22 @@ func TestCostTracker_RecordHonorsConfigPriceOverride(t *testing.T) {
 	}
 }
 
+func TestCostTracker_RecordHonorsDottedModelConfigPriceOverride(t *testing.T) {
+	paths := readFixture(t, "{}")
+	cfg := `{
+		"agents":{"defaults":{"dailyUsdCap":1.00}},
+		"models":{"openai/gpt-5.4-mini":{"priceUsdPer1M":{"in":100.0,"out":100.0}}}
+	}`
+	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := NewCostTracker(paths)
+	c.Record("main", "openai/gpt-5.4-mini", provider.Usage{InputTokens: 50_000, OutputTokens: 50_000})
+	if err := c.Allow("main"); err == nil {
+		t.Fatal("expected dotted config-override price to trip cap")
+	}
+}
+
 func TestCostTracker_UnknownModelIsZeroCost(t *testing.T) {
 	paths := readFixture(t, "{}")
 	if err := os.WriteFile(paths.Talon.Config, []byte(`{"agents":{"defaults":{"dailyUsdCap":1.00}}}`), 0o600); err != nil {

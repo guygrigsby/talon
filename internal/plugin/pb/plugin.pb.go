@@ -487,7 +487,10 @@ type ProviderSpec struct {
 	// "deepseek", etc.).
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Concrete model ids this provider serves. If empty, the host treats
-	// the provider as accepting any model (caller-validated).
+	// the provider as accepting any model (caller-validated). For
+	// multi-tenant plugins this often stays empty in the manifest and
+	// the host calls Plugin.ListProviderModels at request time to get
+	// a live list (with per-plugin caching).
 	Models        []string `protobuf:"bytes,2,rep,name=models,proto3" json:"models,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -537,6 +540,87 @@ func (x *ProviderSpec) GetModels() []string {
 	return nil
 }
 
+// ModelDescriptor is one row in a ListProviderModelsResponse. Fields
+// mirror what models.list emits over the wire so the host can pass
+// them through with no per-provider munging. Empty/zero values mean
+// "not advertised" — the FE renders the column conditionally.
+type ModelDescriptor struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	ContextWindow int64                  `protobuf:"varint,3,opt,name=context_window,json=contextWindow,proto3" json:"context_window,omitempty"`
+	Reasoning     bool                   `protobuf:"varint,4,opt,name=reasoning,proto3" json:"reasoning,omitempty"`
+	// Input modalities — typically ["text"] or ["text","image"].
+	Input         []string `protobuf:"bytes,5,rep,name=input,proto3" json:"input,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ModelDescriptor) Reset() {
+	*x = ModelDescriptor{}
+	mi := &file_plugin_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ModelDescriptor) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ModelDescriptor) ProtoMessage() {}
+
+func (x *ModelDescriptor) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ModelDescriptor.ProtoReflect.Descriptor instead.
+func (*ModelDescriptor) Descriptor() ([]byte, []int) {
+	return file_plugin_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ModelDescriptor) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ModelDescriptor) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *ModelDescriptor) GetContextWindow() int64 {
+	if x != nil {
+		return x.ContextWindow
+	}
+	return 0
+}
+
+func (x *ModelDescriptor) GetReasoning() bool {
+	if x != nil {
+		return x.Reasoning
+	}
+	return false
+}
+
+func (x *ModelDescriptor) GetInput() []string {
+	if x != nil {
+		return x.Input
+	}
+	return nil
+}
+
 // Delta is one event in a streaming completion. Mirrors provider.Delta;
 // only one oneof variant is set per message.
 type Delta struct {
@@ -555,7 +639,7 @@ type Delta struct {
 
 func (x *Delta) Reset() {
 	*x = Delta{}
-	mi := &file_plugin_proto_msgTypes[5]
+	mi := &file_plugin_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -567,7 +651,7 @@ func (x *Delta) String() string {
 func (*Delta) ProtoMessage() {}
 
 func (x *Delta) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[5]
+	mi := &file_plugin_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -580,7 +664,7 @@ func (x *Delta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Delta.ProtoReflect.Descriptor instead.
 func (*Delta) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{5}
+	return file_plugin_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Delta) GetKind() isDelta_Kind {
@@ -680,7 +764,7 @@ type Usage struct {
 
 func (x *Usage) Reset() {
 	*x = Usage{}
-	mi := &file_plugin_proto_msgTypes[6]
+	mi := &file_plugin_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -692,7 +776,7 @@ func (x *Usage) String() string {
 func (*Usage) ProtoMessage() {}
 
 func (x *Usage) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[6]
+	mi := &file_plugin_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -705,7 +789,7 @@ func (x *Usage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Usage.ProtoReflect.Descriptor instead.
 func (*Usage) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{6}
+	return file_plugin_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *Usage) GetInputTokens() int32 {
@@ -753,7 +837,7 @@ type InitializeRequest struct {
 
 func (x *InitializeRequest) Reset() {
 	*x = InitializeRequest{}
-	mi := &file_plugin_proto_msgTypes[7]
+	mi := &file_plugin_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -765,7 +849,7 @@ func (x *InitializeRequest) String() string {
 func (*InitializeRequest) ProtoMessage() {}
 
 func (x *InitializeRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[7]
+	mi := &file_plugin_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -778,7 +862,7 @@ func (x *InitializeRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitializeRequest.ProtoReflect.Descriptor instead.
 func (*InitializeRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{7}
+	return file_plugin_proto_rawDescGZIP(), []int{8}
 }
 
 // Deprecated: Marked as deprecated in plugin.proto.
@@ -813,7 +897,7 @@ type InitializeResponse struct {
 
 func (x *InitializeResponse) Reset() {
 	*x = InitializeResponse{}
-	mi := &file_plugin_proto_msgTypes[8]
+	mi := &file_plugin_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -825,7 +909,7 @@ func (x *InitializeResponse) String() string {
 func (*InitializeResponse) ProtoMessage() {}
 
 func (x *InitializeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[8]
+	mi := &file_plugin_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -838,7 +922,7 @@ func (x *InitializeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use InitializeResponse.ProtoReflect.Descriptor instead.
 func (*InitializeResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{8}
+	return file_plugin_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *InitializeResponse) GetManifest() *Manifest {
@@ -856,7 +940,7 @@ type ShutdownRequest struct {
 
 func (x *ShutdownRequest) Reset() {
 	*x = ShutdownRequest{}
-	mi := &file_plugin_proto_msgTypes[9]
+	mi := &file_plugin_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -868,7 +952,7 @@ func (x *ShutdownRequest) String() string {
 func (*ShutdownRequest) ProtoMessage() {}
 
 func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[9]
+	mi := &file_plugin_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -881,7 +965,7 @@ func (x *ShutdownRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownRequest.ProtoReflect.Descriptor instead.
 func (*ShutdownRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{9}
+	return file_plugin_proto_rawDescGZIP(), []int{10}
 }
 
 type ShutdownResponse struct {
@@ -892,7 +976,7 @@ type ShutdownResponse struct {
 
 func (x *ShutdownResponse) Reset() {
 	*x = ShutdownResponse{}
-	mi := &file_plugin_proto_msgTypes[10]
+	mi := &file_plugin_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -904,7 +988,7 @@ func (x *ShutdownResponse) String() string {
 func (*ShutdownResponse) ProtoMessage() {}
 
 func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[10]
+	mi := &file_plugin_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -917,7 +1001,7 @@ func (x *ShutdownResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ShutdownResponse.ProtoReflect.Descriptor instead.
 func (*ShutdownResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{10}
+	return file_plugin_proto_rawDescGZIP(), []int{11}
 }
 
 type RunToolRequest struct {
@@ -936,7 +1020,7 @@ type RunToolRequest struct {
 
 func (x *RunToolRequest) Reset() {
 	*x = RunToolRequest{}
-	mi := &file_plugin_proto_msgTypes[11]
+	mi := &file_plugin_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -948,7 +1032,7 @@ func (x *RunToolRequest) String() string {
 func (*RunToolRequest) ProtoMessage() {}
 
 func (x *RunToolRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[11]
+	mi := &file_plugin_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -961,7 +1045,7 @@ func (x *RunToolRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunToolRequest.ProtoReflect.Descriptor instead.
 func (*RunToolRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{11}
+	return file_plugin_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *RunToolRequest) GetToolName() string {
@@ -1005,7 +1089,7 @@ type RunToolResponse struct {
 
 func (x *RunToolResponse) Reset() {
 	*x = RunToolResponse{}
-	mi := &file_plugin_proto_msgTypes[12]
+	mi := &file_plugin_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1017,7 +1101,7 @@ func (x *RunToolResponse) String() string {
 func (*RunToolResponse) ProtoMessage() {}
 
 func (x *RunToolResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[12]
+	mi := &file_plugin_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1030,7 +1114,7 @@ func (x *RunToolResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunToolResponse.ProtoReflect.Descriptor instead.
 func (*RunToolResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{12}
+	return file_plugin_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RunToolResponse) GetOutput() string {
@@ -1050,7 +1134,10 @@ func (x *RunToolResponse) GetIsError() bool {
 type StreamCompletionRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Model id WITHOUT the provider prefix (e.g. "gpt-5.4-mini") — the
-	// routing already picked this provider, so the prefix is implicit.
+	// routing already picked this provider, so the prefix is implicit
+	// for single-provider plugins. Multi-tenant plugins (one process
+	// serving multiple providers) need the provider name too — see
+	// the `provider` field below.
 	Model    string      `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`
 	System   string      `protobuf:"bytes,2,opt,name=system,proto3" json:"system,omitempty"`
 	Messages []*Message  `protobuf:"bytes,3,rep,name=messages,proto3" json:"messages,omitempty"`
@@ -1059,13 +1146,19 @@ type StreamCompletionRequest struct {
 	// unset stays distinct from zero.
 	Temperature     *float64 `protobuf:"fixed64,10,opt,name=temperature,proto3,oneof" json:"temperature,omitempty"`
 	MaxOutputTokens int32    `protobuf:"varint,11,opt,name=max_output_tokens,json=maxOutputTokens,proto3" json:"max_output_tokens,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Provider name the host routed to (matches one of the plugin's
+	// Manifest.OffersProviders entries). Populated by the host so
+	// multi-tenant plugins (e.g. openai-compat serving openai +
+	// deepseek + mistral) can pick the right backend. Single-provider
+	// plugins can ignore this — it's redundant with their identity.
+	Provider      string `protobuf:"bytes,12,opt,name=provider,proto3" json:"provider,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *StreamCompletionRequest) Reset() {
 	*x = StreamCompletionRequest{}
-	mi := &file_plugin_proto_msgTypes[13]
+	mi := &file_plugin_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1077,7 +1170,7 @@ func (x *StreamCompletionRequest) String() string {
 func (*StreamCompletionRequest) ProtoMessage() {}
 
 func (x *StreamCompletionRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[13]
+	mi := &file_plugin_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1090,7 +1183,7 @@ func (x *StreamCompletionRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamCompletionRequest.ProtoReflect.Descriptor instead.
 func (*StreamCompletionRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{13}
+	return file_plugin_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *StreamCompletionRequest) GetModel() string {
@@ -1135,6 +1228,114 @@ func (x *StreamCompletionRequest) GetMaxOutputTokens() int32 {
 	return 0
 }
 
+func (x *StreamCompletionRequest) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+type ListProviderModelsRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Provider name to enumerate. Multi-tenant plugins (e.g.
+	// openai-compat) read this to pick the right backend; single-
+	// provider plugins (e.g. anthropic) can ignore it.
+	Provider string `protobuf:"bytes,1,opt,name=provider,proto3" json:"provider,omitempty"`
+	// When true, the plugin should bypass its cache and re-query the
+	// upstream. Off by default to keep models.list fast.
+	Refresh       bool `protobuf:"varint,2,opt,name=refresh,proto3" json:"refresh,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListProviderModelsRequest) Reset() {
+	*x = ListProviderModelsRequest{}
+	mi := &file_plugin_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListProviderModelsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListProviderModelsRequest) ProtoMessage() {}
+
+func (x *ListProviderModelsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListProviderModelsRequest.ProtoReflect.Descriptor instead.
+func (*ListProviderModelsRequest) Descriptor() ([]byte, []int) {
+	return file_plugin_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *ListProviderModelsRequest) GetProvider() string {
+	if x != nil {
+		return x.Provider
+	}
+	return ""
+}
+
+func (x *ListProviderModelsRequest) GetRefresh() bool {
+	if x != nil {
+		return x.Refresh
+	}
+	return false
+}
+
+type ListProviderModelsResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Models        []*ModelDescriptor     `protobuf:"bytes,1,rep,name=models,proto3" json:"models,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListProviderModelsResponse) Reset() {
+	*x = ListProviderModelsResponse{}
+	mi := &file_plugin_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListProviderModelsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListProviderModelsResponse) ProtoMessage() {}
+
+func (x *ListProviderModelsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_plugin_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListProviderModelsResponse.ProtoReflect.Descriptor instead.
+func (*ListProviderModelsResponse) Descriptor() ([]byte, []int) {
+	return file_plugin_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ListProviderModelsResponse) GetModels() []*ModelDescriptor {
+	if x != nil {
+		return x.Models
+	}
+	return nil
+}
+
 type StartChannelRequest struct {
 	state       protoimpl.MessageState `protogen:"open.v1"`
 	ChannelName string                 `protobuf:"bytes,1,opt,name=channel_name,json=channelName,proto3" json:"channel_name,omitempty"`
@@ -1147,7 +1348,7 @@ type StartChannelRequest struct {
 
 func (x *StartChannelRequest) Reset() {
 	*x = StartChannelRequest{}
-	mi := &file_plugin_proto_msgTypes[14]
+	mi := &file_plugin_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1159,7 +1360,7 @@ func (x *StartChannelRequest) String() string {
 func (*StartChannelRequest) ProtoMessage() {}
 
 func (x *StartChannelRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[14]
+	mi := &file_plugin_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1172,7 +1373,7 @@ func (x *StartChannelRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartChannelRequest.ProtoReflect.Descriptor instead.
 func (*StartChannelRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{14}
+	return file_plugin_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *StartChannelRequest) GetChannelName() string {
@@ -1203,7 +1404,7 @@ type IncomingChannelMessage struct {
 
 func (x *IncomingChannelMessage) Reset() {
 	*x = IncomingChannelMessage{}
-	mi := &file_plugin_proto_msgTypes[15]
+	mi := &file_plugin_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1215,7 +1416,7 @@ func (x *IncomingChannelMessage) String() string {
 func (*IncomingChannelMessage) ProtoMessage() {}
 
 func (x *IncomingChannelMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[15]
+	mi := &file_plugin_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1228,7 +1429,7 @@ func (x *IncomingChannelMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IncomingChannelMessage.ProtoReflect.Descriptor instead.
 func (*IncomingChannelMessage) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{15}
+	return file_plugin_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *IncomingChannelMessage) GetChannel() string {
@@ -1284,7 +1485,7 @@ type SendChannelMessageRequest struct {
 
 func (x *SendChannelMessageRequest) Reset() {
 	*x = SendChannelMessageRequest{}
-	mi := &file_plugin_proto_msgTypes[16]
+	mi := &file_plugin_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1296,7 +1497,7 @@ func (x *SendChannelMessageRequest) String() string {
 func (*SendChannelMessageRequest) ProtoMessage() {}
 
 func (x *SendChannelMessageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[16]
+	mi := &file_plugin_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1309,7 +1510,7 @@ func (x *SendChannelMessageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendChannelMessageRequest.ProtoReflect.Descriptor instead.
 func (*SendChannelMessageRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{16}
+	return file_plugin_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *SendChannelMessageRequest) GetChannel() string {
@@ -1342,7 +1543,7 @@ type SendChannelMessageResponse struct {
 
 func (x *SendChannelMessageResponse) Reset() {
 	*x = SendChannelMessageResponse{}
-	mi := &file_plugin_proto_msgTypes[17]
+	mi := &file_plugin_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1354,7 +1555,7 @@ func (x *SendChannelMessageResponse) String() string {
 func (*SendChannelMessageResponse) ProtoMessage() {}
 
 func (x *SendChannelMessageResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[17]
+	mi := &file_plugin_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1367,7 +1568,7 @@ func (x *SendChannelMessageResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SendChannelMessageResponse.ProtoReflect.Descriptor instead.
 func (*SendChannelMessageResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{17}
+	return file_plugin_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *SendChannelMessageResponse) GetOk() bool {
@@ -1390,7 +1591,7 @@ type GetConfigRequest struct {
 
 func (x *GetConfigRequest) Reset() {
 	*x = GetConfigRequest{}
-	mi := &file_plugin_proto_msgTypes[18]
+	mi := &file_plugin_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1402,7 +1603,7 @@ func (x *GetConfigRequest) String() string {
 func (*GetConfigRequest) ProtoMessage() {}
 
 func (x *GetConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[18]
+	mi := &file_plugin_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1415,7 +1616,7 @@ func (x *GetConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConfigRequest.ProtoReflect.Descriptor instead.
 func (*GetConfigRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{18}
+	return file_plugin_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GetConfigRequest) GetPath() string {
@@ -1436,7 +1637,7 @@ type GetConfigResponse struct {
 
 func (x *GetConfigResponse) Reset() {
 	*x = GetConfigResponse{}
-	mi := &file_plugin_proto_msgTypes[19]
+	mi := &file_plugin_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1448,7 +1649,7 @@ func (x *GetConfigResponse) String() string {
 func (*GetConfigResponse) ProtoMessage() {}
 
 func (x *GetConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[19]
+	mi := &file_plugin_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1461,7 +1662,7 @@ func (x *GetConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetConfigResponse.ProtoReflect.Descriptor instead.
 func (*GetConfigResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{19}
+	return file_plugin_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *GetConfigResponse) GetRawJson() []byte {
@@ -1479,7 +1680,7 @@ type ListAgentsRequest struct {
 
 func (x *ListAgentsRequest) Reset() {
 	*x = ListAgentsRequest{}
-	mi := &file_plugin_proto_msgTypes[20]
+	mi := &file_plugin_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1491,7 +1692,7 @@ func (x *ListAgentsRequest) String() string {
 func (*ListAgentsRequest) ProtoMessage() {}
 
 func (x *ListAgentsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[20]
+	mi := &file_plugin_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1504,7 +1705,7 @@ func (x *ListAgentsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentsRequest.ProtoReflect.Descriptor instead.
 func (*ListAgentsRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{20}
+	return file_plugin_proto_rawDescGZIP(), []int{23}
 }
 
 type ListAgentsResponse struct {
@@ -1516,7 +1717,7 @@ type ListAgentsResponse struct {
 
 func (x *ListAgentsResponse) Reset() {
 	*x = ListAgentsResponse{}
-	mi := &file_plugin_proto_msgTypes[21]
+	mi := &file_plugin_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1528,7 +1729,7 @@ func (x *ListAgentsResponse) String() string {
 func (*ListAgentsResponse) ProtoMessage() {}
 
 func (x *ListAgentsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[21]
+	mi := &file_plugin_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1541,7 +1742,7 @@ func (x *ListAgentsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAgentsResponse.ProtoReflect.Descriptor instead.
 func (*ListAgentsResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{21}
+	return file_plugin_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *ListAgentsResponse) GetRawJson() []byte {
@@ -1560,7 +1761,7 @@ type GetAgentIdentityRequest struct {
 
 func (x *GetAgentIdentityRequest) Reset() {
 	*x = GetAgentIdentityRequest{}
-	mi := &file_plugin_proto_msgTypes[22]
+	mi := &file_plugin_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1572,7 +1773,7 @@ func (x *GetAgentIdentityRequest) String() string {
 func (*GetAgentIdentityRequest) ProtoMessage() {}
 
 func (x *GetAgentIdentityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[22]
+	mi := &file_plugin_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1585,7 +1786,7 @@ func (x *GetAgentIdentityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAgentIdentityRequest.ProtoReflect.Descriptor instead.
 func (*GetAgentIdentityRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{22}
+	return file_plugin_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *GetAgentIdentityRequest) GetAgentId() string {
@@ -1607,7 +1808,7 @@ type GetAgentIdentityResponse struct {
 
 func (x *GetAgentIdentityResponse) Reset() {
 	*x = GetAgentIdentityResponse{}
-	mi := &file_plugin_proto_msgTypes[23]
+	mi := &file_plugin_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1619,7 +1820,7 @@ func (x *GetAgentIdentityResponse) String() string {
 func (*GetAgentIdentityResponse) ProtoMessage() {}
 
 func (x *GetAgentIdentityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[23]
+	mi := &file_plugin_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1632,7 +1833,7 @@ func (x *GetAgentIdentityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAgentIdentityResponse.ProtoReflect.Descriptor instead.
 func (*GetAgentIdentityResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{23}
+	return file_plugin_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *GetAgentIdentityResponse) GetAgentId() string {
@@ -1671,7 +1872,7 @@ type ListModelsRequest struct {
 
 func (x *ListModelsRequest) Reset() {
 	*x = ListModelsRequest{}
-	mi := &file_plugin_proto_msgTypes[24]
+	mi := &file_plugin_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1683,7 +1884,7 @@ func (x *ListModelsRequest) String() string {
 func (*ListModelsRequest) ProtoMessage() {}
 
 func (x *ListModelsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[24]
+	mi := &file_plugin_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1696,7 +1897,7 @@ func (x *ListModelsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListModelsRequest.ProtoReflect.Descriptor instead.
 func (*ListModelsRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{24}
+	return file_plugin_proto_rawDescGZIP(), []int{27}
 }
 
 type ListModelsResponse struct {
@@ -1708,7 +1909,7 @@ type ListModelsResponse struct {
 
 func (x *ListModelsResponse) Reset() {
 	*x = ListModelsResponse{}
-	mi := &file_plugin_proto_msgTypes[25]
+	mi := &file_plugin_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1720,7 +1921,7 @@ func (x *ListModelsResponse) String() string {
 func (*ListModelsResponse) ProtoMessage() {}
 
 func (x *ListModelsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[25]
+	mi := &file_plugin_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1733,7 +1934,7 @@ func (x *ListModelsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListModelsResponse.ProtoReflect.Descriptor instead.
 func (*ListModelsResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{25}
+	return file_plugin_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *ListModelsResponse) GetRawJson() []byte {
@@ -1751,7 +1952,7 @@ type ListSessionsRequest struct {
 
 func (x *ListSessionsRequest) Reset() {
 	*x = ListSessionsRequest{}
-	mi := &file_plugin_proto_msgTypes[26]
+	mi := &file_plugin_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1763,7 +1964,7 @@ func (x *ListSessionsRequest) String() string {
 func (*ListSessionsRequest) ProtoMessage() {}
 
 func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[26]
+	mi := &file_plugin_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1776,7 +1977,7 @@ func (x *ListSessionsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsRequest.ProtoReflect.Descriptor instead.
 func (*ListSessionsRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{26}
+	return file_plugin_proto_rawDescGZIP(), []int{29}
 }
 
 type ListSessionsResponse struct {
@@ -1788,7 +1989,7 @@ type ListSessionsResponse struct {
 
 func (x *ListSessionsResponse) Reset() {
 	*x = ListSessionsResponse{}
-	mi := &file_plugin_proto_msgTypes[27]
+	mi := &file_plugin_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1800,7 +2001,7 @@ func (x *ListSessionsResponse) String() string {
 func (*ListSessionsResponse) ProtoMessage() {}
 
 func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[27]
+	mi := &file_plugin_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1813,7 +2014,7 @@ func (x *ListSessionsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListSessionsResponse.ProtoReflect.Descriptor instead.
 func (*ListSessionsResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{27}
+	return file_plugin_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ListSessionsResponse) GetRawJson() []byte {
@@ -1833,7 +2034,7 @@ type GetChatHistoryRequest struct {
 
 func (x *GetChatHistoryRequest) Reset() {
 	*x = GetChatHistoryRequest{}
-	mi := &file_plugin_proto_msgTypes[28]
+	mi := &file_plugin_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1845,7 +2046,7 @@ func (x *GetChatHistoryRequest) String() string {
 func (*GetChatHistoryRequest) ProtoMessage() {}
 
 func (x *GetChatHistoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[28]
+	mi := &file_plugin_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1858,7 +2059,7 @@ func (x *GetChatHistoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetChatHistoryRequest.ProtoReflect.Descriptor instead.
 func (*GetChatHistoryRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{28}
+	return file_plugin_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *GetChatHistoryRequest) GetSessionKey() string {
@@ -1884,7 +2085,7 @@ type GetChatHistoryResponse struct {
 
 func (x *GetChatHistoryResponse) Reset() {
 	*x = GetChatHistoryResponse{}
-	mi := &file_plugin_proto_msgTypes[29]
+	mi := &file_plugin_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1896,7 +2097,7 @@ func (x *GetChatHistoryResponse) String() string {
 func (*GetChatHistoryResponse) ProtoMessage() {}
 
 func (x *GetChatHistoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[29]
+	mi := &file_plugin_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1909,7 +2110,7 @@ func (x *GetChatHistoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetChatHistoryResponse.ProtoReflect.Descriptor instead.
 func (*GetChatHistoryResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{29}
+	return file_plugin_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *GetChatHistoryResponse) GetRawJson() []byte {
@@ -1929,7 +2130,7 @@ type AppendMemoryRequest struct {
 
 func (x *AppendMemoryRequest) Reset() {
 	*x = AppendMemoryRequest{}
-	mi := &file_plugin_proto_msgTypes[30]
+	mi := &file_plugin_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1941,7 +2142,7 @@ func (x *AppendMemoryRequest) String() string {
 func (*AppendMemoryRequest) ProtoMessage() {}
 
 func (x *AppendMemoryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[30]
+	mi := &file_plugin_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1954,7 +2155,7 @@ func (x *AppendMemoryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendMemoryRequest.ProtoReflect.Descriptor instead.
 func (*AppendMemoryRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{30}
+	return file_plugin_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *AppendMemoryRequest) GetAgentId() string {
@@ -1980,7 +2181,7 @@ type AppendMemoryResponse struct {
 
 func (x *AppendMemoryResponse) Reset() {
 	*x = AppendMemoryResponse{}
-	mi := &file_plugin_proto_msgTypes[31]
+	mi := &file_plugin_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1992,7 +2193,7 @@ func (x *AppendMemoryResponse) String() string {
 func (*AppendMemoryResponse) ProtoMessage() {}
 
 func (x *AppendMemoryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[31]
+	mi := &file_plugin_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2005,7 +2206,7 @@ func (x *AppendMemoryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AppendMemoryResponse.ProtoReflect.Descriptor instead.
 func (*AppendMemoryResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{31}
+	return file_plugin_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *AppendMemoryResponse) GetOk() bool {
@@ -2025,7 +2226,7 @@ type RunSubagentRequest struct {
 
 func (x *RunSubagentRequest) Reset() {
 	*x = RunSubagentRequest{}
-	mi := &file_plugin_proto_msgTypes[32]
+	mi := &file_plugin_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2037,7 +2238,7 @@ func (x *RunSubagentRequest) String() string {
 func (*RunSubagentRequest) ProtoMessage() {}
 
 func (x *RunSubagentRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[32]
+	mi := &file_plugin_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2050,7 +2251,7 @@ func (x *RunSubagentRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunSubagentRequest.ProtoReflect.Descriptor instead.
 func (*RunSubagentRequest) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{32}
+	return file_plugin_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *RunSubagentRequest) GetAgentId() string {
@@ -2076,7 +2277,7 @@ type RunSubagentResponse struct {
 
 func (x *RunSubagentResponse) Reset() {
 	*x = RunSubagentResponse{}
-	mi := &file_plugin_proto_msgTypes[33]
+	mi := &file_plugin_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2088,7 +2289,7 @@ func (x *RunSubagentResponse) String() string {
 func (*RunSubagentResponse) ProtoMessage() {}
 
 func (x *RunSubagentResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_plugin_proto_msgTypes[33]
+	mi := &file_plugin_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2101,7 +2302,7 @@ func (x *RunSubagentResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunSubagentResponse.ProtoReflect.Descriptor instead.
 func (*RunSubagentResponse) Descriptor() ([]byte, []int) {
-	return file_plugin_proto_rawDescGZIP(), []int{33}
+	return file_plugin_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *RunSubagentResponse) GetText() string {
@@ -2142,7 +2343,13 @@ const file_plugin_proto_rawDesc = "" +
 	"\x11parameters_schema\x18\x03 \x01(\fR\x10parametersSchema\":\n" +
 	"\fProviderSpec\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
-	"\x06models\x18\x02 \x03(\tR\x06models\"\xc7\x01\n" +
+	"\x06models\x18\x02 \x03(\tR\x06models\"\x90\x01\n" +
+	"\x0fModelDescriptor\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\x12%\n" +
+	"\x0econtext_window\x18\x03 \x01(\x03R\rcontextWindow\x12\x1c\n" +
+	"\treasoning\x18\x04 \x01(\bR\treasoning\x12\x14\n" +
+	"\x05input\x18\x05 \x03(\tR\x05input\"\xc7\x01\n" +
 	"\x05Delta\x12\x14\n" +
 	"\x04text\x18\x01 \x01(\tH\x00R\x04text\x12\x1e\n" +
 	"\treasoning\x18\x02 \x01(\tH\x00R\treasoning\x12.\n" +
@@ -2170,7 +2377,7 @@ const file_plugin_proto_rawDesc = "" +
 	"\x06run_id\x18\x04 \x01(\tR\x05runId\"D\n" +
 	"\x0fRunToolResponse\x12\x16\n" +
 	"\x06output\x18\x01 \x01(\tR\x06output\x12\x19\n" +
-	"\bis_error\x18\x02 \x01(\bR\aisError\"\x91\x02\n" +
+	"\bis_error\x18\x02 \x01(\bR\aisError\"\xad\x02\n" +
 	"\x17StreamCompletionRequest\x12\x14\n" +
 	"\x05model\x18\x01 \x01(\tR\x05model\x12\x16\n" +
 	"\x06system\x18\x02 \x01(\tR\x06system\x124\n" +
@@ -2178,8 +2385,14 @@ const file_plugin_proto_rawDesc = "" +
 	"\x05tools\x18\x04 \x03(\v2\x19.talon.plugin.v1.ToolSpecR\x05tools\x12%\n" +
 	"\vtemperature\x18\n" +
 	" \x01(\x01H\x00R\vtemperature\x88\x01\x01\x12*\n" +
-	"\x11max_output_tokens\x18\v \x01(\x05R\x0fmaxOutputTokensB\x0e\n" +
-	"\f_temperature\"_\n" +
+	"\x11max_output_tokens\x18\v \x01(\x05R\x0fmaxOutputTokens\x12\x1a\n" +
+	"\bprovider\x18\f \x01(\tR\bproviderB\x0e\n" +
+	"\f_temperature\"Q\n" +
+	"\x19ListProviderModelsRequest\x12\x1a\n" +
+	"\bprovider\x18\x01 \x01(\tR\bprovider\x12\x18\n" +
+	"\arefresh\x18\x02 \x01(\bR\arefresh\"V\n" +
+	"\x1aListProviderModelsResponse\x128\n" +
+	"\x06models\x18\x01 \x03(\v2 .talon.plugin.v1.ModelDescriptorR\x06models\"_\n" +
 	"\x13StartChannelRequest\x12!\n" +
 	"\fchannel_name\x18\x01 \x01(\tR\vchannelName\x12%\n" +
 	"\x0echannel_config\x18\x02 \x01(\fR\rchannelConfig\"\xb4\x01\n" +
@@ -2250,13 +2463,14 @@ const file_plugin_proto_rawDesc = "" +
 	"\tROLE_USER\x10\x01\x12\x12\n" +
 	"\x0eROLE_ASSISTANT\x10\x02\x12\x0f\n" +
 	"\vROLE_SYSTEM\x10\x03\x12\r\n" +
-	"\tROLE_TOOL\x10\x042\xa6\x04\n" +
+	"\tROLE_TOOL\x10\x042\x95\x05\n" +
 	"\x06Plugin\x12U\n" +
 	"\n" +
 	"Initialize\x12\".talon.plugin.v1.InitializeRequest\x1a#.talon.plugin.v1.InitializeResponse\x12O\n" +
 	"\bShutdown\x12 .talon.plugin.v1.ShutdownRequest\x1a!.talon.plugin.v1.ShutdownResponse\x12L\n" +
 	"\aRunTool\x12\x1f.talon.plugin.v1.RunToolRequest\x1a .talon.plugin.v1.RunToolResponse\x12V\n" +
-	"\x10StreamCompletion\x12(.talon.plugin.v1.StreamCompletionRequest\x1a\x16.talon.plugin.v1.Delta0\x01\x12_\n" +
+	"\x10StreamCompletion\x12(.talon.plugin.v1.StreamCompletionRequest\x1a\x16.talon.plugin.v1.Delta0\x01\x12m\n" +
+	"\x12ListProviderModels\x12*.talon.plugin.v1.ListProviderModelsRequest\x1a+.talon.plugin.v1.ListProviderModelsResponse\x12_\n" +
 	"\fStartChannel\x12$.talon.plugin.v1.StartChannelRequest\x1a'.talon.plugin.v1.IncomingChannelMessage0\x01\x12m\n" +
 	"\x12SendChannelMessage\x12*.talon.plugin.v1.SendChannelMessageRequest\x1a+.talon.plugin.v1.SendChannelMessageResponse2\xe8\x05\n" +
 	"\x04Host\x12R\n" +
@@ -2284,7 +2498,7 @@ func file_plugin_proto_rawDescGZIP() []byte {
 }
 
 var file_plugin_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_plugin_proto_msgTypes = make([]protoimpl.MessageInfo, 37)
 var file_plugin_proto_goTypes = []any{
 	(Capability)(0),                    // 0: talon.plugin.v1.Capability
 	(Role)(0),                          // 1: talon.plugin.v1.Role
@@ -2293,35 +2507,38 @@ var file_plugin_proto_goTypes = []any{
 	(*ToolCall)(nil),                   // 4: talon.plugin.v1.ToolCall
 	(*ToolSpec)(nil),                   // 5: talon.plugin.v1.ToolSpec
 	(*ProviderSpec)(nil),               // 6: talon.plugin.v1.ProviderSpec
-	(*Delta)(nil),                      // 7: talon.plugin.v1.Delta
-	(*Usage)(nil),                      // 8: talon.plugin.v1.Usage
-	(*InitializeRequest)(nil),          // 9: talon.plugin.v1.InitializeRequest
-	(*InitializeResponse)(nil),         // 10: talon.plugin.v1.InitializeResponse
-	(*ShutdownRequest)(nil),            // 11: talon.plugin.v1.ShutdownRequest
-	(*ShutdownResponse)(nil),           // 12: talon.plugin.v1.ShutdownResponse
-	(*RunToolRequest)(nil),             // 13: talon.plugin.v1.RunToolRequest
-	(*RunToolResponse)(nil),            // 14: talon.plugin.v1.RunToolResponse
-	(*StreamCompletionRequest)(nil),    // 15: talon.plugin.v1.StreamCompletionRequest
-	(*StartChannelRequest)(nil),        // 16: talon.plugin.v1.StartChannelRequest
-	(*IncomingChannelMessage)(nil),     // 17: talon.plugin.v1.IncomingChannelMessage
-	(*SendChannelMessageRequest)(nil),  // 18: talon.plugin.v1.SendChannelMessageRequest
-	(*SendChannelMessageResponse)(nil), // 19: talon.plugin.v1.SendChannelMessageResponse
-	(*GetConfigRequest)(nil),           // 20: talon.plugin.v1.GetConfigRequest
-	(*GetConfigResponse)(nil),          // 21: talon.plugin.v1.GetConfigResponse
-	(*ListAgentsRequest)(nil),          // 22: talon.plugin.v1.ListAgentsRequest
-	(*ListAgentsResponse)(nil),         // 23: talon.plugin.v1.ListAgentsResponse
-	(*GetAgentIdentityRequest)(nil),    // 24: talon.plugin.v1.GetAgentIdentityRequest
-	(*GetAgentIdentityResponse)(nil),   // 25: talon.plugin.v1.GetAgentIdentityResponse
-	(*ListModelsRequest)(nil),          // 26: talon.plugin.v1.ListModelsRequest
-	(*ListModelsResponse)(nil),         // 27: talon.plugin.v1.ListModelsResponse
-	(*ListSessionsRequest)(nil),        // 28: talon.plugin.v1.ListSessionsRequest
-	(*ListSessionsResponse)(nil),       // 29: talon.plugin.v1.ListSessionsResponse
-	(*GetChatHistoryRequest)(nil),      // 30: talon.plugin.v1.GetChatHistoryRequest
-	(*GetChatHistoryResponse)(nil),     // 31: talon.plugin.v1.GetChatHistoryResponse
-	(*AppendMemoryRequest)(nil),        // 32: talon.plugin.v1.AppendMemoryRequest
-	(*AppendMemoryResponse)(nil),       // 33: talon.plugin.v1.AppendMemoryResponse
-	(*RunSubagentRequest)(nil),         // 34: talon.plugin.v1.RunSubagentRequest
-	(*RunSubagentResponse)(nil),        // 35: talon.plugin.v1.RunSubagentResponse
+	(*ModelDescriptor)(nil),            // 7: talon.plugin.v1.ModelDescriptor
+	(*Delta)(nil),                      // 8: talon.plugin.v1.Delta
+	(*Usage)(nil),                      // 9: talon.plugin.v1.Usage
+	(*InitializeRequest)(nil),          // 10: talon.plugin.v1.InitializeRequest
+	(*InitializeResponse)(nil),         // 11: talon.plugin.v1.InitializeResponse
+	(*ShutdownRequest)(nil),            // 12: talon.plugin.v1.ShutdownRequest
+	(*ShutdownResponse)(nil),           // 13: talon.plugin.v1.ShutdownResponse
+	(*RunToolRequest)(nil),             // 14: talon.plugin.v1.RunToolRequest
+	(*RunToolResponse)(nil),            // 15: talon.plugin.v1.RunToolResponse
+	(*StreamCompletionRequest)(nil),    // 16: talon.plugin.v1.StreamCompletionRequest
+	(*ListProviderModelsRequest)(nil),  // 17: talon.plugin.v1.ListProviderModelsRequest
+	(*ListProviderModelsResponse)(nil), // 18: talon.plugin.v1.ListProviderModelsResponse
+	(*StartChannelRequest)(nil),        // 19: talon.plugin.v1.StartChannelRequest
+	(*IncomingChannelMessage)(nil),     // 20: talon.plugin.v1.IncomingChannelMessage
+	(*SendChannelMessageRequest)(nil),  // 21: talon.plugin.v1.SendChannelMessageRequest
+	(*SendChannelMessageResponse)(nil), // 22: talon.plugin.v1.SendChannelMessageResponse
+	(*GetConfigRequest)(nil),           // 23: talon.plugin.v1.GetConfigRequest
+	(*GetConfigResponse)(nil),          // 24: talon.plugin.v1.GetConfigResponse
+	(*ListAgentsRequest)(nil),          // 25: talon.plugin.v1.ListAgentsRequest
+	(*ListAgentsResponse)(nil),         // 26: talon.plugin.v1.ListAgentsResponse
+	(*GetAgentIdentityRequest)(nil),    // 27: talon.plugin.v1.GetAgentIdentityRequest
+	(*GetAgentIdentityResponse)(nil),   // 28: talon.plugin.v1.GetAgentIdentityResponse
+	(*ListModelsRequest)(nil),          // 29: talon.plugin.v1.ListModelsRequest
+	(*ListModelsResponse)(nil),         // 30: talon.plugin.v1.ListModelsResponse
+	(*ListSessionsRequest)(nil),        // 31: talon.plugin.v1.ListSessionsRequest
+	(*ListSessionsResponse)(nil),       // 32: talon.plugin.v1.ListSessionsResponse
+	(*GetChatHistoryRequest)(nil),      // 33: talon.plugin.v1.GetChatHistoryRequest
+	(*GetChatHistoryResponse)(nil),     // 34: talon.plugin.v1.GetChatHistoryResponse
+	(*AppendMemoryRequest)(nil),        // 35: talon.plugin.v1.AppendMemoryRequest
+	(*AppendMemoryResponse)(nil),       // 36: talon.plugin.v1.AppendMemoryResponse
+	(*RunSubagentRequest)(nil),         // 37: talon.plugin.v1.RunSubagentRequest
+	(*RunSubagentResponse)(nil),        // 38: talon.plugin.v1.RunSubagentResponse
 }
 var file_plugin_proto_depIdxs = []int32{
 	5,  // 0: talon.plugin.v1.Manifest.offers_tools:type_name -> talon.plugin.v1.ToolSpec
@@ -2329,44 +2546,47 @@ var file_plugin_proto_depIdxs = []int32{
 	0,  // 2: talon.plugin.v1.Manifest.needs:type_name -> talon.plugin.v1.Capability
 	1,  // 3: talon.plugin.v1.Message.role:type_name -> talon.plugin.v1.Role
 	4,  // 4: talon.plugin.v1.Message.tool_calls:type_name -> talon.plugin.v1.ToolCall
-	8,  // 5: talon.plugin.v1.Delta.usage:type_name -> talon.plugin.v1.Usage
+	9,  // 5: talon.plugin.v1.Delta.usage:type_name -> talon.plugin.v1.Usage
 	4,  // 6: talon.plugin.v1.Delta.tool_call:type_name -> talon.plugin.v1.ToolCall
 	2,  // 7: talon.plugin.v1.InitializeResponse.manifest:type_name -> talon.plugin.v1.Manifest
 	3,  // 8: talon.plugin.v1.StreamCompletionRequest.messages:type_name -> talon.plugin.v1.Message
 	5,  // 9: talon.plugin.v1.StreamCompletionRequest.tools:type_name -> talon.plugin.v1.ToolSpec
-	9,  // 10: talon.plugin.v1.Plugin.Initialize:input_type -> talon.plugin.v1.InitializeRequest
-	11, // 11: talon.plugin.v1.Plugin.Shutdown:input_type -> talon.plugin.v1.ShutdownRequest
-	13, // 12: talon.plugin.v1.Plugin.RunTool:input_type -> talon.plugin.v1.RunToolRequest
-	15, // 13: talon.plugin.v1.Plugin.StreamCompletion:input_type -> talon.plugin.v1.StreamCompletionRequest
-	16, // 14: talon.plugin.v1.Plugin.StartChannel:input_type -> talon.plugin.v1.StartChannelRequest
-	18, // 15: talon.plugin.v1.Plugin.SendChannelMessage:input_type -> talon.plugin.v1.SendChannelMessageRequest
-	20, // 16: talon.plugin.v1.Host.GetConfig:input_type -> talon.plugin.v1.GetConfigRequest
-	22, // 17: talon.plugin.v1.Host.ListAgents:input_type -> talon.plugin.v1.ListAgentsRequest
-	24, // 18: talon.plugin.v1.Host.GetAgentIdentity:input_type -> talon.plugin.v1.GetAgentIdentityRequest
-	26, // 19: talon.plugin.v1.Host.ListModels:input_type -> talon.plugin.v1.ListModelsRequest
-	28, // 20: talon.plugin.v1.Host.ListSessions:input_type -> talon.plugin.v1.ListSessionsRequest
-	30, // 21: talon.plugin.v1.Host.GetChatHistory:input_type -> talon.plugin.v1.GetChatHistoryRequest
-	32, // 22: talon.plugin.v1.Host.AppendMemory:input_type -> talon.plugin.v1.AppendMemoryRequest
-	34, // 23: talon.plugin.v1.Host.RunSubagent:input_type -> talon.plugin.v1.RunSubagentRequest
-	10, // 24: talon.plugin.v1.Plugin.Initialize:output_type -> talon.plugin.v1.InitializeResponse
-	12, // 25: talon.plugin.v1.Plugin.Shutdown:output_type -> talon.plugin.v1.ShutdownResponse
-	14, // 26: talon.plugin.v1.Plugin.RunTool:output_type -> talon.plugin.v1.RunToolResponse
-	7,  // 27: talon.plugin.v1.Plugin.StreamCompletion:output_type -> talon.plugin.v1.Delta
-	17, // 28: talon.plugin.v1.Plugin.StartChannel:output_type -> talon.plugin.v1.IncomingChannelMessage
-	19, // 29: talon.plugin.v1.Plugin.SendChannelMessage:output_type -> talon.plugin.v1.SendChannelMessageResponse
-	21, // 30: talon.plugin.v1.Host.GetConfig:output_type -> talon.plugin.v1.GetConfigResponse
-	23, // 31: talon.plugin.v1.Host.ListAgents:output_type -> talon.plugin.v1.ListAgentsResponse
-	25, // 32: talon.plugin.v1.Host.GetAgentIdentity:output_type -> talon.plugin.v1.GetAgentIdentityResponse
-	27, // 33: talon.plugin.v1.Host.ListModels:output_type -> talon.plugin.v1.ListModelsResponse
-	29, // 34: talon.plugin.v1.Host.ListSessions:output_type -> talon.plugin.v1.ListSessionsResponse
-	31, // 35: talon.plugin.v1.Host.GetChatHistory:output_type -> talon.plugin.v1.GetChatHistoryResponse
-	33, // 36: talon.plugin.v1.Host.AppendMemory:output_type -> talon.plugin.v1.AppendMemoryResponse
-	35, // 37: talon.plugin.v1.Host.RunSubagent:output_type -> talon.plugin.v1.RunSubagentResponse
-	24, // [24:38] is the sub-list for method output_type
-	10, // [10:24] is the sub-list for method input_type
-	10, // [10:10] is the sub-list for extension type_name
-	10, // [10:10] is the sub-list for extension extendee
-	0,  // [0:10] is the sub-list for field type_name
+	7,  // 10: talon.plugin.v1.ListProviderModelsResponse.models:type_name -> talon.plugin.v1.ModelDescriptor
+	10, // 11: talon.plugin.v1.Plugin.Initialize:input_type -> talon.plugin.v1.InitializeRequest
+	12, // 12: talon.plugin.v1.Plugin.Shutdown:input_type -> talon.plugin.v1.ShutdownRequest
+	14, // 13: talon.plugin.v1.Plugin.RunTool:input_type -> talon.plugin.v1.RunToolRequest
+	16, // 14: talon.plugin.v1.Plugin.StreamCompletion:input_type -> talon.plugin.v1.StreamCompletionRequest
+	17, // 15: talon.plugin.v1.Plugin.ListProviderModels:input_type -> talon.plugin.v1.ListProviderModelsRequest
+	19, // 16: talon.plugin.v1.Plugin.StartChannel:input_type -> talon.plugin.v1.StartChannelRequest
+	21, // 17: talon.plugin.v1.Plugin.SendChannelMessage:input_type -> talon.plugin.v1.SendChannelMessageRequest
+	23, // 18: talon.plugin.v1.Host.GetConfig:input_type -> talon.plugin.v1.GetConfigRequest
+	25, // 19: talon.plugin.v1.Host.ListAgents:input_type -> talon.plugin.v1.ListAgentsRequest
+	27, // 20: talon.plugin.v1.Host.GetAgentIdentity:input_type -> talon.plugin.v1.GetAgentIdentityRequest
+	29, // 21: talon.plugin.v1.Host.ListModels:input_type -> talon.plugin.v1.ListModelsRequest
+	31, // 22: talon.plugin.v1.Host.ListSessions:input_type -> talon.plugin.v1.ListSessionsRequest
+	33, // 23: talon.plugin.v1.Host.GetChatHistory:input_type -> talon.plugin.v1.GetChatHistoryRequest
+	35, // 24: talon.plugin.v1.Host.AppendMemory:input_type -> talon.plugin.v1.AppendMemoryRequest
+	37, // 25: talon.plugin.v1.Host.RunSubagent:input_type -> talon.plugin.v1.RunSubagentRequest
+	11, // 26: talon.plugin.v1.Plugin.Initialize:output_type -> talon.plugin.v1.InitializeResponse
+	13, // 27: talon.plugin.v1.Plugin.Shutdown:output_type -> talon.plugin.v1.ShutdownResponse
+	15, // 28: talon.plugin.v1.Plugin.RunTool:output_type -> talon.plugin.v1.RunToolResponse
+	8,  // 29: talon.plugin.v1.Plugin.StreamCompletion:output_type -> talon.plugin.v1.Delta
+	18, // 30: talon.plugin.v1.Plugin.ListProviderModels:output_type -> talon.plugin.v1.ListProviderModelsResponse
+	20, // 31: talon.plugin.v1.Plugin.StartChannel:output_type -> talon.plugin.v1.IncomingChannelMessage
+	22, // 32: talon.plugin.v1.Plugin.SendChannelMessage:output_type -> talon.plugin.v1.SendChannelMessageResponse
+	24, // 33: talon.plugin.v1.Host.GetConfig:output_type -> talon.plugin.v1.GetConfigResponse
+	26, // 34: talon.plugin.v1.Host.ListAgents:output_type -> talon.plugin.v1.ListAgentsResponse
+	28, // 35: talon.plugin.v1.Host.GetAgentIdentity:output_type -> talon.plugin.v1.GetAgentIdentityResponse
+	30, // 36: talon.plugin.v1.Host.ListModels:output_type -> talon.plugin.v1.ListModelsResponse
+	32, // 37: talon.plugin.v1.Host.ListSessions:output_type -> talon.plugin.v1.ListSessionsResponse
+	34, // 38: talon.plugin.v1.Host.GetChatHistory:output_type -> talon.plugin.v1.GetChatHistoryResponse
+	36, // 39: talon.plugin.v1.Host.AppendMemory:output_type -> talon.plugin.v1.AppendMemoryResponse
+	38, // 40: talon.plugin.v1.Host.RunSubagent:output_type -> talon.plugin.v1.RunSubagentResponse
+	26, // [26:41] is the sub-list for method output_type
+	11, // [11:26] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_plugin_proto_init() }
@@ -2374,21 +2594,21 @@ func file_plugin_proto_init() {
 	if File_plugin_proto != nil {
 		return
 	}
-	file_plugin_proto_msgTypes[5].OneofWrappers = []any{
+	file_plugin_proto_msgTypes[6].OneofWrappers = []any{
 		(*Delta_Text)(nil),
 		(*Delta_Reasoning)(nil),
 		(*Delta_Usage)(nil),
 		(*Delta_ToolCall)(nil),
 		(*Delta_Error)(nil),
 	}
-	file_plugin_proto_msgTypes[13].OneofWrappers = []any{}
+	file_plugin_proto_msgTypes[14].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_plugin_proto_rawDesc), len(file_plugin_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   34,
+			NumMessages:   37,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

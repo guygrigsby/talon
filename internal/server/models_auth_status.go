@@ -131,9 +131,21 @@ func (h *ModelsAuthStatusHandler) readAuthProfiles(agentID string) (map[string]a
 
 // buildProvidersList computes one entry per known provider. A
 // provider is "known" if it appears under models.providers.* in
-// merged config OR in auth-profiles.json — the union covers both
-// "configured with credentials" and "listed but unauthed."
+// merged config OR in auth-profiles.json OR has a key under one
+// of the plugin-config paths (openai-compat tenants, anthropic).
+// The union covers "configured with credentials" and "listed but
+// unauthed."
+//
+// Plugin-config keys are injected as synthetic profile rows so the
+// downstream buildProviderEntry sees them with the same shape as
+// real on-disk profiles. The injected profileId follows the pattern
+// "<provider>:openai-compat" or "<provider>:plugin" so the FE can
+// distinguish them from genuine auth-profiles.json entries.
 func buildProvidersList(merged []byte, profiles map[string]authProfilesRow, filter string) []any {
+	if profiles == nil {
+		profiles = map[string]authProfilesRow{}
+	}
+
 	known := map[string]struct{}{}
 	gjson.GetBytes(merged, "models.providers").ForEach(func(name, _ gjson.Result) bool {
 		if name.Str != "" {
@@ -141,6 +153,40 @@ func buildProvidersList(merged []byte, profiles map[string]authProfilesRow, filt
 		}
 		return true
 	})
+
+	// openai-compat tenants — each provider entry's apiKey (literal
+	// or op://keychain:// ref) counts as a key for that provider.
+	gjson.GetBytes(merged, "plugins.entries.openai-compat.config.providers").ForEach(func(name, prov gjson.Result) bool {
+		if name.Str == "" {
+			return true
+		}
+		known[name.Str] = struct{}{}
+		if k := strings.TrimSpace(prov.Get("apiKey").Str); k != "" {
+			pid := name.Str + ":openai-compat"
+			if _, exists := profiles[pid]; !exists {
+				profiles[pid] = authProfilesRow{
+					Type:     "api_key",
+					Provider: name.Str,
+					Key:      k,
+				}
+			}
+		}
+		return true
+	})
+
+	// anthropic plugin's dedicated config.apiKey.
+	if k := strings.TrimSpace(gjson.GetBytes(merged, "plugins.entries.anthropic.config.apiKey").Str); k != "" {
+		known["anthropic"] = struct{}{}
+		pid := "anthropic:plugin"
+		if _, exists := profiles[pid]; !exists {
+			profiles[pid] = authProfilesRow{
+				Type:     "api_key",
+				Provider: "anthropic",
+				Key:      k,
+			}
+		}
+	}
+
 	for _, row := range profiles {
 		if row.Provider != "" {
 			known[row.Provider] = struct{}{}

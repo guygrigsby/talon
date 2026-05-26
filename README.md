@@ -5,53 +5,51 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/guygrigsby/talon)](https://goreportcard.com/report/github.com/guygrigsby/talon)
 [![Release](https://img.shields.io/github/v/release/guygrigsby/talon)](https://github.com/guygrigsby/talon/releases/latest)
 
-A fast, single-binary, Go reimplementation of the
-[openclaw](https://github.com/openclaw/openclaw) CLI and gateway.
+A fast, single-binary, Go agent runtime: a local gateway that runs LLM-driven
+agents with tools, memory, and channel integrations, plus a CLI for talking to
+it.
 
 ## What is this?
 
-[openclaw](https://github.com/openclaw/openclaw) is a local agent runtime that
-exposes chat, cron, image generation, channel integrations (Telegram,
-BlueBubbles, etc.) and plugin management over a JSON-RPC-style WebSocket
-protocol. The reference implementation is written in TypeScript.
+talon is a self-contained agent platform written in Go. It exposes chat,
+cron, channel integrations (Telegram, BlueBubbles, etc.), and plugin
+management over a JSON-RPC-style WebSocket protocol, behind a single static
+binary. Built around three upstream libraries:
 
-talon is a Go port focused on three things:
+- [agentcore](https://github.com/voocel/agentcore) — agent loop, provider
+  dispatch (via LiteLLM), tool calling, subagent orchestration
+- [jess](https://github.com/guygrigsby/jess) — durable agent memory + skills
+  on top of agentcore
+- [chromem-go](https://github.com/philippgille/chromem-go) — embeddable
+  vector database backing jess's memory store
 
-- **One static binary.** No Node, no Python, no extra runtime. `go install` or
-  drop a binary on a server and it runs.
-- **Faster cold starts and lower memory.** Useful when the gateway lives on a
-  Raspberry Pi, a small VPS, or inside a container that wakes on demand.
-- **A safer config story.** talon never writes to openclaw's state directory.
-  All overrides live in a separate overlay that you can wipe without touching
-  the upstream install (see [Layered config](#layered-config-the-defining-feature)).
+talon is the runtime that composes these into a daemon: it adds session
+state, per-agent identity, channels, cost caps, secrets resolution, and a
+web UI on top.
 
-## When to use talon
+Design priorities:
 
-- You want to run openclaw-compatible agents on a machine where installing
-  Node feels heavy (small VPS, NAS, edge device, locked-down server).
-- You already run openclaw and want to experiment with a parallel gateway
-  without breaking the existing state directory.
-- You want a single binary in CI that can probe an openclaw gateway, edit
-  config, or run a one-shot chat.
+- **One static binary.** No Node, no Python, no extra runtime. `go install`
+  or drop a binary on a server and it runs.
+- **Faster cold starts and lower memory.** Useful when the gateway lives on
+  a Raspberry Pi, a small VPS, or inside a container that wakes on demand.
+- **Pure-Go stack end-to-end.** chromem-go, agentcore, jess all build
+  without CGO. Cross-compiles to every `go build` target.
 
-If you want the full openclaw feature surface today, run upstream openclaw.
-talon is a subset (see [PARITY.md](./PARITY.md)) and is **early development**.
-Some subcommands return `not yet implemented (talon-<id>)` placeholders so the
-gaps stay visible.
+> **Early development.** Some subcommands return
+> `not yet implemented (talon-<id>)` placeholders so gaps stay visible.
 
 ## Two roles, one protocol
 
 talon plays two roles over the same WebSocket protocol:
 
-1. **CLI client.** Talks to an upstream openclaw gateway (default
+1. **CLI client.** Connects to a talon gateway (default
    `ws://127.0.0.1:18789/`). Most subcommands are RPC pass-throughs or local
    config operations.
 2. **Embedded gateway** (`talon gateway run`). A self-contained server that
-   speaks the same protocol and handles chat, cron, image generation, plugin
-   lifecycle, channel setup, and config RPCs natively.
+   handles chat, cron, plugin lifecycle, channel setup, and config RPCs.
 
-You can run either half independently. Point talon's CLI at upstream openclaw,
-point upstream openclaw's clients at talon's gateway, or use talon end-to-end.
+You can run either half independently or together.
 
 ## Install
 
@@ -73,99 +71,48 @@ are published on the [releases page](https://github.com/guygrigsby/talon/release
 ## Quickstart
 
 ```bash
-# 1. Talk to an already-running openclaw gateway on 127.0.0.1:18789
-talon health
-talon agents list
-talon chat "hello"
-
-# 2. Or run talon's own gateway and point your client at it
+# 1. Start the gateway
 talon gateway run &
+
+# 2. Health check
 talon health
+
+# 3. Chat (uses agents.defaults.model.primary from config)
+talon chat "hello"
 ```
 
-## Using talon as your openclaw backend
+## Configuring an LLM provider
 
-talon's embedded gateway handles chat inference, cron jobs, image generation,
-plugin management, and channel setup. Enough to run agents without a separate
-openclaw installation.
-
-### Docker (recommended)
+API keys live in 1Password (`op://...`) or the macOS keychain
+(`keychain://...`). Direct plaintext in config is discouraged.
 
 ```bash
-# Build the image and start the gateway on port 18789 (openclaw's default).
-# Stop any running openclaw gateway first, or override the port.
-make docker-run
+# Bootstrap the 1Password service-account token into your keychain
+talon secrets keychain-bootstrap
 
-# Tail logs
-make docker-logs
-
-# Stop
-make docker-stop
+# Point a provider at its key in 1Password
+talon config set plugins.entries.openai-compat.config.providers.openai.apiKey \
+  op://talon/openai-api-key/credential
 ```
 
-The container bind-mounts `~/.openclaw` and `~/.talon` at their host paths
-so workspace paths resolve transparently inside the container.
-`--restart=unless-stopped` keeps it up across crashes and reboots.
+The `openai-compat` plugin is multi-tenant — one plugin process serves
+openai, deepseek, mistral, mlx, lmstudio, ollama, and any other
+OpenAI-compatible endpoint. Each tenant gets its own `baseUrl` + `apiKey`
+under `plugins.entries.openai-compat.config.providers.<name>`. Anthropic is
+its own plugin entry (`plugins.entries.anthropic.config.apiKey`).
 
-### Native
+**Local servers** (mlx, lmstudio, ollama, vllm, sglang, llama.cpp) work
+without a key when `baseUrl` is loopback. Default ports:
 
-```bash
-talon gateway run                  # listens on :18789 (default)
-talon gateway run --port 18790     # different port
-talon gateway run --token <secret> # require auth on connections
-```
+- mlx: `http://localhost:8080/v1`
+- lmstudio: `http://localhost:1234/v1`
+- ollama: `http://localhost:11434/v1`
 
-### Pointing clients at talon
+The model picker is config-driven only — list the models you want under
+`models.providers.<name>.models[]`. Live discovery via provider `/v1/models`
+endpoints is deliberately not auto-merged because it floods the picker.
 
-The talon CLI defaults to `ws://127.0.0.1:18789/`. No config change needed if
-the gateway runs on the default port. For other openclaw-compatible clients,
-set their gateway URL to the same address.
-
-```bash
-# Change the port talon's CLI dials (gateway on a non-default port)
-talon config set gateway.port 18790
-
-# Shared auth token (must match --token on the gateway)
-talon config set gateway.auth.token <secret>
-```
-
-### Configuring an LLM provider
-
-The gateway resolves provider API keys from per-agent auth profiles
-(`~/.talon/agents/<id>/agent/auth-profiles.json` or the openclaw equivalent).
-
-**OpenAI**
-
-```bash
-talon configure channel  # interactive wizard
-# Or write directly to:
-# ~/.talon/agents/main/agent/auth-profiles.json → { "openai:default": "<key>" }
-```
-
-**DeepSeek.** Set `DEEPSEEK_API_KEY` in the environment, or write the key to
-the auth profiles file under `"deepseek:default"`.
-
-**LM Studio** (local, no key needed by default):
-
-```bash
-# Default base URL: http://localhost:1234/api/v0
-talon config set models.providers.lmstudio.baseUrl http://192.168.1.10:1234/api/v0
-```
-
-When the gateway runs inside Docker, loopback URLs (`localhost`, `127.0.0.1`)
-in `baseUrl` are rewritten to `host.docker.internal` so LM Studio on the host
-is reachable without manual config.
-
-**1Password / keychain secret references.** Any string value starting with
-`op://` or `keychain://` is resolved at runtime by the secrets subsystem:
-
-```bash
-talon config set gateway.auth.token op://Personal/talon-gateway/token
-talon secrets migrate gateway.auth.token  # move a literal into 1Password
-talon secrets keychain-bootstrap          # store the OP service-account token
-```
-
-### Native gateway RPCs
+## Native gateway RPCs
 
 | Area | RPCs |
 |---|---|
@@ -174,75 +121,76 @@ talon secrets keychain-bootstrap          # store the OP service-account token
 | Agents & models | `agents.list`, `agents.files.*`, `models.list`, `agent.identity.get` |
 | Config | `config.get`, `config.schema` |
 | Cron | `cron.list/add/remove/run/status/show/enable/disable/runs` |
-| Images | `images.generate/fetch/upload/list/delete`, `images.workflows.*`, `images.manager.*` |
 | Channels setup | `channels.telegram.verify/captureSender/persist` |
 | Plugins | `plugins.deps.status/install/uninstall/detail` |
 | Nodes | `node.list` |
 | Skills | `skills.status` |
 | Memory | `memory.append` |
 
-### Channel setup (Telegram, BlueBubbles)
-
-Interactive wizards write channel config and send a confirmation DM:
+## Channel setup (Telegram, BlueBubbles)
 
 ```bash
 talon configure channel telegram
 talon configure channel bluebubbles
 ```
 
-The wizard walks through token verification, sender capture, and persistence.
+The wizards walk through token verification, sender capture, and persistence.
 Plugins are spawned automatically as subprocesses; no separate binary needed.
 
-### First-party plugins
+## First-party plugins
 
 talon ships all first-party plugins as subcommands of the main binary:
 
 ```bash
+talon plugin run anthropic
+talon plugin run openai-compat
 talon plugin run telegram
 talon plugin run bluebubbles
-talon plugin run deepseek
 talon plugin run whisper
 talon plugin run brave
 talon plugin run mac-notify
+talon plugin run mac-open
 ```
 
-The gateway spawns these automatically via `BuiltinPluginCmd`, which resolves
-to `[<talon-executable>, "plugin", "run", <name>]`. No separate plugin
-binaries are needed on non-Docker installs.
+The gateway spawns these automatically via `BuiltinPluginCmd`, which
+resolves to `[<talon-executable>, "plugin", "run", <name>]`. No separate
+plugin binaries are needed on non-Docker installs.
 
-## Layered config (the defining feature)
+> **Migration in progress.** The `anthropic` and `openai-compat` plugins are
+> being replaced by direct `agentcore/llm` dispatch in-process. See
+> [`docs/migration-agentcore.md`](./docs/migration-agentcore.md).
 
-talon's config is a two-layer overlay:
+## Layered config
 
-- `~/.openclaw/openclaw.json`. Managed by openclaw; talon treats it as
-  **read-only**.
-- `~/.talon/openclaw.json`. talon's own state; the **only** place talon writes.
+talon's config lives in `~/.talon/talon.json`. talon never writes anywhere
+else.
+
+For machines that previously ran openclaw, talon reads from `~/.openclaw`
+as a read-only fallback layer during migration. Pure-talon installs only
+need `~/.talon`.
 
 Reads merge `~/.talon` over `~/.openclaw` (talon priority for overlapping
 keys; id-keyed arrays like `agents.list` merge by id). Writes always target
-the talon overlay. Override paths with `TALON_STATE_DIR`,
-`OPENCLAW_STATE_DIR`, `TALON_CONFIG_PATH`, `OPENCLAW_CONFIG_PATH`.
+`~/.talon`. Override paths with `TALON_STATE_DIR` and `TALON_CONFIG_PATH`.
 
 ```bash
-# Read the merged view (talon overrides openclaw)
+# Read the merged view
 talon config get gateway.port
 
-# Write goes to ~/.talon/openclaw.json; ~/.openclaw is never modified
+# Write to ~/.talon/talon.json
 talon config set gateway.port 19000
 
-# Show both layer paths
-talon config file --all
-
-# Validate the merged config (schema-aware once cache is populated)
-talon config schema --refresh   # populate ~/.talon/cache/config-schema.json
+# Validate the merged config
 talon config validate
-talon config validate --strict  # fail when no schema cache is available
+
+# Schema cache
+talon config schema --refresh
 ```
 
 ## Config change policy: never auto-restart, never auto-load
 
-talon never restarts the gateway after a config write and never spawns a file
-watcher to auto-load changes. Reload is always explicit. After every
+talon never restarts the gateway after a config write and never spawns a
+file watcher to auto-load changes. Reload is always explicit. After every
 `config set`, talon prints a class-aware hint:
 
 | Class | Hint |
@@ -252,10 +200,9 @@ watcher to auto-load changes. Reload is always explicit. After every
 | `restart` | restart the gateway to apply (consumed at startup) |
 
 Restart-class paths today: `gateway.{port,bind,auth.*}`,
-`gateway.tailscale.*`, `gateway.controlUi.*`, `plugins.entries.*.{enabled,cmd,args}`,
-`plugins.deny`, `plugins.load.paths`, `skills.*`. HUP class is empty pending
-a SIGHUP handler in talon's embedded gateway. Override per-call with
-`--reload=next-rpc|hup|restart`.
+`gateway.tailscale.*`, `gateway.controlUi.*`,
+`plugins.entries.*.{enabled,cmd,args}`, `plugins.deny`, `plugins.load.paths`,
+`skills.*`. Override per-call with `--reload=next-rpc|hup|restart`.
 
 ## Common commands
 
@@ -276,12 +223,10 @@ talon gateway status [--deep]         # service status + RPC probe
 talon gateway call <method> [--params JSON]
 talon gateway run [--port N] [--token <secret>]
 talon gateway health
-talon gateway stability
-talon gateway usage-cost --days 30
 
 talon agents list
-talon models
-talon status [--deep]
+talon models                          # list configured models
+talon models test                     # per-model smoke probe (latency + errors)
 talon chat [--agent <id>] <message...>
 talon chat history [--agent <id>]
 
@@ -290,10 +235,6 @@ talon cron add --schedule "@hourly" --cmd "talon health"
 talon cron remove <id>
 talon cron run <id>
 talon cron status
-talon cron show <id>
-talon cron enable <id>
-talon cron disable <id>
-talon cron runs [<id>]
 
 talon configure channel telegram
 talon configure channel bluebubbles
@@ -301,15 +242,14 @@ talon configure channel bluebubbles
 talon secrets audit [--check]
 talon secrets migrate <path> [--vault Personal]
 talon secrets keychain-bootstrap
-talon secrets reload
 
-talon plugin run <name>               # deepseek|telegram|brave|whisper|bluebubbles|mac-notify
+talon plugin run <name>
 ```
 
 ## Path syntax
 
-Config paths use openclaw's syntax: dot-separated, `[N]` for array indices,
-`["key"]` for keys with reserved characters.
+Config paths use dot-separated form, `[N]` for array indices, `["key"]` for
+keys with reserved characters.
 
 ```bash
 talon config set gateway.port 19000
@@ -325,14 +265,14 @@ map/list (`agents.defaults.models`, `models.providers[.<id>]`,
 
 ## Layered-write side effects
 
-- **Backups** rotate on every talon-overlay write:
-  `~/.talon/openclaw.json.bak`, `.bak.1` … `.bak.4`.
+- **Backups** rotate on every overlay write: `~/.talon/talon.json.bak`,
+  `.bak.1` … `.bak.4`.
 - **Audit log** appends one JSONL record per write to
   `~/.talon/logs/config-audit.jsonl` with sha256 hashes, gateway-mode
   changes, pid/ppid/argv.
-- **Last-good** sidecar at `~/.talon/openclaw.json.last-good` is refreshed
-  by `config validate` on success.
-- `~/.openclaw` is never modified.
+- **Last-good** sidecar at `~/.talon/talon.json.last-good` is refreshed by
+  `config validate` on success.
+- `~/.openclaw` (when present) is never modified.
 
 ## Development
 
@@ -344,7 +284,7 @@ make vet
 make fmt
 make tidy
 make cross      # cross-compile linux/darwin/windows × amd64/arm64
-make test-e2e   # full plugin lifecycle via Docker (requires Docker, ~5-30s)
+make test-e2e   # full plugin lifecycle via Docker (requires Docker)
 ```
 
 Single test: `go test ./internal/config -run TestName -v`.
@@ -358,50 +298,45 @@ make bench BENCHTIME=200x      # quick sanity loop (<1s)
 ```
 
 Diff results with `benchstat`. The `make test` target includes a 3% average
-regression gate via `TALON_BENCH=1`; it requires serialized package execution
-(`-p=1`) and is skipped by plain `go test ./...` to avoid parallel-bench
-contention. Use `make test-fast` when iterating and don't need the gate.
-
-`make web*` and `make gateway-run-with-ui` depend on a sibling repo at
-`../openclaw/ui`. Override with `WEB_DIR=` / `WEB_DIST=` or skip them.
+regression gate via `TALON_BENCH=1`.
 
 ## Project structure
 
 - `cmd/talon/`. Cobra CLI (root + subcommands)
-- `internal/config/`. Layered config: `config.go`, `merge.go`, `edit.go`, `backup.go`, `schema.go`, `path.go`, `reload.go`
-- `internal/openclaw/`. Path resolution for the two layers
-- `internal/gateway/`. WebSocket client (handshake, request/response correlation, event delivery)
-- `internal/server/`. Embedded gateway: protocol framing, session lifecycle, auth, method registry
-- `internal/plugin/`. Plugin host, gRPC client adapter, image provider adapter
-- `internal/plugins/<name>/`. First-party plugin implementations (deepseek, telegram, brave, whisper, bluebubbles, mac-notify)
-- `internal/pluginrun/`. Shared gRPC lifecycle for all first-party plugins
-- `internal/provider/`. Provider interface + native implementations (openai, deepseek)
-- `apps/talon-*-plugin/`. Thin `main()` wrappers (delegate to `internal/plugins/<name>`)
+- `internal/config/`. Layered config: `config.go`, `merge.go`, `edit.go`,
+  `backup.go`, `schema.go`, `path.go`, `reload.go`
+- `internal/openclaw/`. Path resolution for the two state layers (migration-era)
+- `internal/gateway/`. WebSocket client
+- `internal/server/`. Embedded gateway: protocol framing, session lifecycle,
+  auth, method registry
+- `internal/plugin/`. Plugin host (native go-plugin + legacy transports)
+- `internal/plugins/<name>/`. First-party plugin implementations
+- `internal/secrets/`. `op://` + `keychain://` resolution
+- `apps/talon-op-plugin/`. 1Password CLI secrets-resolver subprocess
+- `web/`. Embedded SvelteKit UI
 
-For deeper architecture and wire-protocol details, see
-[`docs/architecture.md`](./docs/architecture.md) and
-[`docs/protocol.md`](./docs/protocol.md).
+For deeper architecture, wire-protocol, and dependency details, see
+[`docs/dependencies.md`](./docs/dependencies.md),
+[`docs/architecture.md`](./docs/architecture.md),
+[`docs/protocol.md`](./docs/protocol.md), and
+[`docs/migration-agentcore.md`](./docs/migration-agentcore.md).
 
 ## Contributing
 
-Contributions are welcome. A few ground rules:
+Contributions welcome. Ground rules:
 
-- **Open an issue first** for anything non-trivial (new subcommand, RPC,
-  config path class). For parity gaps tracked in [PARITY.md](./PARITY.md),
-  reference the existing `talon-<id>` placeholder so the gap stays linked.
-- **Update PARITY.md in the same PR** when you ship a parity gap. The status
-  column is the source of truth for shipped vs partial vs missing commands.
+- **Open an issue first** for anything non-trivial. Use beads (`bd ready`,
+  `bd show <id>`) for in-tree issue tracking.
+- **Don't extend the legacy provider stack.** Per
+  [`docs/migration-agentcore.md`](./docs/migration-agentcore.md), the chat
+  path is moving to `agentcore` + `jess`. New work targets those directly;
+  contribute upstream rather than fork into talon.
 - **Run `make test vet fmt`** before pushing. CI runs the same checks plus
   the benchmark regression gate.
-- **Keep parity stubs discoverable.** Unwired flags should log `"--<flag>
-  accepted but not yet wired"` to stderr, and unimplemented commands should
-  return `notYetImplemented("talon-<id>")` rather than a generic error.
 - **Config consumers read only at startup** belong in the `ReloadRestart`
-  class in `internal/config/reload.go`. Don't add file watchers or
-  auto-reload triggers.
-
-See [`docs/architecture.md`](./docs/architecture.md) for the deeper map of
-where things live.
+  class in `internal/config/reload.go`. Don't add file watchers.
+- **No plaintext secrets** in config or shell files. Use `op://` or
+  `keychain://` references.
 
 ## License
 

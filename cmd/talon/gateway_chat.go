@@ -14,7 +14,6 @@ import (
 	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
 	"github.com/guygrigsby/talon/internal/plugin/native"
 	"github.com/guygrigsby/talon/internal/provider"
-	"github.com/guygrigsby/talon/internal/provider/deepseek"
 	"github.com/guygrigsby/talon/internal/provider/openai"
 	"github.com/guygrigsby/talon/internal/server"
 	"github.com/guygrigsby/talon/internal/tools"
@@ -135,6 +134,11 @@ type pluginSpec struct {
 //  1. ~/.talon/extensions   — talon overlay (writable; where deps land)
 //  2. ~/.openclaw/extensions — openclaw layer (read-only fallback)
 //  3. TALON_EXTENSIONS_PATH or /opt/extensions — image-baked bundle
+//  4. <exe-dir>/../extensions and <exe-dir>/extensions — repo-bundled
+//     extensions for `make build && bin/talon` layouts (covers the
+//     openclaw JS extensions vendored at talon/extensions/ so the
+//     OAuth/claude-cli path "just works" alongside the native API
+//     plugins, provided node + openclaw-plugin-host are on PATH).
 //
 // Spawn picks the first dir that contains the named extension.
 // That makes the post-install talon-overlay copy (with node_modules)
@@ -151,6 +155,20 @@ func defaultPluginDefaults(paths openclaw.Paths) pluginParseDefaults {
 		out.bundledPaths = append(out.bundledPaths, v)
 	} else if _, err := os.Stat("/opt/extensions"); err == nil {
 		out.bundledPaths = append(out.bundledPaths, "/opt/extensions")
+	}
+	if exe, err := os.Executable(); err == nil {
+		exeDir := filepath.Dir(exe)
+		// <exe-dir>/../extensions handles bin/talon → repo/extensions.
+		// <exe-dir>/extensions handles /usr/local/bin layouts where
+		// a packager copied them alongside the binary.
+		for _, c := range []string{
+			filepath.Join(exeDir, "..", "extensions"),
+			filepath.Join(exeDir, "extensions"),
+		} {
+			if st, err := os.Stat(c); err == nil && st.IsDir() {
+				out.bundledPaths = append(out.bundledPaths, c)
+			}
+		}
 	}
 	return out
 }
@@ -279,6 +297,17 @@ func parsePluginSpecs(merged []byte, defaults pluginParseDefaults) []pluginSpec 
 func buildPluginEnv(name string, entry gjson.Result) []string {
 	out := []string{}
 	switch name {
+	case "anthropic":
+		// Lets users put their API key (or an op:// / keychain://
+		// reference) under plugins.entries.anthropic.config.apiKey
+		// instead of an auth-profiles.json entry or a shell env var.
+		if v := entry.Get("config.apiKey").Str; v != "" {
+			if isSecretRef(v) {
+				out = append(out, "ANTHROPIC_API_KEY_REF="+v)
+			} else {
+				out = append(out, "ANTHROPIC_API_KEY="+v)
+			}
+		}
 	case "brave":
 		if v := entry.Get("config.webSearch.apiKey").Str; v != "" {
 			if isSecretRef(v) {
@@ -583,11 +612,17 @@ func (f *agentProviderFactory) authProfilePath(agentID string) string {
 }
 
 func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provider, error) {
-	// Loaded plugins win over the in-tree native paths so a user
-	// installing talon-deepseek-plugin (or any other gRPC provider
-	// plugin) takes effect immediately. Native fallbacks remain so
-	// removing the plugin reverts to the built-in implementation
-	// without needing a config change.
+	// All providers come from plugins. The openai-compat plugin
+	// serves openai/deepseek/mistral/mlx/ollama/etc as multi-tenant
+	// entries; anthropic is a dedicated plugin. Any provider not
+	// offered by a loaded plugin is unavailable — there's no in-
+	// tree fallback.
+	//
+	// One exception: lmstudio retains a host-side path because of
+	// the container-aware base-URL rewrite (host.docker.internal)
+	// and the per-agent auth-profiles.json fallback. Both can move
+	// into the openai-compat plugin in a follow-up; the rewrite
+	// involves paths.IsContainer() which is a host-side concern.
 	if f.host != nil {
 		if inst := f.host.ProviderByName(providerName); inst != nil {
 			return plugin.NewPluginProvider(providerName, inst.Client), nil
@@ -595,26 +630,6 @@ func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provi
 	}
 	authPath := f.authProfilePath(agentID)
 	switch providerName {
-	case "openai":
-		key, err := openai.LoadAPIKey(authPath, "openai:default")
-		if err != nil {
-			return nil, fmt.Errorf("openai: %w", err)
-		}
-		key, err = resolveSecretRef(key)
-		if err != nil {
-			return nil, fmt.Errorf("openai: resolve key: %w", err)
-		}
-		return openai.New(openai.Options{APIKey: key}), nil
-	case "deepseek":
-		key, err := deepseek.LoadAPIKey(authPath)
-		if err != nil {
-			return nil, fmt.Errorf("deepseek: %w", err)
-		}
-		key, err = resolveSecretRef(key)
-		if err != nil {
-			return nil, fmt.Errorf("deepseek: resolve key: %w", err)
-		}
-		return deepseek.New(deepseek.Options{APIKey: key}), nil
 	case "lmstudio":
 		// Local LM Studio (or any OpenAI-compatible local server).
 		// Auth is OPTIONAL for unauthenticated local installs but
@@ -657,7 +672,7 @@ func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provi
 			ProviderKey: "lmstudio",
 		}), nil
 	}
-	return nil, fmt.Errorf("%w: %q (implemented natively: openai, deepseek, lmstudio; no loaded plugin offers it)",
+	return nil, fmt.Errorf("%w: %q (no loaded plugin offers it; enable openai-compat with this provider in config, or load a plugin that advertises it)",
 		server.ErrProviderUnavailable, providerName)
 }
 

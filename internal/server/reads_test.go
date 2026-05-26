@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/guygrigsby/talon/internal/openclaw"
+	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
+	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 )
 
 // readFixture builds a Paths backed by a temp dir and writes the openclaw
@@ -59,7 +61,7 @@ const fixtureRealConfig = `{
 		"providers": {
 			"openai": {
 				"models": [
-					{"id": "gpt-5.4-mini", "name": "GPT-5.4 mini", "contextWindow": 400000, "input": ["text", "image"], "reasoning": true}
+					{"id": "gpt-5.4-mini", "name": "GPT-5.4 mini", "contextWindow": 400000, "maxTokens": 128000, "input": ["text", "image"], "reasoning": true, "cost": {"input": 1.25, "output": 10, "cacheRead": 0.125, "cacheWrite": 1.25}}
 				]
 			},
 			"anthropic": {
@@ -135,17 +137,13 @@ func TestModelsList_FlattensProvidersAndAttachesAliases(t *testing.T) {
 		t.Fatal(ferr)
 	}
 	models := res.(map[string]any)["models"].([]map[string]any)
-	// Models is now: built-in catalog (openai + deepseek defaults) ∪
-	// user config (3 entries). Catalog has no anthropic, so the 3
-	// user entries (gpt-5.4-mini, claude-opus-4-7, deepseek-reasoner)
-	// each appear once; gpt-5.4-mini and deepseek-reasoner OVERRIDE
-	// the catalog's own entries (collision keys), claude-opus-4-7
-	// adds a row.
+	// Models comes from user-config overlays only here (no plugin
+	// host wired in the test, no catalog floor). Three user entries:
+	// gpt-5.4-mini, claude-opus-4-7, deepseek-reasoner.
 	byID := make(map[string]map[string]any, len(models))
 	for _, m := range models {
 		byID[m["id"].(string)] = m
 	}
-	// User-defined entries still surface with their fields:
 	if alias, ok := byID["gpt-5.4-mini"]["alias"]; !ok || alias != "mini" {
 		t.Errorf("gpt-5.4-mini alias = %v (ok=%v), want 'mini'", alias, ok)
 	}
@@ -155,45 +153,94 @@ func TestModelsList_FlattensProvidersAndAttachesAliases(t *testing.T) {
 	if _, ok := byID["claude-opus-4-7"]["alias"]; ok {
 		t.Errorf("claude-opus-4-7 should not have alias: %+v", byID["claude-opus-4-7"])
 	}
-	// User config wins on collision: gpt-5.4-mini's contextWindow
-	// must be the user-supplied 400000, not whatever the catalog had
-	// (catalog doesn't ship gpt-5.4-mini, but the principle holds).
 	gpt := byID["gpt-5.4-mini"]
 	if gpt["provider"] != "openai" || gpt["contextWindow"].(int64) != 400000 || gpt["reasoning"] != true {
 		t.Errorf("gpt-5.4-mini fields wrong: %+v", gpt)
+	}
+	if gpt["maxTokens"].(int64) != 128000 {
+		t.Errorf("gpt-5.4-mini maxTokens = %v", gpt["maxTokens"])
 	}
 	inputs := gpt["input"].([]string)
 	if len(inputs) != 2 || inputs[0] != "text" || inputs[1] != "image" {
 		t.Errorf("gpt-5.4-mini inputs = %+v", inputs)
 	}
-
-	// Built-in OpenAI catalog should also be present.
-	if _, ok := byID["gpt-4o"]; !ok {
-		t.Errorf("expected built-in gpt-4o entry; got ids = %v", keysOf(byID))
+	cost := gpt["cost"].(map[string]any)
+	if cost["input"].(float64) != 1.25 || cost["output"].(float64) != 10.0 || cost["source"] != "catalog" {
+		t.Errorf("gpt-5.4-mini cost = %+v", cost)
 	}
 }
 
-func TestModelsList_EmptyConfigStillReturnsBuiltInCatalog(t *testing.T) {
+func TestModelsList_AttachesDottedModelPriceOverride(t *testing.T) {
+	h := NewReadHandler(readFixture(t, `{
+		"models": {
+			"providers": {
+				"openai": {
+					"models": [
+						{"id": "gpt-5.4-mini", "name": "GPT-5.4 mini"}
+					]
+				}
+			},
+			"openai/gpt-5.4-mini": {
+				"priceUsdPer1M": {"in": 9.0, "out": 90.0}
+			}
+		}
+	}`))
+	res, ferr := h.handleModelsList(t.Context(), HandlerCtx{}, nil)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	models := res.(map[string]any)["models"].([]map[string]any)
+	if len(models) != 1 {
+		t.Fatalf("got %d models, want 1: %+v", len(models), models)
+	}
+	cost := models[0]["cost"].(map[string]any)
+	if cost["input"].(float64) != 9.0 || cost["output"].(float64) != 90.0 || cost["source"] != "priceUsdPer1M" {
+		t.Errorf("cost override = %+v", cost)
+	}
+}
+
+func TestModelsList_EmptyConfigReturnsEmpty(t *testing.T) {
+	// With no in-tree catalog, no plugins loaded, and no user
+	// config, models.list returns an empty list. The picker is
+	// driven entirely by plugin ListProviderModels + user-config
+	// overlays + LM Studio dynamic discovery — none active here.
 	h := NewReadHandler(readFixture(t, `{}`))
 	res, ferr := h.handleModelsList(t.Context(), HandlerCtx{}, nil)
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
 	models := res.(map[string]any)["models"].([]map[string]any)
-	if len(models) == 0 {
-		t.Fatal("empty config should still surface the built-in model catalog")
+	if len(models) != 0 {
+		t.Errorf("empty config should produce zero rows, got %d: %v", len(models), models)
 	}
-	// Spot-check: the catalog must include common production models so
-	// fresh installs aren't stuck with "no models in picker."
-	want := []string{"gpt-4o", "gpt-4o-mini", "o1", "o3-mini", "deepseek-chat"}
-	gotIDs := map[string]bool{}
-	for _, m := range models {
-		gotIDs[m["id"].(string)] = true
+}
+
+func TestModelsList_IgnoresPluginManifestModels(t *testing.T) {
+	// Plugins advertising models in their manifest must NOT show up
+	// in the picker — the picker is config-driven only. Discovery
+	// (ListProviderModels RPC) is also off this path by design.
+	h := NewReadHandler(readFixture(t, `{}`))
+	host := plugin.NewHost("")
+	if err := host.RegisterInstance(plugin.NewInstance(plugin.InstanceFields{
+		Name: "anthropic",
+		Manifest: &pb.Manifest{
+			OffersProviders: []*pb.ProviderSpec{{
+				Name:   "anthropic",
+				Models: []string{"claude-opus-4-7"},
+			}},
+		},
+	})); err != nil {
+		t.Fatal(err)
 	}
-	for _, id := range want {
-		if !gotIDs[id] {
-			t.Errorf("built-in catalog missing %q; got %v", id, keysOfBool(gotIDs))
-		}
+	h.WithHost(host)
+
+	res, ferr := h.handleModelsList(t.Context(), HandlerCtx{}, nil)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	models := res.(map[string]any)["models"].([]map[string]any)
+	if len(models) != 0 {
+		t.Errorf("plugin manifest must not bleed into models.list; got %d rows: %v", len(models), models)
 	}
 }
 

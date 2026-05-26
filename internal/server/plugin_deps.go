@@ -393,12 +393,20 @@ type builtinPlugin struct {
 // Single source of truth for the /plugins UI's pre-spawn metadata.
 var builtinPlugins = []builtinPlugin{
 	{
-		EntryName:   "deepseek",
-		BinaryPath:  "/usr/local/bin/talon-deepseek-plugin",
-		Description: "DeepSeek chat-completions provider",
+		EntryName:   "anthropic",
+		BinaryPath:  "/usr/local/bin/talon-anthropic-plugin",
+		Description: "Anthropic Messages API provider (Claude)",
 		Version:     "0.1.0",
 		Kind:        "provider",
-		Label:       "DeepSeek",
+		Label:       "Anthropic",
+	},
+	{
+		EntryName:   "openai-compat",
+		BinaryPath:  "/usr/local/bin/talon-openai-compat-plugin",
+		Description: "OpenAI-compatible providers (multi-tenant): openai, deepseek, mistral, mlx, lmstudio, ollama, …",
+		Version:     "0.1.0",
+		Kind:        "provider",
+		Label:       "OpenAI-Compatible",
 	},
 	{
 		EntryName:   "telegram",

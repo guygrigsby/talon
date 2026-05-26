@@ -7,11 +7,12 @@ import (
 
 	"github.com/guygrigsby/talon/internal/plugin/native"
 	"github.com/guygrigsby/talon/internal/plugin/pb"
+	anthropicplug "github.com/guygrigsby/talon/internal/plugins/anthropic"
 	"github.com/guygrigsby/talon/internal/plugins/bluebubbles"
 	"github.com/guygrigsby/talon/internal/plugins/brave"
-	deepseekplug "github.com/guygrigsby/talon/internal/plugins/deepseek"
 	"github.com/guygrigsby/talon/internal/plugins/macnotify"
 	"github.com/guygrigsby/talon/internal/plugins/macopen"
+	openaicompat "github.com/guygrigsby/talon/internal/plugins/openaicompat"
 	"github.com/guygrigsby/talon/internal/plugins/telegram"
 	"github.com/guygrigsby/talon/internal/plugins/whisper"
 )
@@ -20,13 +21,14 @@ import (
 // Each entry's constructor is called to create the PluginServer; then
 // pluginrun.Serve handles the gRPC lifecycle.
 var pluginConstructors = map[string]func() (pb.PluginServer, error){
-	"deepseek":    deepseekplug.New,
-	"telegram":    telegram.New,
-	"brave":       brave.New,
-	"whisper":     whisper.New,
-	"bluebubbles": bluebubbles.New,
-	"mac-notify":  macnotify.New,
-	"mac-open":    macopen.New,
+	"anthropic":     anthropicplug.New,
+	"openai-compat": openaicompat.New,
+	"telegram":      telegram.New,
+	"brave":         brave.New,
+	"whisper":       whisper.New,
+	"bluebubbles":   bluebubbles.New,
+	"mac-notify":    macnotify.New,
+	"mac-open":      macopen.New,
 }
 
 func pluginCmd() *cobra.Command {

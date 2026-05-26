@@ -20,9 +20,10 @@ import (
 // Resolution order:
 //
 //  1. cmd[0] as-is (matches Docker / installed layouts at absolute paths).
-//  2. Sibling of the talon binary (dev layout where bin/talon and bin/
+//  2. TALON_PLUGIN_PATH entries, then ~/.talon/plugins.
+//  3. Sibling of the talon binary (dev layout where bin/talon and bin/
 //     plugin binaries land next to each other).
-//  3. PATH lookup on basename (Homebrew-style installs).
+//  4. PATH lookup on basename (Homebrew-style installs).
 //
 // Each fallback hit is logged so a stale configured path is visible.
 func ResolvePluginCmd(name string, cmd []string) ([]string, error) {
@@ -35,6 +36,19 @@ func ResolvePluginCmd(name string, cmd []string) ([]string, error) {
 	}
 	base := filepath.Base(bin)
 	tried := []string{bin}
+	for _, dir := range pluginSearchDirs() {
+		candidate := filepath.Join(dir, base)
+		if candidate == bin {
+			continue
+		}
+		if _, err := os.Stat(candidate); err == nil {
+			slog.Info("plugin cmd resolved via plugin dir",
+				"plugin", name, "configured", bin, "resolved", candidate)
+			out := append([]string{candidate}, cmd[1:]...)
+			return out, nil
+		}
+		tried = append(tried, candidate)
+	}
 	if exe, err := os.Executable(); err == nil {
 		sibling := filepath.Join(filepath.Dir(exe), base)
 		if sibling != bin {
@@ -55,4 +69,27 @@ func ResolvePluginCmd(name string, cmd []string) ([]string, error) {
 	}
 	tried = append(tried, "$PATH/"+base)
 	return nil, fmt.Errorf("plugin %s: cmd not found (tried %v)", name, tried)
+}
+
+func pluginSearchDirs() []string {
+	var out []string
+	seen := map[string]struct{}{}
+	add := func(dir string) {
+		if dir == "" {
+			return
+		}
+		dir = filepath.Clean(dir)
+		if _, ok := seen[dir]; ok {
+			return
+		}
+		seen[dir] = struct{}{}
+		out = append(out, dir)
+	}
+	for _, dir := range filepath.SplitList(os.Getenv("TALON_PLUGIN_PATH")) {
+		add(dir)
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		add(filepath.Join(home, ".talon", "plugins"))
+	}
+	return out
 }

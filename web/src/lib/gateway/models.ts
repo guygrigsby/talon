@@ -12,12 +12,24 @@ import { create } from '@bufbuild/protobuf';
 import { ConfigSetRequestSchema } from './gen/talon/v1/config_pb.js';
 import { getConfigClient, getModelsClient } from './connect';
 
+export type ModelCost = {
+	input?: number;
+	output?: number;
+	cacheRead?: number;
+	cacheWrite?: number;
+	source?: string;
+};
+
 export type ModelEntry = {
 	provider: string;
 	id: string;
 	name: string;
+	api?: string;
 	contextWindow?: number;
+	maxTokens?: number;
+	input?: string[];
 	reasoning?: boolean;
+	cost?: ModelCost;
 	authOk: boolean;
 	alias?: string;
 };
@@ -27,8 +39,12 @@ type RawListed = {
 		provider: string;
 		id: string;
 		name?: string;
+		api?: string;
 		contextWindow?: number;
+		maxTokens?: number;
+		input?: string[];
 		reasoning?: boolean;
+		cost?: ModelCost;
 		alias?: string;
 	}>;
 };
@@ -54,8 +70,12 @@ export async function loadSelectableModels(): Promise<ModelEntry[]> {
 			provider: m.provider,
 			id: m.id,
 			name: m.name ?? m.id,
+			api: m.api,
 			contextWindow: m.contextWindow,
+			maxTokens: m.maxTokens,
+			input: m.input,
 			reasoning: m.reasoning,
+			cost: m.cost,
 			authOk: okProviders.has(m.provider),
 			alias: m.alias
 		});

@@ -48,6 +48,7 @@ func (p *PluginProvider) Stream(ctx context.Context, req provider.Request) (<-ch
 	}
 	pbReq := &pb.StreamCompletionRequest{
 		Model:           req.Model.Model(),
+		Provider:        p.name,
 		System:          req.System,
 		Messages:        messagesToProto(req.Messages),
 		Tools:           toolSpecsToProto(req.Tools),

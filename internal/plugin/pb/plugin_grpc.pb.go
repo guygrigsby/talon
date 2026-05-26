@@ -48,6 +48,7 @@ const (
 	Plugin_Shutdown_FullMethodName           = "/talon.plugin.v1.Plugin/Shutdown"
 	Plugin_RunTool_FullMethodName            = "/talon.plugin.v1.Plugin/RunTool"
 	Plugin_StreamCompletion_FullMethodName   = "/talon.plugin.v1.Plugin/StreamCompletion"
+	Plugin_ListProviderModels_FullMethodName = "/talon.plugin.v1.Plugin/ListProviderModels"
 	Plugin_StartChannel_FullMethodName       = "/talon.plugin.v1.Plugin/StartChannel"
 	Plugin_SendChannelMessage_FullMethodName = "/talon.plugin.v1.Plugin/SendChannelMessage"
 )
@@ -64,6 +65,13 @@ type PluginClient interface {
 	RunTool(ctx context.Context, in *RunToolRequest, opts ...grpc.CallOption) (*RunToolResponse, error)
 	// Provider capability — server-streaming completion deltas.
 	StreamCompletion(ctx context.Context, in *StreamCompletionRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Delta], error)
+	// Provider capability — list the models this provider exposes.
+	// Multi-tenant plugins answer per provider name; single-provider
+	// plugins ignore the request's provider field. Implementations
+	// are encouraged to cache (e.g. 5min TTL) to keep models.list
+	// cheap. If unsupported, return UNIMPLEMENTED and the host falls
+	// back to the manifest's static model list.
+	ListProviderModels(ctx context.Context, in *ListProviderModelsRequest, opts ...grpc.CallOption) (*ListProviderModelsResponse, error)
 	// Channel capability. StartChannel returns a server-stream of inbound
 	// messages from the channel (Telegram polling, Slack events, etc.).
 	// SendChannelMessage is the outbound side; idempotency is the
@@ -129,6 +137,16 @@ func (c *pluginClient) StreamCompletion(ctx context.Context, in *StreamCompletio
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Plugin_StreamCompletionClient = grpc.ServerStreamingClient[Delta]
 
+func (c *pluginClient) ListProviderModels(ctx context.Context, in *ListProviderModelsRequest, opts ...grpc.CallOption) (*ListProviderModelsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListProviderModelsResponse)
+	err := c.cc.Invoke(ctx, Plugin_ListProviderModels_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *pluginClient) StartChannel(ctx context.Context, in *StartChannelRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[IncomingChannelMessage], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &Plugin_ServiceDesc.Streams[1], Plugin_StartChannel_FullMethodName, cOpts...)
@@ -170,6 +188,13 @@ type PluginServer interface {
 	RunTool(context.Context, *RunToolRequest) (*RunToolResponse, error)
 	// Provider capability — server-streaming completion deltas.
 	StreamCompletion(*StreamCompletionRequest, grpc.ServerStreamingServer[Delta]) error
+	// Provider capability — list the models this provider exposes.
+	// Multi-tenant plugins answer per provider name; single-provider
+	// plugins ignore the request's provider field. Implementations
+	// are encouraged to cache (e.g. 5min TTL) to keep models.list
+	// cheap. If unsupported, return UNIMPLEMENTED and the host falls
+	// back to the manifest's static model list.
+	ListProviderModels(context.Context, *ListProviderModelsRequest) (*ListProviderModelsResponse, error)
 	// Channel capability. StartChannel returns a server-stream of inbound
 	// messages from the channel (Telegram polling, Slack events, etc.).
 	// SendChannelMessage is the outbound side; idempotency is the
@@ -197,6 +222,9 @@ func (UnimplementedPluginServer) RunTool(context.Context, *RunToolRequest) (*Run
 }
 func (UnimplementedPluginServer) StreamCompletion(*StreamCompletionRequest, grpc.ServerStreamingServer[Delta]) error {
 	return status.Error(codes.Unimplemented, "method StreamCompletion not implemented")
+}
+func (UnimplementedPluginServer) ListProviderModels(context.Context, *ListProviderModelsRequest) (*ListProviderModelsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListProviderModels not implemented")
 }
 func (UnimplementedPluginServer) StartChannel(*StartChannelRequest, grpc.ServerStreamingServer[IncomingChannelMessage]) error {
 	return status.Error(codes.Unimplemented, "method StartChannel not implemented")
@@ -290,6 +318,24 @@ func _Plugin_StreamCompletion_Handler(srv interface{}, stream grpc.ServerStream)
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Plugin_StreamCompletionServer = grpc.ServerStreamingServer[Delta]
 
+func _Plugin_ListProviderModels_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListProviderModelsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(PluginServer).ListProviderModels(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Plugin_ListProviderModels_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(PluginServer).ListProviderModels(ctx, req.(*ListProviderModelsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Plugin_StartChannel_Handler(srv interface{}, stream grpc.ServerStream) error {
 	m := new(StartChannelRequest)
 	if err := stream.RecvMsg(m); err != nil {
@@ -337,6 +383,10 @@ var Plugin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RunTool",
 			Handler:    _Plugin_RunTool_Handler,
+		},
+		{
+			MethodName: "ListProviderModels",
+			Handler:    _Plugin_ListProviderModels_Handler,
 		},
 		{
 			MethodName: "SendChannelMessage",

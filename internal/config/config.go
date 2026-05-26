@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonconfig"
 )
 
 // Config is the subset of openclaw.json talon types directly. Only fields
@@ -70,14 +73,39 @@ func MergedBytes(p openclaw.Paths) ([]byte, error) {
 }
 
 func mergedBytesUncached(p openclaw.Paths) ([]byte, error) {
+	nativePath := nativeConfigPath(p)
+	talonJSONPath := legacyTalonConfigPath(p, nativePath)
 	openclawRaw, err := readOptional(p.Openclaw.Config, p.SkipOpenclaw)
 	if err != nil {
 		return nil, err
 	}
-	talonRaw, err := readOptional(p.Talon.Config, false)
+	talonRaw, err := readOptional(talonJSONPath, false)
 	if err != nil {
 		return nil, err
 	}
+	fallback, err := mergeLegacyLayers(openclawRaw, talonRaw)
+	if err != nil {
+		return nil, err
+	}
+	nativeRaw, err := readOptional(nativePath, false)
+	if err != nil {
+		return nil, err
+	}
+	if nativeRaw != nil {
+		nativeCfg, err := talonconfig.ReadTOMLBytes(nativeRaw)
+		if err != nil {
+			return nil, fmt.Errorf("parse native config %s: %w", nativePath, err)
+		}
+		adapted, err := talonconfig.ToLegacyJSON(nativeCfg, fallback)
+		if err != nil {
+			return nil, fmt.Errorf("adapt native config %s: %w", nativePath, err)
+		}
+		return canonicalize(adapted)
+	}
+	return fallback, nil
+}
+
+func mergeLegacyLayers(openclawRaw, talonRaw []byte) ([]byte, error) {
 	if openclawRaw == nil && talonRaw == nil {
 		return []byte("{}"), nil
 	}
@@ -100,6 +128,9 @@ type mergedCacheKey struct {
 	talonPath       string
 	talonSize       int64
 	talonMtimeNs    int64
+	nativePath      string
+	nativeSize      int64
+	nativeMtimeNs   int64
 	openclawPath    string
 	openclawSize    int64
 	openclawMtimeNs int64
@@ -115,14 +146,21 @@ var (
 )
 
 func buildMergedCacheKey(p openclaw.Paths) mergedCacheKey {
+	nativePath := nativeConfigPath(p)
+	talonJSONPath := legacyTalonConfigPath(p, nativePath)
 	k := mergedCacheKey{
-		talonPath:    p.Talon.Config,
+		talonPath:    talonJSONPath,
+		nativePath:   nativePath,
 		openclawPath: p.Openclaw.Config,
 		skipOpenclaw: p.SkipOpenclaw,
 	}
-	if st, err := os.Stat(p.Talon.Config); err == nil {
+	if st, err := os.Stat(talonJSONPath); err == nil {
 		k.talonSize = st.Size()
 		k.talonMtimeNs = st.ModTime().UnixNano()
+	}
+	if st, err := os.Stat(nativePath); err == nil {
+		k.nativeSize = st.Size()
+		k.nativeMtimeNs = st.ModTime().UnixNano()
 	}
 	if !p.SkipOpenclaw {
 		if st, err := os.Stat(p.Openclaw.Config); err == nil {
@@ -131,6 +169,29 @@ func buildMergedCacheKey(p openclaw.Paths) mergedCacheKey {
 		}
 	}
 	return k
+}
+
+func nativeConfigPath(p openclaw.Paths) string {
+	if strings.TrimSpace(os.Getenv("TALON_CONFIG_PATH")) != "" {
+		if strings.EqualFold(filepath.Ext(p.Talon.Config), ".toml") {
+			return p.Talon.Config
+		}
+		return ""
+	}
+	if p.Talon.Dir == "" {
+		return ""
+	}
+	return filepath.Join(p.Talon.Dir, "config.toml")
+}
+
+func legacyTalonConfigPath(p openclaw.Paths, nativePath string) string {
+	if p.Talon.Config == "" || strings.EqualFold(filepath.Ext(p.Talon.Config), ".toml") {
+		return ""
+	}
+	if nativePath != "" && filepath.Clean(p.Talon.Config) == filepath.Clean(nativePath) {
+		return ""
+	}
+	return p.Talon.Config
 }
 
 // invalidateMergedCacheForTest drops the cached entry. Tests that

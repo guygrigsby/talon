@@ -78,6 +78,7 @@ export function makeChatStore(sessionKey: string) {
 	async function send(text: string) {
 		const trimmed = text.trim();
 		if (!trimmed) return;
+		const runId = makeRunId();
 		// Optimistic user echo so the transcript reflects intent
 		// before the server roundtrip. Timestamp is local-clock;
 		// the gateway doesn't echo a user-turn event so this stays
@@ -96,15 +97,21 @@ export function makeChatStore(sessionKey: string) {
 		];
 		status = 'streaming';
 		errorMessage = null;
+		activeRunId = runId;
 		try {
 			const client = getChatClient();
-			const res = await client.send(
-				create(ChatSendRequestSchema, { sessionKey, message: trimmed })
+			await client.send(
+				create(ChatSendRequestSchema, {
+					sessionKey,
+					message: trimmed,
+					idempotencyKey: runId
+				})
 			);
-			activeRunId = res.runId || null;
+			scheduleHistoryReconcile(runId);
 		} catch (err) {
 			status = 'error';
 			errorMessage = friendlyAuthError(err);
+			if (activeRunId === runId) activeRunId = null;
 		}
 	}
 
@@ -150,6 +157,13 @@ export function makeChatStore(sessionKey: string) {
 				break;
 			}
 		}
+	}
+
+	function scheduleHistoryReconcile(runId: string) {
+		setTimeout(() => {
+			if (activeRunId !== runId || status !== 'streaming') return;
+			loadHistory();
+		}, 1800);
 	}
 
 	function upsertAssistant(ev: ChatEvent, text: string, final: boolean) {
@@ -380,4 +394,11 @@ function nowLabel(): string {
 	const mm = String(d.getMinutes()).padStart(2, '0');
 	const ss = String(d.getSeconds()).padStart(2, '0');
 	return `${hh}:${mm}:${ss}`;
+}
+
+function makeRunId(): string {
+	if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+		return crypto.randomUUID();
+	}
+	return `run-${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }

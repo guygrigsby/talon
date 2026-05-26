@@ -31,7 +31,7 @@ func writeWS(t *testing.T, ws, rel, body string) {
 
 func TestRegistry_BuiltinsRegistered(t *testing.T) {
 	r := New(newWorkspace(t))
-	want := []string{"bash", "edit", "glob", "grep", "read", "remember", "write"}
+	want := []string{"bash", "edit", "glob", "grep", "read", "write"}
 	got := r.Names()
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Errorf("Names() = %v, want %v", got, want)
@@ -254,36 +254,6 @@ func TestBashTool_RunsInWorkspaceDir(t *testing.T) {
 	}
 }
 
-// --- remember --------------------------------------------------------------
-
-func TestRememberTool_AppendsToWorkspaceMemory(t *testing.T) {
-	ws := newWorkspace(t)
-	r := New(ws)
-	out, err := r.Run(t.Context(), "remember", []byte(`{"text":"keep this fact"}`))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out, "remembered") {
-		t.Errorf("output: %q", out)
-	}
-	matches, err := filepath.Glob(filepath.Join(ws, "memory", "*.md"))
-	if err != nil || len(matches) == 0 {
-		t.Fatalf("memory file not created: %v matches=%v", err, matches)
-	}
-	body, _ := os.ReadFile(matches[0])
-	if !strings.Contains(string(body), "keep this fact") {
-		t.Errorf("note not persisted: %q", body)
-	}
-}
-
-func TestRememberTool_RejectsEmptyText(t *testing.T) {
-	r := New(newWorkspace(t))
-	_, err := r.Run(t.Context(), "remember", []byte(`{"text":""}`))
-	if err == nil {
-		t.Errorf("expected rejection for empty text")
-	}
-}
-
 // --- subagent --------------------------------------------------------------
 
 type stubSubagent struct {
@@ -351,7 +321,7 @@ func TestNewWithSubagent_NilRunnerSkipsTool(t *testing.T) {
 func TestNewWithSubagent_RegistersSubagentAlongsideBuiltins(t *testing.T) {
 	r := NewWithSubagent(newWorkspace(t), &stubSubagent{output: "ok"})
 	got := r.Names()
-	wantSubset := []string{"bash", "edit", "glob", "grep", "read", "remember", "subagent", "write"}
+	wantSubset := []string{"bash", "edit", "glob", "grep", "read", "subagent", "write"}
 	if strings.Join(got, ",") != strings.Join(wantSubset, ",") {
 		t.Errorf("Names() = %v, want %v", got, wantSubset)
 	}

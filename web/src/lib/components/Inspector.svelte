@@ -1,19 +1,54 @@
 <script lang="ts">
 	import type { Channel, Message } from '$lib/data/channels';
 	import { sourceLabel } from '$lib/data/channels';
+	import {
+		loadSelectableModels,
+		modelKey,
+		type ModelCost,
+		type ModelEntry
+	} from '$lib/gateway/models';
 	import SourceDot from './SourceDot.svelte';
 
 	let {
 		channel,
 		messages,
+		activeModelId = null,
+		activeModelSource = null,
 		onClose,
 		open = true,
 	}: {
 		channel: Channel;
 		messages: Message[];
+		activeModelId?: string | null;
+		activeModelSource?: string | null;
 		onClose?: () => void;
 		open?: boolean;
 	} = $props();
+
+	let models = $state<ModelEntry[]>([]);
+	let modelsLoading = $state(false);
+	let modelsError = $state<string | null>(null);
+
+	$effect(() => {
+		let cancelled = false;
+		modelsLoading = true;
+		modelsError = null;
+		loadSelectableModels()
+			.then((next) => {
+				if (cancelled) return;
+				models = next;
+			})
+			.catch((err) => {
+				if (cancelled) return;
+				modelsError = err instanceof Error ? err.message : String(err);
+			})
+			.finally(() => {
+				if (!cancelled) modelsLoading = false;
+			});
+		return () => {
+			cancelled = true;
+		};
+	});
 
 	const totals = $derived.by(() => {
 		let inTok = 0;
@@ -43,6 +78,67 @@
 	const lastAssistant = $derived(
 		[...messages].reverse().find((m) => m.role === 'assistant'),
 	);
+
+	const activeModel = $derived.by(() => {
+		const key = activeModelId?.trim();
+		if (!key) return null;
+		return models.find((m) => modelKey(m) === key) ?? null;
+	});
+
+	const activeModelParts = $derived.by(() => splitModelKey(activeModelId));
+	const activeCost = $derived(activeModel?.cost ?? null);
+	const sessionCost = $derived.by(() => estimateSessionCost(totals.inTok, totals.outTok, activeCost));
+
+	function splitModelKey(key: string | null | undefined): { provider: string; id: string } | null {
+		const trimmed = key?.trim();
+		if (!trimmed) return null;
+		const slash = trimmed.indexOf('/');
+		if (slash < 0) return { provider: '', id: trimmed };
+		return { provider: trimmed.slice(0, slash), id: trimmed.slice(slash + 1) };
+	}
+
+	function formatTokens(value?: number): string {
+		if (!value || value <= 0) return '—';
+		if (value >= 1_000_000) {
+			return `${trimFixed(value / 1_000_000, value % 1_000_000 === 0 ? 0 : 1)}M`;
+		}
+		if (value >= 1_000) {
+			return `${trimFixed(value / 1_000, value % 1_000 === 0 ? 0 : 1)}K`;
+		}
+		return String(value);
+	}
+
+	function formatPrice(value: number | undefined): string {
+		if (value == null) return '—';
+		if (value === 0) return '$0';
+		return `$${trimFixed(value, value < 1 ? 3 : 2)}`;
+	}
+
+	function formatUSD(value: number): string {
+		if (value === 0) return '$0.00';
+		if (value > 0 && value < 0.0001) return '<$0.0001';
+		return `$${trimFixed(value, value < 0.01 ? 4 : 2)}`;
+	}
+
+	function trimFixed(value: number, digits: number): string {
+		return value.toFixed(digits).replace(/\.?0+$/, '');
+	}
+
+	function priceSourceLabel(source?: string): string {
+		if (source === 'priceUsdPer1M') return 'override';
+		if (source === 'builtin') return 'built-in';
+		if (source === 'catalog') return 'catalog';
+		return 'catalog';
+	}
+
+	function hasTokenPrice(cost: ModelCost | null): boolean {
+		return cost?.input != null || cost?.output != null;
+	}
+
+	function estimateSessionCost(inTok: number, outTok: number, cost: ModelCost | null): number | null {
+		if (!hasTokenPrice(cost)) return null;
+		return (inTok * (cost?.input ?? 0) + outTok * (cost?.output ?? 0)) / 1_000_000;
+	}
 </script>
 
 <aside class="ins" class:is-open={open} aria-label="Channel inspector" aria-hidden={!open}>
@@ -69,12 +165,59 @@
 		</dl>
 	</section>
 
+	<section class="block" aria-labelledby="ins-model">
+		<h3 id="ins-model" class="t-label block-title">Model</h3>
+		{#if activeModelId}
+			<dl class="kv model-kv">
+				<dt>active</dt><dd class="t-mono wrap">{activeModelId}</dd>
+				<dt>source</dt><dd class="t-mono">{activeModelSource ?? '—'}</dd>
+				<dt>provider</dt><dd class="t-mono">{activeModel?.provider ?? activeModelParts?.provider ?? '—'}</dd>
+				<dt>id</dt><dd class="t-mono wrap">{activeModel?.id ?? activeModelParts?.id ?? '—'}</dd>
+				<dt>name</dt><dd class="wrap">{activeModel?.name ?? '—'}</dd>
+				<dt>alias</dt><dd class="t-mono wrap">{activeModel?.alias ?? '—'}</dd>
+				<dt>api</dt><dd class="t-mono wrap">{activeModel?.api ?? '—'}</dd>
+				<dt>auth</dt>
+				<dd class:auth-ok={activeModel?.authOk} class:auth-bad={!!activeModel && !activeModel.authOk}>
+					{activeModel ? (activeModel.authOk ? 'ok' : 'missing') : modelsLoading ? 'loading' : 'unknown'}
+				</dd>
+				<dt>ctx</dt><dd class="t-num">{formatTokens(activeModel?.contextWindow)}</dd>
+				<dt>max out</dt><dd class="t-num">{formatTokens(activeModel?.maxTokens)}</dd>
+				<dt>input</dt><dd class="wrap">{activeModel?.input?.join(', ') || '—'}</dd>
+				<dt>reasoning</dt><dd>{activeModel?.reasoning ? 'yes' : activeModel ? 'no' : '—'}</dd>
+			</dl>
+
+			{#if activeCost}
+				<div class="pricing">
+					<div class="pricing-head">
+						<span class="t-label">Pricing</span>
+						<span class="t-mono source">{priceSourceLabel(activeCost.source)} · per 1M tok</span>
+					</div>
+					<dl class="price-grid">
+						<dt>input</dt><dd class="t-num">{formatPrice(activeCost.input)}</dd>
+						<dt>output</dt><dd class="t-num">{formatPrice(activeCost.output)}</dd>
+						<dt>cache read</dt><dd class="t-num">{formatPrice(activeCost.cacheRead)}</dd>
+						<dt>cache write</dt><dd class="t-num">{formatPrice(activeCost.cacheWrite)}</dd>
+					</dl>
+				</div>
+			{:else if modelsError}
+				<p class="note err t-mono" role="status">{modelsError}</p>
+			{:else}
+				<p class="note t-mono">{modelsLoading ? 'Loading model details…' : 'No pricing configured.'}</p>
+			{/if}
+		{:else}
+			<p class="note t-mono">No active model.</p>
+		{/if}
+	</section>
+
 	<section class="block" aria-labelledby="ins-session">
 		<h3 id="ins-session" class="t-label block-title">Session</h3>
 		<dl class="kv">
 			<dt>total</dt><dd class="t-num">{totals.inTok + totals.outTok} tok</dd>
 			<dt>in</dt><dd class="t-num">{totals.inTok}</dd>
 			<dt>out</dt><dd class="t-num">{totals.outTok}</dd>
+			{#if sessionCost != null}
+				<dt>est cost</dt><dd class="t-num">{formatUSD(sessionCost)}</dd>
+			{/if}
 			<dt>tool calls</dt><dd class="t-num">{totals.calls}</dd>
 			<dt>avg latency</dt><dd class="t-num">{totals.avgLatency}ms</dd>
 		</dl>
@@ -189,10 +332,69 @@
 		gap: 6px;
 		align-items: center;
 	}
+	.kv dd.wrap {
+		display: block;
+		min-width: 0;
+		overflow-wrap: anywhere;
+		line-height: 1.35;
+	}
+	.model-kv {
+		grid-template-columns: 78px 1fr;
+	}
 	.s-connected { color: var(--good); }
 	.s-connecting { color: var(--warn); }
 	.s-disconnected { color: var(--ink-3); }
 	.s-error { color: var(--err); }
+	.auth-ok {
+		color: var(--good);
+	}
+	.auth-bad {
+		color: var(--warn);
+	}
+	.pricing {
+		margin-top: var(--s-4);
+		padding-top: var(--s-3);
+		border-top: 1px solid var(--border);
+	}
+	.pricing-head {
+		display: flex;
+		align-items: baseline;
+		justify-content: space-between;
+		gap: var(--s-2);
+		margin-bottom: var(--s-2);
+	}
+	.pricing-head .source {
+		color: var(--ink-3);
+		font-size: var(--fs-xs);
+		text-align: right;
+	}
+	.price-grid {
+		display: grid;
+		grid-template-columns: 1fr auto;
+		gap: var(--s-2) var(--s-3);
+		margin: 0;
+	}
+	.price-grid dt {
+		font-size: var(--fs-xs);
+		color: var(--ink-3);
+		text-transform: uppercase;
+		letter-spacing: var(--tracking-caps);
+		font-weight: 700;
+	}
+	.price-grid dd {
+		margin: 0;
+		font-size: var(--fs-sm);
+		color: var(--ink);
+	}
+	.note {
+		margin: 0;
+		font-size: var(--fs-xs);
+		color: var(--ink-3);
+		line-height: 1.45;
+	}
+	.note.err {
+		color: var(--err);
+	}
 
 	.trace {
 		list-style: none;

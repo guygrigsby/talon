@@ -145,7 +145,7 @@ func New(cfg Config) *Server {
 		s.chat = ch
 	}
 	if cfg.Paths.Talon.Dir != "" {
-		s.reads = NewReadHandler(cfg.Paths)
+		s.reads = NewReadHandler(cfg.Paths).WithHost(cfg.PluginHost)
 		s.reads.Register(s.registry)
 		NewPluginDepsHandler(cfg.Paths).WithHost(cfg.PluginHost).Register(s.registry)
 		NewChannelsSetupHandler(cfg.Paths).Register(s.registry)
@@ -196,11 +196,12 @@ func (s *Server) routes() {
 //
 // Priority: explicit --web <dir> (operator override) → embedded SvelteKit
 // build (default in a freshly-built binary) → nil (no UI shipped). The SPA
-// fallback flag is only enabled for the embedded build, since an arbitrary
-// --web directory may not be an SPA.
+// fallback is enabled whenever the selected filesystem has index.html, which
+// covers both embedded builds and rebuilt local --web directories.
 func (s *Server) resolveStaticFS() (fs.FS, bool) {
 	if s.cfg.WebDir != "" {
-		return os.DirFS(s.cfg.WebDir), false
+		staticFS := os.DirFS(s.cfg.WebDir)
+		return staticFS, hasStaticIndex(staticFS)
 	}
 	if web.HasIndex() {
 		return web.Assets(), true
@@ -208,12 +209,20 @@ func (s *Server) resolveStaticFS() (fs.FS, bool) {
 	return nil, false
 }
 
+func hasStaticIndex(staticFS fs.FS) bool {
+	_, err := fs.Stat(staticFS, "index.html")
+	return err == nil
+}
+
 // shouldServeSPAFallback returns true when the request looks like a
 // client-side route (no file extension, GET) and the embedded FS has no
 // matching file. In that case the SPA's index.html is served instead so
 // SvelteKit's client router can take over.
 func shouldServeSPAFallback(staticFS fs.FS, r *http.Request) bool {
-	if r.Method != http.MethodGet {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	if isBackendRoute(r.URL.Path) {
 		return false
 	}
 	p := strings.TrimPrefix(r.URL.Path, "/")
@@ -227,6 +236,17 @@ func shouldServeSPAFallback(staticFS fs.FS, r *http.Request) bool {
 		return false
 	}
 	return true
+}
+
+func isBackendRoute(requestPath string) bool {
+	switch {
+	case requestPath == "/healthz":
+		return true
+	case strings.HasPrefix(requestPath, "/talon.v1."):
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) Run(ctx context.Context) error {
@@ -280,4 +300,3 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 func (s *Server) uptimeMs() int64 {
 	return time.Since(s.startedAt).Milliseconds()
 }
-

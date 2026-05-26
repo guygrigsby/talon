@@ -117,6 +117,14 @@
 	const defaultModelLabel = $derived(
 		primary?.primaryModelName || primary?.primaryModel || null
 	);
+	const activeModelId = $derived.by(() => {
+		if (!isLive) return null;
+		return composerModel || primary?.primaryModel || null;
+	});
+	const activeModelSource = $derived.by(() => {
+		if (!isLive || !activeModelId) return null;
+		return composerModel ? 'session override' : 'agent default';
+	});
 
 	function selectChannel(id: string) {
 		activeId = id;
@@ -146,6 +154,8 @@
 <Inspector
 	{channel}
 	messages={stream}
+	{activeModelId}
+	{activeModelSource}
 	open={chrome.inspectorOpen}
 	onClose={() => (chrome.inspectorOpen = false)}
 />

@@ -264,13 +264,27 @@ func (m *memoryAugmentedRunner) Run(ctx context.Context, name string, input json
 	return m.inner.Run(ctx, name, input)
 }
 
-// Specs returns the union of inner tools + memory tools. Memory
-// tools appear last so they don't shadow same-named host tools in
-// the model's tool index.
+// Specs returns the union of inner tools + memory tools. Jess names
+// (remember, recall) must not collide with anything the inner runner
+// exposes — OpenAI-compat providers reject duplicate names with HTTP
+// 400. Inner-runner collisions are dropped (jess wins), matching the
+// Run-side dispatch order.
 func (m *memoryAugmentedRunner) Specs() []provider.ToolSpec {
+	skip := map[string]struct{}{}
+	if m.remember != nil {
+		skip[m.remember.Name()] = struct{}{}
+	}
+	if m.recall != nil {
+		skip[m.recall.Name()] = struct{}{}
+	}
 	var out []provider.ToolSpec
 	if m.inner != nil {
-		out = m.inner.Specs()
+		for _, s := range m.inner.Specs() {
+			if _, dup := skip[s.Name]; dup {
+				continue
+			}
+			out = append(out, s)
+		}
 	}
 	if m.remember != nil {
 		out = append(out, m.rememberSp)

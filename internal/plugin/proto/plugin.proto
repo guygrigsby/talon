@@ -126,8 +126,24 @@ message ProviderSpec {
   // "deepseek", etc.).
   string name = 1;
   // Concrete model ids this provider serves. If empty, the host treats
-  // the provider as accepting any model (caller-validated).
+  // the provider as accepting any model (caller-validated). For
+  // multi-tenant plugins this often stays empty in the manifest and
+  // the host calls Plugin.ListProviderModels at request time to get
+  // a live list (with per-plugin caching).
   repeated string models = 2;
+}
+
+// ModelDescriptor is one row in a ListProviderModelsResponse. Fields
+// mirror what models.list emits over the wire so the host can pass
+// them through with no per-provider munging. Empty/zero values mean
+// "not advertised" — the FE renders the column conditionally.
+message ModelDescriptor {
+  string id = 1;
+  string name = 2;
+  int64 context_window = 3;
+  bool reasoning = 4;
+  // Input modalities — typically ["text"] or ["text","image"].
+  repeated string input = 5;
 }
 
 // Delta is one event in a streaming completion. Mirrors provider.Delta;
@@ -163,6 +179,14 @@ service Plugin {
 
   // Provider capability — server-streaming completion deltas.
   rpc StreamCompletion(StreamCompletionRequest) returns (stream Delta);
+
+  // Provider capability — list the models this provider exposes.
+  // Multi-tenant plugins answer per provider name; single-provider
+  // plugins ignore the request's provider field. Implementations
+  // are encouraged to cache (e.g. 5min TTL) to keep models.list
+  // cheap. If unsupported, return UNIMPLEMENTED and the host falls
+  // back to the manifest's static model list.
+  rpc ListProviderModels(ListProviderModelsRequest) returns (ListProviderModelsResponse);
 
   // Channel capability. StartChannel returns a server-stream of inbound
   // messages from the channel (Telegram polling, Slack events, etc.).
@@ -215,7 +239,10 @@ message RunToolResponse {
 
 message StreamCompletionRequest {
   // Model id WITHOUT the provider prefix (e.g. "gpt-5.4-mini") — the
-  // routing already picked this provider, so the prefix is implicit.
+  // routing already picked this provider, so the prefix is implicit
+  // for single-provider plugins. Multi-tenant plugins (one process
+  // serving multiple providers) need the provider name too — see
+  // the `provider` field below.
   string model = 1;
   string system = 2;
   repeated Message messages = 3;
@@ -224,6 +251,26 @@ message StreamCompletionRequest {
   // unset stays distinct from zero.
   optional double temperature = 10;
   int32 max_output_tokens = 11;
+  // Provider name the host routed to (matches one of the plugin's
+  // Manifest.OffersProviders entries). Populated by the host so
+  // multi-tenant plugins (e.g. openai-compat serving openai +
+  // deepseek + mistral) can pick the right backend. Single-provider
+  // plugins can ignore this — it's redundant with their identity.
+  string provider = 12;
+}
+
+message ListProviderModelsRequest {
+  // Provider name to enumerate. Multi-tenant plugins (e.g.
+  // openai-compat) read this to pick the right backend; single-
+  // provider plugins (e.g. anthropic) can ignore it.
+  string provider = 1;
+  // When true, the plugin should bypass its cache and re-query the
+  // upstream. Off by default to keep models.list fast.
+  bool refresh = 2;
+}
+
+message ListProviderModelsResponse {
+  repeated ModelDescriptor models = 1;
 }
 
 message StartChannelRequest {

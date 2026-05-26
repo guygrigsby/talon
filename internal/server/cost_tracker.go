@@ -145,29 +145,42 @@ func (t *CostTracker) costForUsage(model provider.ModelID, u provider.Usage) flo
 
 // priceFor returns (inputUsdPer1M, outputUsdPer1M) for model,
 // preferring config overrides at models.<id>.priceUsdPer1M.{in,out}
-// over the builtin table. gjson treats "/" as a regular character
-// in keys, so model ids like "deepseek/deepseek-chat" don't need
-// escaping; "." in version segments would break path parsing but
-// none of the models we ship use that today.
+// over the builtin table.
 func (t *CostTracker) priceFor(model provider.ModelID) (inUSD, outUSD float64) {
 	id := string(model)
 	merged, err := config.MergedBytes(t.paths)
 	if err == nil {
-		base := "models." + id + ".priceUsdPer1M."
-		if v := gjson.GetBytes(merged, base+"in"); v.Exists() {
-			inUSD = v.Float()
-		}
-		if v := gjson.GetBytes(merged, base+"out"); v.Exists() {
-			outUSD = v.Float()
-		}
-		if inUSD > 0 || outUSD > 0 {
-			return
+		if p, ok := configuredModelPrice(merged, id); ok {
+			return p.In, p.Out
 		}
 	}
 	if p, ok := builtinModelPrices[id]; ok {
 		return p.In, p.Out
 	}
 	return 0, 0
+}
+
+func configuredModelPrice(merged []byte, modelKey string) (modelPrice, bool) {
+	var out modelPrice
+	found := false
+	gjson.GetBytes(merged, "models").ForEach(func(k, v gjson.Result) bool {
+		if k.Str != modelKey {
+			return true
+		}
+		price := v.Get("priceUsdPer1M")
+		if !price.Exists() {
+			return false
+		}
+		if in := price.Get("in"); in.Exists() {
+			out.In = in.Float()
+		}
+		if outPrice := price.Get("out"); outPrice.Exists() {
+			out.Out = outPrice.Float()
+		}
+		found = true
+		return false
+	})
+	return out, found && (out.In > 0 || out.Out > 0)
 }
 
 // modelPrice is one entry in the builtin pricing table. USD per 1M
@@ -185,11 +198,11 @@ type modelPrice struct {
 // config.
 var builtinModelPrices = map[string]modelPrice{
 	// Anthropic — claude-3.5/4 family approximations
-	"anthropic/claude-opus-4-7":  {In: 15.0, Out: 75.0},
+	"anthropic/claude-opus-4-7":   {In: 15.0, Out: 75.0},
 	"anthropic/claude-sonnet-4-6": {In: 3.0, Out: 15.0},
 	// OpenAI
-	"openai/gpt-4o":      {In: 2.5, Out: 10.0},
-	"openai/gpt-4o-mini": {In: 0.15, Out: 0.60},
+	"openai/gpt-4o":        {In: 2.5, Out: 10.0},
+	"openai/gpt-4o-mini":   {In: 0.15, Out: 0.60},
 	"openai/gpt-3.5-turbo": {In: 0.5, Out: 1.5},
 	// DeepSeek (deeply cheap)
 	"deepseek/deepseek-chat":     {In: 0.27, Out: 1.10},
@@ -222,7 +235,7 @@ func ftoa(f float64) string {
 		return string(buf) + ".00"
 	}
 	// fmt.Sprintf would work but pulls in fmt; stay lightweight.
-	cents := int64((f*10000)+0.5) // round to 4 decimals
+	cents := int64((f * 10000) + 0.5) // round to 4 decimals
 	whole := cents / 10000
 	frac := cents % 10000
 	out := []byte{}
