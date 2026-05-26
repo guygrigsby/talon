@@ -15,23 +15,16 @@ func TestShouldUseAgentcoreFor_RoutingMatrix(t *testing.T) {
 		modelID  string
 		wantPath string // "agentcore" or "legacy"
 	}{
-		// openai → legacy. The plugin-backed path is currently
-		// the known-good path for both Responses-era GPT-5 models
-		// and chat-completions models like gpt-4o-mini.
-		{"openai/gpt-4o", "legacy"},
-		{"openai/gpt-4o-mini", "legacy"},
-		{"openai/gpt-4.1-mini", "legacy"},
-		{"openai/gpt-5", "legacy"},
-		{"openai/gpt-5.4", "legacy"},
-		{"openai/gpt-5.4-mini", "legacy"},
-		{"openai/gpt-5.4-nano", "legacy"},
-		{"openai/gpt-5.5", "legacy"},
-
-		// anthropic → legacy (LiteLLM top_p / temperature conflict)
-		{"anthropic/claude-opus-4-7", "legacy"},
-		{"anthropic/claude-haiku-4-5", "legacy"},
-
-		// deepseek + mistral + local → agentcore
+		{"openai/gpt-4o", "agentcore"},
+		{"openai/gpt-4o-mini", "agentcore"},
+		{"openai/gpt-4.1-mini", "agentcore"},
+		{"openai/gpt-5", "agentcore"},
+		{"openai/gpt-5.4", "agentcore"},
+		{"openai/gpt-5.4-mini", "agentcore"},
+		{"openai/gpt-5.4-nano", "agentcore"},
+		{"openai/gpt-5.5", "agentcore"},
+		{"anthropic/claude-opus-4-7", "agentcore"},
+		{"anthropic/claude-haiku-4-5", "agentcore"},
 		{"deepseek/deepseek-chat", "agentcore"},
 		{"deepseek/deepseek-reasoner", "agentcore"},
 		{"mistral/mistral-large-3-25-12", "agentcore"},

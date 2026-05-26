@@ -204,15 +204,19 @@ func TestIntegration_OpenAI_GPT4oMini(t *testing.T) {
 		ttfb.Truncate(time.Millisecond), total.Truncate(time.Millisecond), len(final))
 }
 
+func TestIntegration_OpenAI_GPT54Mini(t *testing.T) {
+	final, ttfb, total, err := runProbe(t, "openai", "gpt-5.4-mini", "Reply with the single word: ok")
+	if err != nil {
+		t.Fatalf("probe error: %v", err)
+	}
+	if !strings.Contains(strings.ToLower(final), "ok") {
+		t.Errorf("response should contain 'ok', got len=%d", len(final))
+	}
+	t.Logf("openai/gpt-5.4-mini  ttfb=%v  total=%v  reply-len=%d",
+		ttfb.Truncate(time.Millisecond), total.Truncate(time.Millisecond), len(final))
+}
+
 func TestIntegration_Anthropic_Haiku(t *testing.T) {
-	// SKIPPED: agentcore's litellm client auto-fills top_p=1.0 from
-	// its default config when the agentcore layer didn't set it.
-	// Anthropic's Messages API rejects requests with both
-	// `temperature` and `top_p` set ("cannot both be specified for
-	// this model"). Needs an upstream patch in litellm
-	// (providers/anthropic.go) to drop top_p when temperature is
-	// present. Tracked in docs/migration-agentcore.md Phase 5.
-	t.Skip("agentcore + anthropic blocked on upstream litellm patch: top_p / temperature conflict")
 	final, ttfb, total, err := runProbe(t, "anthropic", "claude-haiku-4-5", "Reply with the single word: ok")
 	if err != nil {
 		t.Fatalf("probe error: %v", err)

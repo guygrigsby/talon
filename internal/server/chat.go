@@ -267,9 +267,9 @@ func (h *ChatHandler) WithPaths(paths talonpath.Paths) *ChatHandler {
 }
 
 // WithAgentcoreRunner wires the alternative chat-dispatch path
-// through internal/agentcore_chat. handleSend selects this path by
-// provider when the runner is present; without it all sends stay
-// on the direct provider path.
+// through internal/agentcore_chat. handleSend selects this path for
+// every provider when the runner is present; without it all sends
+// stay on the temporary direct provider path.
 func (h *ChatHandler) WithAgentcoreRunner(fn AgentcoreRunFn) *ChatHandler {
 	h.agentcoreRun = fn
 	return h
@@ -471,12 +471,10 @@ func (h *ChatHandler) handleSend(ctx context.Context, hc HandlerCtx, params json
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "chat.send: " + err.Error()}
 	}
 
-	// agentcore dispatch (Phase 3 of the migration plan). Routing
-	// is automatic per-provider: OpenAI and Anthropic stay on the
-	// direct provider path while provider-specific LiteLLM issues are still
-	// being worked through; other providers go through
-	// internal/agentcore_chat. No user-facing config knob — the
-	// right path is chosen from the model id's provider segment.
+	// agentcore dispatch (Phase 3 of the migration plan). When the
+	// gateway wired a runner, every provider goes through
+	// internal/agentcore_chat. The model lookup remains here so
+	// per-session overrides select the same model the runner will use.
 	if model, err := h.resolveModelForRouting(agentID, p.SessionKey); err == nil && h.shouldUseAgentcoreFor(model.String()) {
 		return h.handleSendViaAgentcore(ctx, p, agentID)
 	}

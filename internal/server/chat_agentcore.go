@@ -1,18 +1,8 @@
 // Phase 3 of docs/migration-agentcore.md — gateway wiring for the
 // agentcore-based chat handler in internal/agentcore_chat.
 //
-// Routing is automatic per-provider, no user-facing config flag:
-//
-//   - anthropic → direct provider loop. agentcore+LiteLLM currently
-//     400s on anthropic (top_p / temperature conflict, upstream
-//     blocker). The provider plugin path keeps working
-//     until the upstream patch lands.
-//   - openai → direct provider loop. The OpenAI-compatible
-//     provider is the known-good path for both Responses-era GPT-5
-//     models and chat-completions models such as gpt-4o-mini.
-//   - everything else → agentcore. deepseek, mistral, mlx,
-//     lmstudio, ollama, plus any other provider that fits the
-//     agentcore/llm path.
+// Routing is automatic: if cmd/talon injects an AgentcoreRunFn at
+// gateway construction, chat.send uses agentcore for every provider.
 //
 // cmd/talon injects the AgentcoreRunFn at gateway construction so
 // internal/server doesn't take a direct dependency on agentcore.
@@ -62,31 +52,13 @@ func (m providerModelID) Provider() string {
 	return ""
 }
 
-// shouldUseAgentcoreFor reports whether the named provider routes
-// through the agentcore path. OpenAI stays on the direct provider
-// path for now: GPT-5 requires Responses API support, and the live
-// gpt-4o-mini path has shown assistant turns disappearing under
-// agentcore while the provider plugin path continues to respond.
-//
-// Always false when the agentcore runner wasn't wired — that
-// keeps fresh dev builds (without the cmd/talon hookup) on the
-// direct provider path.
+// shouldUseAgentcoreFor reports whether this handler can route a
+// model through the agentcore path. The model id is accepted for the
+// call-site's benefit, but provider-specific routing exceptions live
+// below agentcore now; Talon no longer keeps a direct-provider bypass.
 func (h *ChatHandler) shouldUseAgentcoreFor(modelID string) bool {
-	if h.agentcoreRun == nil {
-		return false
-	}
-	providerName := providerModelID(modelID).Provider()
-
-	// Anthropic stays on the direct provider path until upstream LiteLLM ships the
-	// top_p / temperature conflict fix. See
-	// docs/migration-agentcore.md Phase 4 status.
-	if providerName == "anthropic" {
-		return false
-	}
-	if providerName == "openai" {
-		return false
-	}
-	return true
+	_ = modelID
+	return h.agentcoreRun != nil
 }
 
 // handleSendViaAgentcore is the agentcore-dispatch entry. Same

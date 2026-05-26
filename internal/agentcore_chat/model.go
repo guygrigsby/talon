@@ -1,12 +1,12 @@
 // Package agentcore_chat is the in-progress replacement for talon's
 // inline chat loop in internal/server/chat.go. It builds
 // `agentcore.Agent` instances from talon's merged config, resolves
-// secrets through the same chain the direct provider stack uses, and adapts
-// `agentcore.Event` streams onto talon's chat.event wire frames.
+// secrets for agentcore/llm providers, and adapts `agentcore.Event`
+// streams onto talon's chat.event wire frames.
 //
 // Status: Phase 3 of `docs/migration-agentcore.md`. The gateway
-// wires this handler for providers routed through agentcore while
-// provider-specific compatibility gaps remain on the direct provider path.
+// wires this handler for every chat provider; provider-specific
+// compatibility fixes live in provider shims below agentcore.
 //
 // This file: model picking. Mirrors the tier order used by
 // internal/server/reads.go's agents.list and the existing chat

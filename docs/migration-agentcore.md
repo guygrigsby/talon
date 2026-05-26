@@ -29,19 +29,25 @@ is staged so each commit leaves the tree green and reversible.
 
 This file + `docs/dependencies.md` + the CLAUDE.md rewrite. No code change.
 
-### Status snapshot (updated 2026-05-25)
+### Status snapshot (updated 2026-05-26)
 
 | Phase | State |
 |---|---|
 | 0 — docs | ✅ done |
 | 1 — agentcore-based chat handler scaffold | ✅ done. `internal/agentcore_chat/` with 30+ unit tests. |
 | 1.5 — jess memory + agentcore builtin tools | ✅ done. `Builder.WithMemory` wires jess RememberTool/RecallTool when the gateway has the memory sidecar. agentcore/tools Read/Write/Edit/Bash/Glob/Grep/Ls attached automatically. |
-| 2 — integration tests | ⚠️ 2/3 passing. openai/gpt-4o-mini ✅ (~1s TTFB). deepseek/deepseek-chat ✅ (~1.3s TTFB, streams thinking deltas). anthropic ❌ — blocked on upstream LiteLLM issue (auto-fills top_p=1.0, Anthropic rejects when temperature is also set). |
-| 3 — gateway dispatch behind flag | ✅ done. `chat.handler: "agentcore"` in merged config routes through the new handler. `WithPaths` + `WithAgentcoreRunner` on `ChatHandler`. |
-| 4 — delete direct provider stack | 🚫 **blocked** by Phase 2 anthropic failure. Until LiteLLM ships a top_p fix (or talon adds a deeper wrapper), the anthropic plugin remains required. |
+| 2 — integration tests | ✅ openai/gpt-4o-mini, openai/gpt-5.4-mini, anthropic/claude-haiku-4-5, deepseek/deepseek-chat, and mistral/mistral-small-latest are covered by the agentcore integration suite. Tests skip when local secrets are absent. |
+| 3 — gateway dispatch | ✅ done. When cmd/talon wires `WithAgentcoreRunner`, every provider routes through the new handler. Provider-specific fixes live below agentcore, not in Talon routing. |
+| 4 — delete direct provider stack | ✅ unblocked. The Anthropic top_p conflict and OpenAI GPT-5 Responses routing are handled by narrow provider shims in `internal/agentcore_chat/providers_init.go`; delete the old direct provider stack next. |
 | 5 — followups | open: per-session model override + cost-cap Record() + sinks fan-out integration in the agentcore path; FE wire-shape Playwright verification; `client.id` rename. |
 
-**Anthropic blocker detail:** `agentcore/llm/litellm.go`'s `Generate`/`GenerateStream` doesn't set `req.TopP`, so it's nil when reaching `litellm.Client.applyChatDefaults` at `client_runtime.go:81-84`, which fills it with `c.defaults.TopP = 1.0`. The Anthropic provider then includes both `temperature` and `top_p` in the outgoing request, and Anthropic 400s with "cannot both be specified for this model." Two-line upstream fix in `litellm/providers/anthropic.go` (drop top_p when temperature is present) or in `agentcore/llm/litellm.go` (expose a no-top_p option). Talon convention says contribute upstream.
+**Provider shim detail:** `agentcore/llm` still targets LiteLLM's common
+`Provider` interface. Talon overrides LiteLLM's `openai` builtin so GPT-5
+models use OpenAI Responses when invoked through the common interface, disables
+strict mode for upstream agentcore tools that do not yet emit OpenAI-strict
+schemas, and overrides `anthropic` so `top_p` is omitted when `temperature` is
+already set. Both shims are deliberately small and should be dropped once
+upstream exposes the same behavior.
 
 ### Phase 1 — agentcore-based chat handler scaffold
 
@@ -76,9 +82,10 @@ later phase claims success.
 
 ### Phase 3 — wire to gateway, flip the flag
 
-`agentProviderFactory` in `cmd/talon/gateway_chat.go` becomes a thin shim
-that picks the handler based on `chat.handler`. Default flips to
-`agentcore` once Phase 2 is green for every configured model.
+`agentProviderFactory` in `cmd/talon/gateway_chat.go` becomes a temporary
+thin shim. Chat dispatch uses the injected agentcore runner for every
+provider; the old direct-provider branch only remains until Phase 4 deletes
+the provider stack.
 
 ### Phase 4 — delete
 
