@@ -132,13 +132,17 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 	// here.
 	workspace := resolveAgentWorkspace(b.merged, agentID)
 
-	// System prompt: workspace persona files (IDENTITY/SOUL/AGENTS/USER)
-	// composed with agents.list[].systemPrompt or
-	// agents.defaults.systemPrompt. Persona files live in the agent's
-	// workspace, falling back to ~/.talon where the main agent's
-	// markdown lives. Without this the model has no identity and
+	// Persona dir: where IDENTITY/SOUL/etc. and the onboarding sentinel
+	// live. The configured workspace, falling back to ~/.talon (the
+	// main agent's default home) so identity loads even before a
+	// workspace is set. Used for both the system prompt and onboarding.
+	personaDir := resolvePersonaDir(workspace, b.paths.Talon.Dir)
+
+	// System prompt: onboarding directive (when active) + workspace
+	// persona files (IDENTITY/SOUL/AGENTS/USER) + configured
+	// systemPrompt. Without persona the model has no identity and
 	// hallucinates one (e.g. "I'm GPT-4").
-	systemPrompt := buildSystemPrompt(b.merged, agentID, workspace, b.paths.Talon.Dir)
+	systemPrompt := buildSystemPrompt(b.merged, agentID, personaDir)
 
 	// File-state shared across read/write/edit so write-after-read
 	// invariants hold.
@@ -156,6 +160,16 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 			tools.NewLs(workspace),
 		)
 	}
+	// First-run onboarding: when the persona dir still has the
+	// BOOTSTRAP sentinel, attach the finish_onboarding tool so the
+	// agent can write its identity and clear the sentinel. Gated by
+	// sentinel presence (only ever seeded in the main workspace), so
+	// subagents never see it. Independent of workspace filesystem
+	// tools — a fresh install has none of those.
+	if agentcontext.BootstrapActive(personaDir) {
+		toolSet = append(toolSet, newFinishOnboardingTool(personaDir))
+	}
+
 	// jess memory tools. Attached when WithMemory was set AND the
 	// agent has a non-empty id (jess refuses construction with
 	// AgentID==""). Recall requires both store + recaller.
@@ -207,33 +221,40 @@ func resolveSystemPrompt(merged []byte, agentID string) string {
 	return gjson.GetBytes(merged, "agents.defaults.systemPrompt").Str
 }
 
-// buildSystemPrompt composes the workspace persona files
-// (IDENTITY/SOUL/AGENTS/USER) with the configured systemPrompt.
-// Persona is loaded from the agent's workspace, falling back to
-// talonDir (~/.talon) where the main agent's markdown lives — so the
-// fallback never grants filesystem tools, only identity context. Either
-// source may be empty.
-func buildSystemPrompt(merged []byte, agentID, workspace, talonDir string) string {
-	personaDir := workspace
-	if personaDir == "" {
-		personaDir = talonDir
+// resolvePersonaDir picks where persona files and the onboarding
+// sentinel live: the configured workspace, falling back to talonDir
+// (~/.talon) where the main agent's markdown lives by default. The
+// fallback feeds identity/onboarding only — it never grants filesystem
+// tools, which stay gated on a configured workspace.
+func resolvePersonaDir(workspace, talonDir string) string {
+	if workspace != "" {
+		return workspace
 	}
-	return composeSystemPrompt(agentcontext.Build(personaDir), resolveSystemPrompt(merged, agentID))
+	return talonDir
 }
 
-// composeSystemPrompt joins workspace persona context with the
-// configured systemPrompt. Persona (IDENTITY/SOUL/...) leads because it
-// defines who the agent is; the configured prompt supplements it. Either
-// side may be empty.
-func composeSystemPrompt(persona, configured string) string {
-	persona = strings.TrimSpace(persona)
-	configured = strings.TrimSpace(configured)
-	switch {
-	case persona == "":
-		return configured
-	case configured == "":
-		return persona
-	default:
-		return persona + "\n\n" + configured
+// buildSystemPrompt composes, in priority order: the onboarding
+// directive (when first-run onboarding is active), the workspace persona
+// files (IDENTITY/SOUL/AGENTS/USER), and the configured systemPrompt.
+// Any source may be empty.
+func buildSystemPrompt(merged []byte, agentID, personaDir string) string {
+	return composeSystemPrompt(
+		agentcontext.BootstrapPrompt(personaDir),
+		agentcontext.Build(personaDir),
+		resolveSystemPrompt(merged, agentID),
+	)
+}
+
+// composeSystemPrompt joins prompt sections in priority order, dropping
+// empties and separating with a blank line. Onboarding leads (it must
+// run first), then persona (who the agent is), then the configured
+// prompt (supplemental instructions).
+func composeSystemPrompt(parts ...string) string {
+	kept := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
+			kept = append(kept, p)
+		}
 	}
+	return strings.Join(kept, "\n\n")
 }

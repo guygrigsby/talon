@@ -197,10 +197,21 @@ func gatewayRunCmd() *cobra.Command {
 			if ws, err := resolver.Workspace("main"); err == nil && ws != "" {
 				mainWS = ws
 			}
+			// Detect a genuinely-fresh workspace BEFORE seeding, so we
+			// only arm onboarding once. A returning user (persona files
+			// present) never gets re-onboarded.
+			fresh := agentcontext.IsFresh(mainWS)
 			if created, err := agentcontext.EnsureDefaults(mainWS); err != nil {
 				slog.Warn("persona scaffolding failed", "dir", mainWS, "err", err)
 			} else if len(created) > 0 {
 				slog.Info("scaffolded default persona files", "dir", mainWS, "files", created)
+			}
+			if fresh {
+				if armed, err := agentcontext.EnsureBootstrap(mainWS); err != nil {
+					slog.Warn("onboarding sentinel write failed", "dir", mainWS, "err", err)
+				} else if armed {
+					slog.Info("first-run onboarding armed", "dir", mainWS)
+				}
 			}
 
 			pluginHost := plugin.NewHost()

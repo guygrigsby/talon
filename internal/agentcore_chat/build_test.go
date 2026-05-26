@@ -8,6 +8,7 @@ import (
 
 	"github.com/guygrigsby/jess/memory"
 
+	"github.com/guygrigsby/talon/internal/agentcontext"
 	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
@@ -295,7 +296,7 @@ func TestBuildSystemPrompt_FromWorkspaceFiles(t *testing.T) {
 		}
 	}`)
 
-	got := buildSystemPrompt(cfg, "main", ws, "/nonexistent")
+	got := buildSystemPrompt(cfg, "main", ws)
 
 	for _, want := range []string{"## IDENTITY.md", "Name: Jess", "## SOUL.md", "Always answer in English."} {
 		if !strings.Contains(got, want) {
@@ -304,17 +305,33 @@ func TestBuildSystemPrompt_FromWorkspaceFiles(t *testing.T) {
 	}
 }
 
-func TestBuildSystemPrompt_FallsBackToTalonDir(t *testing.T) {
-	talonDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(talonDir, "IDENTITY.md"), []byte("Name: Jess"), 0o600); err != nil {
+func TestResolvePersonaDir(t *testing.T) {
+	if got := resolvePersonaDir("/ws", "/talon"); got != "/ws" {
+		t.Errorf("configured workspace should win: got %q", got)
+	}
+	if got := resolvePersonaDir("", "/talon"); got != "/talon" {
+		t.Errorf("empty workspace should fall back to talonDir: got %q", got)
+	}
+}
+
+func TestBuildSystemPrompt_OnboardingDirectiveLeads(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "IDENTITY.md"), []byte("Name: Jess"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// No workspace configured anywhere; persona must load from talonDir.
-	cfg := []byte(`{"agents": {"defaults": {}}}`)
+	// Arm onboarding.
+	if _, err := agentcontext.EnsureBootstrap(dir); err != nil {
+		t.Fatal(err)
+	}
+	cfg := []byte(`{"agents": {"defaults": {"systemPrompt": "Be terse."}}}`)
 
-	got := buildSystemPrompt(cfg, "main", "", talonDir)
+	got := buildSystemPrompt(cfg, "main", dir)
 
-	if !strings.Contains(got, "Name: Jess") {
-		t.Errorf("persona should fall back to talonDir; got %q", got)
+	if !strings.Contains(got, "finish_onboarding") {
+		t.Errorf("onboarding directive missing:\n%s", got)
+	}
+	// Directive must lead, ahead of persona and configured prompt.
+	if di, pi := strings.Index(got, "FIRST-RUN ONBOARDING"), strings.Index(got, "Name: Jess"); di < 0 || di > pi {
+		t.Errorf("onboarding directive should lead the prompt; di=%d pi=%d\n%s", di, pi, got)
 	}
 }
