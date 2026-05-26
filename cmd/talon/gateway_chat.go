@@ -2,20 +2,22 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/netutil"
-	"github.com/guygrigsby/talon/internal/openclaw"
-	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
+	plugin "github.com/guygrigsby/talon/internal/plugin/host"
 	"github.com/guygrigsby/talon/internal/plugin/native"
 	"github.com/guygrigsby/talon/internal/provider"
 	"github.com/guygrigsby/talon/internal/provider/openai"
+	"github.com/guygrigsby/talon/internal/secrets"
 	"github.com/guygrigsby/talon/internal/server"
+	"github.com/guygrigsby/talon/internal/subagents"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/guygrigsby/talon/internal/tools"
 	"github.com/tidwall/gjson"
 )
@@ -24,7 +26,7 @@ import (
 // merged config on each call. Cheap enough that we don't cache: the merged
 // view is parsed in-memory from already-cached overlay bytes.
 //
-// Model resolution mirrors openclaw's precedence:
+// Model resolution precedence:
 //
 //  1. per-agent agents.list[id==X].model.primary (object form)
 //  2. per-agent agents.list[id==X].model         (string shorthand)
@@ -33,7 +35,7 @@ import (
 // First non-empty hit wins. If the agent isn't in agents.list at all,
 // returns ErrAgentNotFound.
 type configAgentResolver struct {
-	paths openclaw.Paths
+	paths talonpath.Paths
 }
 
 // ToolsEnabled implements server.AgentToolsResolver. Reads
@@ -46,6 +48,13 @@ func (r *configAgentResolver) ToolsEnabled(agentID string) (bool, error) {
 	merged, err := config.MergedBytes(r.paths)
 	if err != nil {
 		return true, fmt.Errorf("read merged config: %w", err)
+	}
+	if !agentExists(merged, agentID) {
+		if _, ok, err := r.findSubagent(agentID); err != nil {
+			return true, err
+		} else if ok {
+			return true, nil
+		}
 	}
 	v := gjson.GetBytes(merged, fmt.Sprintf(`agents.list.#(id==%q).tools.enabled`, agentID))
 	if !v.Exists() {
@@ -63,7 +72,18 @@ func (r *configAgentResolver) Workspace(agentID string) (string, error) {
 	}
 	agent := gjson.GetBytes(merged, fmt.Sprintf(`agents.list.#(id==%q)`, agentID))
 	if !agent.Exists() {
-		return "", fmt.Errorf("%w: %q", server.ErrAgentNotFound, agentID)
+		if _, ok, err := r.findSubagent(agentID); err != nil {
+			return "", err
+		} else if !ok {
+			return "", fmt.Errorf("%w: %q", server.ErrAgentNotFound, agentID)
+		}
+		if v := gjson.GetBytes(merged, "agents.defaults.workspace"); v.Exists() && v.Str != "" {
+			return v.Str, nil
+		}
+		if main := gjson.GetBytes(merged, `agents.list.#(id=="main").workspace`); main.Exists() && main.Str != "" {
+			return main.Str, nil
+		}
+		return "", fmt.Errorf("subagent %q has no inherited workspace and no agents.defaults.workspace", agentID)
 	}
 	if v := agent.Get("workspace"); v.Exists() && v.Str != "" {
 		return v.Str, nil
@@ -80,15 +100,10 @@ func (r *configAgentResolver) Workspace(agentID string) (string, error) {
 // to the base — same behavior as before plugins existed, kept so test
 // paths and no-plugin gateways stay simple.
 //
-// paths is threaded so the `agents` tool can resolve the layered
-// overlay; without it agents only see ~/.openclaw/openclaw.json via
-// the read tool and miss talon-overlay-only entries (e.g. a "chat"
-// persona defined under ~/.talon).
-//
 // host is captured by reference; new plugins loaded after this factory
 // is constructed light up automatically because ToolRouter walks
 // host.List() per Specs/Run call.
-func newToolRunnerFactory(host *plugin.Host, paths openclaw.Paths) func(workspace string, sub server.SubagentRunner) server.ToolRunner {
+func newToolRunnerFactory(host *plugin.Host, paths talonpath.Paths) func(workspace string, sub server.SubagentRunner) server.ToolRunner {
 	return func(workspace string, sub server.SubagentRunner) server.ToolRunner {
 		base := tools.NewWithSubagentAndPaths(workspace, sub, paths)
 		if host == nil {
@@ -98,21 +113,6 @@ func newToolRunnerFactory(host *plugin.Host, paths openclaw.Paths) func(workspac
 	}
 }
 
-// specKind selects which plugin host transport handles the spawn.
-type specKind int
-
-const (
-	// kindLegacy is the bespoke spawn/handshake/host in
-	// internal/plugin/legacy. Used for openclaw Node-shim bundled
-	// extensions and third-party plugins with an explicit cmd that
-	// expects the bespoke wire (auth_cookie env, hostAddr dial).
-	kindLegacy specKind = iota
-	// kindNative is the hashicorp/go-plugin transport in
-	// internal/plugin/native. Used for first-party Go plugins
-	// dispatched via 'talon plugin run <name>'.
-	kindNative
-)
-
 // pluginSpec is one parsed plugins.entries.<name> entry that talon
 // should spawn (enabled=true with a non-empty cmd array).
 type pluginSpec struct {
@@ -120,66 +120,16 @@ type pluginSpec struct {
 	cmd  []string
 	// env are extra environment variables passed to the plugin
 	// subprocess. KEY=VALUE form so they slot directly into
-	// exec.Cmd.Env. Populated from entry.env (explicit user
-	// config) plus auto-translated from legacy openclaw config
-	// paths the native plugins replace (e.g. plugins.entries.
-	// brave.config.webSearch.apiKey → BRAVE_API_KEY_REF).
-	env  []string
-	kind specKind
+	// exec.Cmd.Env. Populated from entry.env (explicit user config) plus
+	// auto-translated from native plugin config paths.
+	env []string
 }
 
-// defaultPluginDefaults probes the runtime for the bundled-extension
-// lookup chain. Order matches the in-server PluginDepsHandler:
-//
-//  1. ~/.talon/extensions   — talon overlay (writable; where deps land)
-//  2. ~/.openclaw/extensions — openclaw layer (read-only fallback)
-//  3. TALON_EXTENSIONS_PATH or /opt/extensions — image-baked bundle
-//  4. <exe-dir>/../extensions and <exe-dir>/extensions — repo-bundled
-//     extensions for `make build && bin/talon` layouts (covers the
-//     openclaw JS extensions vendored at talon/extensions/ so the
-//     OAuth/claude-cli path "just works" alongside the native API
-//     plugins, provided node + openclaw-plugin-host are on PATH).
-//
-// Spawn picks the first dir that contains the named extension.
-// That makes the post-install talon-overlay copy (with node_modules)
-// win over the bundled read-only copy that has no deps installed.
-func defaultPluginDefaults(paths openclaw.Paths) pluginParseDefaults {
-	out := pluginParseDefaults{autoFillBuiltin: true}
-	if paths.Talon.Dir != "" {
-		out.bundledPaths = append(out.bundledPaths, filepath.Join(paths.Talon.Dir, "extensions"))
-	}
-	if paths.Openclaw.Dir != "" && !paths.SkipOpenclaw {
-		out.bundledPaths = append(out.bundledPaths, filepath.Join(paths.Openclaw.Dir, "extensions"))
-	}
-	if v := os.Getenv("TALON_EXTENSIONS_PATH"); v != "" {
-		out.bundledPaths = append(out.bundledPaths, v)
-	} else if _, err := os.Stat("/opt/extensions"); err == nil {
-		out.bundledPaths = append(out.bundledPaths, "/opt/extensions")
-	}
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		// <exe-dir>/../extensions handles bin/talon → repo/extensions.
-		// <exe-dir>/extensions handles /usr/local/bin layouts where
-		// a packager copied them alongside the binary.
-		for _, c := range []string{
-			filepath.Join(exeDir, "..", "extensions"),
-			filepath.Join(exeDir, "extensions"),
-		} {
-			if st, err := os.Stat(c); err == nil && st.IsDir() {
-				out.bundledPaths = append(out.bundledPaths, c)
-			}
-		}
-	}
-	return out
+func defaultPluginDefaults() pluginParseDefaults {
+	return pluginParseDefaults{autoFillBuiltin: true}
 }
 
-// pluginParseDefaults provides fallback values for the bundled-extension
-// shortcut when the merged config doesn't set them. Production callers
-// fill bundledPaths from the runtime environment via
-// defaultPluginDefaults; tests pass an explicit list (or empty).
 type pluginParseDefaults struct {
-	bundledPaths []string
-	shimCmd      []string
 	// autoFillBuiltin tells parsePluginSpecs to also include every
 	// builtinPlugin name that isn't explicitly listed in
 	// plugins.entries. The gateway sets this so a user who never
@@ -190,40 +140,8 @@ type pluginParseDefaults struct {
 }
 
 // parsePluginSpecs walks plugins.entries.<name> in the merged config
-// and returns the entries talon should LoadPlugin.
-//
-// Two ways an entry produces a spawn cmd:
-//
-//  1. Explicit cmd: `cmd: ["/path/to/binary", ...]`. Used as-is.
-//  2. Bundled openclaw extension: `bundled: "anthropic"`. Resolves to
-//     `<shimCmd...> <plugins.bundled.path>/anthropic`. The shim is the
-//     Node-side openclaw-plugin-host that bridges the extension's
-//     register*() hooks to talon's gRPC plugin protocol.
-//
-// Entries without either are silently skipped — openclaw-style
-// enabled flags for native runtime built-ins, not subprocesses we own.
-// Pure function for testability.
+// and returns the native gRPC plugin subprocesses Talon should spawn.
 func parsePluginSpecs(merged []byte, defaults pluginParseDefaults) []pluginSpec {
-	// Build the lookup chain. plugins.bundled.path (singular, legacy)
-	// or plugins.bundled.paths (array) override the runtime defaults.
-	// Either form lands as a slice walked in declared order.
-	bundledPaths := stringArray(gjson.GetBytes(merged, "plugins.bundled.paths"))
-	if len(bundledPaths) == 0 {
-		if v := gjson.GetBytes(merged, "plugins.bundled.path"); v.Exists() && v.Str != "" {
-			bundledPaths = []string{v.Str}
-		}
-	}
-	if len(bundledPaths) == 0 {
-		bundledPaths = defaults.bundledPaths
-	}
-	shimCmd := stringArray(gjson.GetBytes(merged, "plugins.bundled.shimCmd"))
-	if len(shimCmd) == 0 {
-		shimCmd = defaults.shimCmd
-	}
-	if len(shimCmd) == 0 {
-		shimCmd = []string{"node", "openclaw-plugin-host"}
-	}
-
 	var specs []pluginSpec
 	seen := map[string]struct{}{}
 	gjson.GetBytes(merged, "plugins.entries").ForEach(func(nameKey, entry gjson.Result) bool {
@@ -233,27 +151,12 @@ func parsePluginSpecs(merged []byte, defaults pluginParseDefaults) []pluginSpec 
 		}
 		env := buildPluginEnv(nameKey.Str, entry)
 		if cmd := stringArray(entry.Get("cmd")); len(cmd) > 0 {
-			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd, env: env, kind: kindLegacy})
+			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd, env: env})
 			return true
 		}
-		if extName := entry.Get("bundled").Str; extName != "" {
-			extDir := resolveBundledDir(bundledPaths, extName)
-			if extDir == "" {
-				slog.Warn("plugin bundled extension not found",
-					"plugin", nameKey.Str, "bundled", extName, "paths", bundledPaths)
-				return true
-			}
-			fullCmd := append(append([]string(nil), shimCmd...), extDir)
-			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: fullCmd, env: env, kind: kindLegacy})
-			return true
-		}
-		// No explicit cmd or bundled — fall back to the first-party
-		// builtin registry. BuiltinPluginCmd returns [talon-bin, plugin,
-		// run, <name>]; the spawn-time resolver in pkgutil rewrites the
-		// path to a sibling-of-talon or $PATH hit when needed. These
-		// run on the native (go-plugin) transport.
+		// No explicit cmd — fall back to the first-party builtin registry.
 		if cmd := server.BuiltinPluginCmd(nameKey.Str); len(cmd) > 0 {
-			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd, env: env, kind: kindNative})
+			specs = append(specs, pluginSpec{name: nameKey.Str, cmd: cmd, env: env})
 			return true
 		}
 		return true
@@ -275,7 +178,7 @@ func parsePluginSpecs(merged []byte, defaults pluginParseDefaults) []pluginSpec 
 				continue
 			}
 			env := buildPluginEnv(name, gjson.Result{})
-			specs = append(specs, pluginSpec{name: name, cmd: cmd, env: env, kind: kindNative})
+			specs = append(specs, pluginSpec{name: name, cmd: cmd, env: env})
 		}
 	}
 	return specs
@@ -285,12 +188,10 @@ func parsePluginSpecs(merged []byte, defaults pluginParseDefaults) []pluginSpec 
 // subprocess. Combines two sources, last-write-wins (so explicit
 // user `env: {...}` overrides any auto-translation):
 //
-//  1. Auto-translation from legacy openclaw config paths the
-//     native plugins replace. plugins.entries.brave.config.
+//  1. Auto-translation from native plugin config paths:
+//     plugins.entries.brave.config.
 //     webSearch.apiKey → BRAVE_API_KEY (or BRAVE_API_KEY_REF
 //     when the value looks like an op:// / keychain:// reference).
-//     Lets users keep the original openclaw config shape after
-//     swapping in the native plugin.
 //  2. Explicit entry.env: {KEY: VAL} block — user override.
 //
 // Other plugin names get just the explicit env block.
@@ -372,23 +273,6 @@ func sortStrings(s []string) {
 	}
 }
 
-// resolveBundledDir walks paths in order and returns the first dir
-// matching <root>/<name> that exists. Empty result means the
-// extension isn't installed in any source — caller skips with a
-// log line.
-func resolveBundledDir(paths []string, name string) string {
-	for _, root := range paths {
-		if root == "" {
-			continue
-		}
-		candidate := filepath.Join(root, name)
-		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
-			return candidate
-		}
-	}
-	return ""
-}
-
 // stringArray reads a JSON array of strings into a Go slice, skipping
 // non-string entries. Callers treat an empty result as "absent" rather
 // than "explicit empty array" — both shapes mean the same thing here.
@@ -407,17 +291,12 @@ func stringArray(v gjson.Result) []string {
 }
 
 // loadConfiguredPlugins reads the merged config, parses the spawn-able
-// plugin entries, and dispatches each one through the right transport:
-// kindNative goes through native.Spawn (go-plugin / AutoMTLS),
-// kindLegacy through host.LoadPlugin (bespoke handshake + cookie).
-// Both register their *legacy.Instance into the unified host registry
-// so all downstream consumers (agentProviderFactory, channel
-// dispatch, etc.) see a single namespace. Failures log + skip; a
-// broken plugin shouldn't take down chat.
+// plugin entries, and dispatches each one through native.Spawn. Failures log
+// and skip; a broken plugin shouldn't take down chat.
 func loadConfiguredPlugins(
 	ctx context.Context,
 	host *plugin.Host,
-	paths openclaw.Paths,
+	paths talonpath.Paths,
 	nativeFactory native.HostServerFactory,
 ) {
 	merged, err := config.MergedBytes(paths)
@@ -425,46 +304,28 @@ func loadConfiguredPlugins(
 		slog.Error("plugins read merged config failed", "err", err)
 		return
 	}
-	for _, spec := range parsePluginSpecs(merged, defaultPluginDefaults(paths)) {
-		var (
-			inst *plugin.Instance
-			err  error
-		)
-		switch spec.kind {
-		case kindNative:
-			inst, err = native.Spawn(ctx, spec.name, nativeFactory,
-				native.LoadOptions{Cmd: spec.cmd, Env: spec.env},
-				host.Unregister)
-			if err == nil {
-				if regErr := host.RegisterInstance(inst); regErr != nil {
-					inst.Stop()
-					err = regErr
-				}
+	for _, spec := range parsePluginSpecs(merged, defaultPluginDefaults()) {
+		inst, err := native.Spawn(ctx, spec.name, nativeFactory,
+			native.LoadOptions{Cmd: spec.cmd, Env: spec.env},
+			host.Unregister)
+		if err == nil {
+			if regErr := host.RegisterInstance(inst); regErr != nil {
+				inst.Stop()
+				err = regErr
 			}
-		case kindLegacy:
-			inst, err = host.LoadPlugin(ctx, spec.name,
-				plugin.LoadOptions{Cmd: spec.cmd, Env: spec.env})
 		}
 		if err != nil {
-			slog.Error("plugin load failed",
-				"plugin", spec.name, "kind", specKindLabel(spec.kind), "err", err)
+			slog.Error("plugin load failed", "plugin", spec.name, "kind", "native", "err", err)
 			continue
 		}
 		slog.Info("plugin loaded",
 			"plugin", spec.name,
-			"kind", specKindLabel(spec.kind),
+			"kind", "native",
 			"tools", len(inst.Manifest.GetOffersTools()),
 			"providers", len(inst.Manifest.GetOffersProviders()),
 			"channels", len(inst.Manifest.GetOffersChannels()),
 		)
 	}
-}
-
-func specKindLabel(k specKind) string {
-	if k == kindNative {
-		return "native"
-	}
-	return "legacy"
 }
 
 // pluginChannelOffer is one (plugin name, channel name) pair drawn
@@ -537,7 +398,7 @@ func collectChannelOffers(host *plugin.Host) []pluginChannelOffer {
 // plugin that offers a channel referenced in the merged config. Returns
 // the dispatchers so the caller can Stop() them on shutdown. Failures
 // log but don't propagate — a broken channel must not take down chat.
-func startConfiguredChannels(ctx context.Context, host *plugin.Host, paths openclaw.Paths, runner plugin.SessionRunner) []*plugin.ChannelDispatcher {
+func startConfiguredChannels(ctx context.Context, host *plugin.Host, paths talonpath.Paths, runner plugin.SessionRunner) []*plugin.ChannelDispatcher {
 	merged, err := config.MergedBytes(paths)
 	if err != nil {
 		slog.Error("channels read merged config failed", "err", err)
@@ -546,6 +407,14 @@ func startConfiguredChannels(ctx context.Context, host *plugin.Host, paths openc
 	bindings := parseChannelBindings(merged, collectChannelOffers(host))
 	out := make([]*plugin.ChannelDispatcher, 0, len(bindings))
 	for _, b := range bindings {
+		resolvedConfig, err := resolveChannelConfigSecrets(b.Binding.ConfigJSON, resolveSecretRef)
+		if err != nil {
+			slog.Error("channel config secret resolution failed",
+				"plugin", b.PluginName, "channel", b.Binding.ChannelName, "err", err)
+			continue
+		}
+		b.Binding.ConfigJSON = resolvedConfig
+
 		inst := host.Get(b.PluginName)
 		if inst == nil {
 			continue
@@ -564,6 +433,53 @@ func startConfiguredChannels(ctx context.Context, host *plugin.Host, paths openc
 	return out
 }
 
+func resolveChannelConfigSecrets(raw []byte, resolve func(string) (string, error)) ([]byte, error) {
+	if len(raw) == 0 {
+		return raw, nil
+	}
+	if resolve == nil {
+		resolve = resolveSecretRef
+	}
+	var v any
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return nil, fmt.Errorf("parse channel config: %w", err)
+	}
+	if err := resolveSensitiveLeaves(v, "", resolve); err != nil {
+		return nil, err
+	}
+	out, err := json.Marshal(v)
+	if err != nil {
+		return nil, fmt.Errorf("marshal channel config: %w", err)
+	}
+	return out, nil
+}
+
+func resolveSensitiveLeaves(v any, key string, resolve func(string) (string, error)) error {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, child := range x {
+			if s, ok := child.(string); ok && s != "" && secrets.IsSensitiveKey(k) {
+				resolved, err := resolve(s)
+				if err != nil {
+					return fmt.Errorf("resolve %s: %w", k, err)
+				}
+				x[k] = resolved
+				continue
+			}
+			if err := resolveSensitiveLeaves(child, k, resolve); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for _, child := range x {
+			if err := resolveSensitiveLeaves(child, key, resolve); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
 func (r *configAgentResolver) PrimaryModel(agentID string) (provider.ModelID, error) {
 	merged, err := config.MergedBytes(r.paths)
 	if err != nil {
@@ -571,6 +487,17 @@ func (r *configAgentResolver) PrimaryModel(agentID string) (provider.ModelID, er
 	}
 	agent := gjson.GetBytes(merged, fmt.Sprintf(`agents.list.#(id==%q)`, agentID))
 	if !agent.Exists() {
+		if def, ok, err := r.findSubagent(agentID); err != nil {
+			return "", err
+		} else if ok {
+			if def.Model != "" {
+				return provider.ModelID(def.Model), nil
+			}
+			if v := gjson.GetBytes(merged, "agents.defaults.model.primary"); v.Exists() && v.Str != "" {
+				return provider.ModelID(v.Str), nil
+			}
+			return "", fmt.Errorf("subagent %q has no model and no agents.defaults.model.primary", agentID)
+		}
 		return "", fmt.Errorf("%w: %q", server.ErrAgentNotFound, agentID)
 	}
 	// Per-agent model: object form first, then string shorthand.
@@ -587,28 +514,32 @@ func (r *configAgentResolver) PrimaryModel(agentID string) (provider.ModelID, er
 	return "", fmt.Errorf("agent %q has no resolvable model (no per-agent model and no agents.defaults.model.primary)", agentID)
 }
 
+func (r *configAgentResolver) findSubagent(agentID string) (subagents.Definition, bool, error) {
+	def, ok, err := subagents.Find(r.paths.Talon.SubagentsDir(), agentID)
+	if err != nil {
+		return subagents.Definition{}, false, fmt.Errorf("read subagents: %w", err)
+	}
+	return def, ok, nil
+}
+
+func agentExists(merged []byte, agentID string) bool {
+	return gjson.GetBytes(merged, fmt.Sprintf(`agents.list.#(id==%q)`, agentID)).Exists()
+}
+
 // agentProviderFactory implements server.ProviderFactory. Resolution
 // order: native built-ins (openai, deepseek) first, then any loaded
 // plugin whose manifest offers the requested provider name. Only fails
 // with ErrProviderUnavailable when neither side recognizes the name —
 // that's the signal the model targeted a provider nothing can serve.
 type agentProviderFactory struct {
-	paths openclaw.Paths
+	paths talonpath.Paths
 	host  *plugin.Host // optional; nil disables plugin-served providers
 }
 
-// authProfilePath returns the auth-profiles.json path for agentID using
-// the standard talon layering: talon overlay first (so a talon-only agent
-// like "chat" can carry its own keys under ~/.talon/agents/<id>/), then
-// openclaw layer. The first path that exists wins; if neither exists we
-// return the openclaw path so the existing not-found error shape is
-// preserved for callers like LoadAPIKey that require a real file.
+// authProfilePath returns the auth-profiles.json path for agentID under
+// Talon's state root.
 func (f *agentProviderFactory) authProfilePath(agentID string) string {
-	talonAuth := filepath.Join(f.paths.Talon.AgentDir(agentID), "agent", "auth-profiles.json")
-	if _, err := os.Stat(talonAuth); err == nil {
-		return talonAuth
-	}
-	return filepath.Join(f.paths.Openclaw.AgentDir(agentID), "agent", "auth-profiles.json")
+	return filepath.Join(f.paths.Talon.AgentDir(agentID), "agent", "auth-profiles.json")
 }
 
 func (f *agentProviderFactory) For(providerName, agentID string) (provider.Provider, error) {

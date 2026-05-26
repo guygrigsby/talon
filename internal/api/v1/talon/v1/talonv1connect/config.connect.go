@@ -49,9 +49,8 @@ type ConfigServiceClient interface {
 	// Schema returns the cached config JSON schema (refreshed via
 	// `talon config schema --refresh` on the CLI side).
 	Schema(context.Context, *connect.Request[v1.ConfigSchemaRequest]) (*connect.Response[v1.JSONPayload], error)
-	// Set writes value_json at path into the talon overlay. Empty
-	// value_json deletes the path. Always writes the overlay; never
-	// the openclaw layer (which is read-only).
+	// Set writes value_json at path into native config. Empty value_json
+	// deletes the path.
 	Set(context.Context, *connect.Request[v1.ConfigSetRequest]) (*connect.Response[v1.JSONPayload], error)
 }
 
@@ -117,9 +116,8 @@ type ConfigServiceHandler interface {
 	// Schema returns the cached config JSON schema (refreshed via
 	// `talon config schema --refresh` on the CLI side).
 	Schema(context.Context, *connect.Request[v1.ConfigSchemaRequest]) (*connect.Response[v1.JSONPayload], error)
-	// Set writes value_json at path into the talon overlay. Empty
-	// value_json deletes the path. Always writes the overlay; never
-	// the openclaw layer (which is read-only).
+	// Set writes value_json at path into native config. Empty value_json
+	// deletes the path.
 	Set(context.Context, *connect.Request[v1.ConfigSetRequest]) (*connect.Response[v1.JSONPayload], error)
 }
 

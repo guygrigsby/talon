@@ -16,7 +16,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/guygrigsby/talon/internal/config"
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/guygrigsby/talon/internal/server"
 )
 
@@ -28,7 +28,7 @@ import (
 // a broken memory layer should not prevent the gateway from
 // answering chat.send. Users get plain (no-memory) behavior and
 // a log line pointing at the cause.
-func buildMemorySidecar(paths openclaw.Paths) *server.MemoryConfig {
+func buildMemorySidecar(paths talonpath.Paths) *server.MemoryConfig {
 	merged, err := config.MergedBytes(paths)
 	if err != nil {
 		slog.Debug("memory: cannot read merged config; skipping sidecar", "err", err)

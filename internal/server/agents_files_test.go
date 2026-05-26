@@ -15,15 +15,12 @@ import (
 // agents.files.* actually stats the on-disk path so we need real files.
 func agentsFilesFixture(t *testing.T) (h *ReadHandler, workspace, agentID string) {
 	t.Helper()
-	paths := readFixture(t, `{}`)
-	wsDir := filepath.Join(paths.Openclaw.Dir, "workspace-main")
+	wsDir := filepath.Join(t.TempDir(), "workspace-main")
 	if err := os.MkdirAll(wsDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	cfg := fmt.Sprintf(`{"agents":{"list":[{"id":"main","workspace":%q}]}}`, wsDir)
-	if err := os.WriteFile(paths.Openclaw.Config, []byte(cfg), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	paths := readFixture(t, cfg)
 	if err := os.WriteFile(filepath.Join(wsDir, "AGENTS.md"), []byte("hello agents"), 0o600); err != nil {
 		t.Fatal(err)
 	}

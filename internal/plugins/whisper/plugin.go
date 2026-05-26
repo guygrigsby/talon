@@ -1,6 +1,5 @@
-// Package whisper implements the OpenAI Whisper audio_transcribe tool as a talon plugin library.
-// The subprocess entrypoint (apps/talon-whisper-plugin/main.go) calls New()
-// and pluginrun.Serve() to wire it up.
+// Package whisper implements the OpenAI Whisper audio_transcribe tool as a
+// Talon plugin. The subprocess entrypoint is `talon plugin run whisper`.
 package whisper
 
 import (

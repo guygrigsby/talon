@@ -1,14 +1,9 @@
 <script lang="ts">
-	// Agents tab: shows the primary agent (the one the user talks
-	// to) plus the fleet of subagents the primary can delegate to
-	// via the `subagent` tool. Read-only this pass — editing
-	// agent.model / workspace lands later (via ConfigService set
-	// or a typed AgentsService.Patch).
-
 	import { loadAgents, type AgentEntry } from '$lib/gateway/agents';
 
 	let primary = $state<AgentEntry | null>(null);
-	let fleet = $state<AgentEntry[]>([]);
+	let subagents = $state<AgentEntry[]>([]);
+	let subagentsDir = $state('');
 	let loadError = $state<string | null>(null);
 	let loading = $state(true);
 
@@ -17,10 +12,15 @@
 		loadError = null;
 		try {
 			const view = await loadAgents();
-			const def = view.entries.find((a) => a.id === view.defaultId) ?? view.entries[0] ?? null;
+			const def =
+				view.entries.find((a) => a.id === view.defaultId) ??
+				view.entries.find((a) => a.kind !== 'subagent') ??
+				view.entries[0] ??
+				null;
 			primary = def;
-			fleet = def ? view.entries.filter((a) => a.id !== def.id) : view.entries;
-			fleet.sort((a, b) => a.id.localeCompare(b.id));
+			subagents = view.entries.filter((a) => a.kind === 'subagent');
+			subagents.sort((a, b) => a.id.localeCompare(b.id));
+			subagentsDir = view.subagentsDir ?? '';
 		} catch (err) {
 			loadError = err instanceof Error ? err.message : String(err);
 		} finally {
@@ -31,12 +31,31 @@
 	$effect(() => {
 		load();
 	});
+
+	function modelSourceLabel(source?: string): string {
+		switch (source) {
+			case 'agent':
+				return 'override';
+			case 'frontmatter':
+				return 'frontmatter';
+			case 'default':
+				return 'default';
+			default:
+				return source || 'default';
+		}
+	}
+
+	function promptLabel(chars?: number): string {
+		if (!chars) return '';
+		if (chars >= 1_000) return `${(chars / 1_000).toFixed(chars % 1_000 === 0 ? 0 : 1)}K`;
+		return String(chars);
+	}
 </script>
 
 <section class="panel" aria-labelledby="agents-title">
 	<header class="head">
 		<h1 id="agents-title" class="title">Agents</h1>
-		<span class="t-mono dim">primary + fleet</span>
+		<span class="t-mono dim">1 main · {subagents.length} subagent{subagents.length === 1 ? '' : 's'}</span>
 		<button type="button" class="op" onclick={load} disabled={loading}>
 			{loading ? 'Loading…' : 'Refresh'}
 		</button>
@@ -44,26 +63,26 @@
 
 	{#if loadError}
 		<div class="err t-mono" role="status">{loadError}</div>
-	{:else if loading && !primary && fleet.length === 0}
+	{:else if loading && !primary && subagents.length === 0}
 		<div class="t-mono dim">Loading agents…</div>
 	{:else}
 		<section class="block" aria-labelledby="primary-title">
 			<header class="block-head">
-				<h2 id="primary-title" class="block-title">Primary</h2>
-				<p class="block-sub">
-					The agent the chat composer sends to. The primary can delegate to subagents
-					(below) by calling the <code class="t-mono">subagent</code> tool.
-				</p>
+				<h2 id="primary-title" class="block-title">Main</h2>
 			</header>
 			{#if primary}
 				<article class="card primary">
 					<header class="card-head">
 						<span class="card-id t-mono">{primary.id}</span>
-						<span class="t-label badge">primary</span>
+						<span class="t-label badge">main</span>
 					</header>
 					<dl class="card-body">
+						<dt class="t-label">name</dt>
+						<dd>{primary.name}</dd>
 						<dt class="t-label">model</dt>
 						<dd class="t-mono">{primary.primaryModel || '(unset)'}</dd>
+						<dt class="t-label">source</dt>
+						<dd>{modelSourceLabel(primary.modelSource)}</dd>
 						{#if primary.workspace}
 							<dt class="t-label">workspace</dt>
 							<dd class="t-mono break">{primary.workspace}</dd>
@@ -71,39 +90,58 @@
 					</dl>
 				</article>
 			{:else}
-				<div class="t-mono dim">No primary agent configured.</div>
+				<div class="t-mono dim">No main agent configured.</div>
 			{/if}
 		</section>
 
-		<section class="block" aria-labelledby="fleet-title">
+		<section class="block" aria-labelledby="subagents-title">
 			<header class="block-head">
-				<h2 id="fleet-title" class="block-title">Fleet · {fleet.length}</h2>
-				<p class="block-sub">
-					Subagents the primary can call. Each runs its own model and workspace; tool
-					events bubble back into the primary's transcript.
-				</p>
+				<h2 id="subagents-title" class="block-title">Subagents · {subagents.length}</h2>
+				{#if subagentsDir}
+					<p class="block-sub t-mono">{subagentsDir}</p>
+				{/if}
 			</header>
-			{#if fleet.length === 0}
-				<div class="t-mono dim">No subagents configured.</div>
+			{#if subagents.length === 0}
+				<div class="t-mono dim">No subagent files found{#if subagentsDir} in {subagentsDir}{/if}.</div>
 			{:else}
-				<table class="fleet-table">
-					<thead>
-						<tr>
-							<th scope="col">id</th>
-							<th scope="col">model</th>
-							<th scope="col">workspace</th>
-						</tr>
-					</thead>
-					<tbody>
-						{#each fleet as a (a.id)}
+				<div class="table-wrap">
+					<table class="agents-table">
+						<thead>
 							<tr>
-								<td class="t-mono name">{a.id}</td>
-								<td class="t-mono">{a.primaryModel || '(unset)'}</td>
-								<td class="t-mono break">{a.workspace ?? ''}</td>
+								<th scope="col">id</th>
+								<th scope="col">use when</th>
+								<th scope="col">model</th>
+								<th scope="col">source</th>
+								<th scope="col">tools</th>
+								<th scope="col" class="num">prompt</th>
+								<th scope="col">file</th>
 							</tr>
-						{/each}
-					</tbody>
-				</table>
+						</thead>
+						<tbody>
+							{#each subagents as a (a.id)}
+								<tr>
+									<td>
+										<div class="t-mono name">{a.id}</div>
+										{#if a.name && a.name !== a.id}
+											<div class="small dim">{a.name}</div>
+										{/if}
+									</td>
+									<td class="purpose">{a.description || ''}</td>
+									<td class="model-cell">
+										<div class="t-mono">{a.primaryModel || '(unset)'}</div>
+										{#if a.primaryModelName && a.primaryModelName !== a.primaryModel}
+											<div class="small dim">{a.primaryModelName}</div>
+										{/if}
+									</td>
+									<td>{modelSourceLabel(a.modelSource)}</td>
+									<td class="t-mono tools">{a.tools?.join(', ') || 'default'}</td>
+									<td class="t-num num">{promptLabel(a.promptChars)}</td>
+									<td class="t-mono break">{a.path ?? ''}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
 			{/if}
 		</section>
 	{/if}
@@ -173,11 +211,10 @@
 	}
 	.block-sub {
 		margin: 0;
-		font-size: var(--fs-sm);
-		color: var(--ink-2);
-		max-width: 60ch;
+		font-size: var(--fs-xs);
+		color: var(--ink-3);
+		word-break: break-all;
 	}
-
 	.card {
 		border: 1px solid var(--border);
 		border-radius: var(--radius);
@@ -192,20 +229,23 @@
 		border-width: 1px;
 		max-width: 480px;
 	}
+	.table-wrap {
+		overflow-x: auto;
+	}
 
-	.fleet-table {
+	.agents-table {
 		width: 100%;
 		border-collapse: collapse;
 		font-size: var(--fs-sm);
 	}
-	.fleet-table th,
-	.fleet-table td {
+	.agents-table th,
+	.agents-table td {
 		text-align: left;
 		padding: 8px var(--s-3);
 		border-bottom: 1px solid var(--border);
 		vertical-align: top;
 	}
-	.fleet-table thead th {
+	.agents-table thead th {
 		font-size: var(--fs-xs);
 		font-weight: 700;
 		color: var(--ink-3);
@@ -213,17 +253,37 @@
 		letter-spacing: var(--tracking-caps, 0.04em);
 		border-bottom: 1px solid var(--border-strong, var(--border));
 	}
-	.fleet-table tbody tr:last-child td {
+	.agents-table tbody tr:last-child td {
 		border-bottom: 0;
 	}
-	.fleet-table .name {
+	.agents-table .name {
 		font-weight: 700;
 		color: var(--ink);
 		white-space: nowrap;
 	}
-	.fleet-table .break {
+	.agents-table .purpose {
+		color: var(--ink-2);
+		max-width: 34ch;
+	}
+	.agents-table .model-cell {
+		min-width: 18ch;
+	}
+	.agents-table .tools {
+		color: var(--ink-2);
+		max-width: 24ch;
+	}
+	.agents-table .break {
 		word-break: break-all;
 		color: var(--ink-2);
+	}
+	.agents-table .num {
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+		color: var(--ink-2);
+		white-space: nowrap;
+	}
+	.small {
+		font-size: var(--fs-xs);
 	}
 	.card-head {
 		display: flex;
@@ -259,13 +319,6 @@
 	.card-body .break {
 		word-break: break-all;
 	}
-	code {
-		font-family: var(--ff-mono);
-		background: var(--canvas);
-		padding: 0 4px;
-		border-radius: 3px;
-	}
-
 	@media (max-width: 720px) {
 		.panel {
 			padding: var(--s-4) var(--s-3);

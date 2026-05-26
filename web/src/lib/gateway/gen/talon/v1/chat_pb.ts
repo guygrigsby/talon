@@ -34,8 +34,7 @@ export type ChatSendRequest = Message<"talon.v1.ChatSendRequest"> & {
 
   /**
    * IdempotencyKey is also the run_id the server echoes back on
-   * events — the openclaw UI keys its run-tracking state off this
-   * value. Leave empty to let the server mint a fresh run_id.
+   * events. Leave empty to let the server mint a fresh run_id.
    *
    * @generated from field: string idempotency_key = 3;
    */
@@ -196,7 +195,7 @@ export type AssistantMessage = Message<"talon.v1.AssistantMessage"> & {
   /**
    * ToolUses appears when this assistant turn invoked tools; one
    * entry per tool call. Renders alongside the text as the
-   * multi-part assistant message the openclaw UI expects.
+   * multi-part assistant message the UI expects.
    *
    * @generated from field: repeated talon.v1.ToolUseMessage tool_uses = 2;
    */
@@ -623,4 +622,3 @@ export const ChatService: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_talon_v1_chat, 0);
-

@@ -61,9 +61,9 @@ func TestRenderModels_EmptyList(t *testing.T) {
 func TestRenderAgents_DefaultFirstThenAlpha(t *testing.T) {
 	payload := []byte(`{
 		"agents": [
-			{"id":"research","model":{"primary":"anthropic/claude-sonnet-4-6","fallbacks":["a","b"]},"workspace":"/Users/x/.openclaw/ws-r"},
-			{"id":"coding","model":{"primary":"anthropic/claude-opus-4-7","fallbacks":["a"]},"workspace":"/Users/x/.openclaw/ws-c"},
-			{"id":"main","model":{"primary":"openai/gpt-5.4-mini","fallbacks":["a","b","c"]},"workspace":"/Users/x/.openclaw/ws"}
+			{"id":"research","model":{"primary":"anthropic/claude-sonnet-4-6","fallbacks":["a","b"]},"workspace":"/Users/x/.talon"},
+			{"id":"coding","model":{"primary":"anthropic/claude-opus-4-7","fallbacks":["a"]},"workspace":"/Users/x/.talon"},
+			{"id":"main","model":{"primary":"openai/gpt-5.4-mini","fallbacks":["a","b","c"]},"workspace":"/Users/x/.talon"}
 		],
 		"defaultId":"main"
 	}`)

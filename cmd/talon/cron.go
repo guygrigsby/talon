@@ -2,10 +2,8 @@ package main
 
 // `talon cron` thin wrapper over the gateway's cron.* RPC surface
 // (cron.list, cron.add, cron.remove, cron.run, cron.status, cron.runs)
-// shipped in talon-8z0. Subcommands match openclaw's CLI surface where
-// the semantics line up; out-of-scope items from PARITY.md (per-job
-// timezones, jitter, isolated-agent sessions) are noted as TODOs for
-// follow-up cron.update + adjacent work.
+// shipped in talon-8z0. Out-of-scope items such as per-job timezones,
+// jitter, and isolated sessions are noted as TODOs for follow-up work.
 
 import (
 	"encoding/json"
@@ -22,15 +20,15 @@ import (
 // cronJob mirrors the gateway-side cron.Job shape just enough to
 // render. Times are unix-millis on the wire.
 type cronJob struct {
-	ID          string         `json:"id"`
-	Expression  string         `json:"expression"`
-	Action      cronJobAction  `json:"action"`
-	Enabled     bool           `json:"enabled"`
-	NextRunMs   int64          `json:"nextRunMs,omitempty"`
-	LastRunMs   int64          `json:"lastRunMs,omitempty"`
-	LastStatus  string         `json:"lastStatus,omitempty"`
-	LastErr     string         `json:"lastErr,omitempty"`
-	CreatedAtMs int64          `json:"createdAtMs"`
+	ID          string        `json:"id"`
+	Expression  string        `json:"expression"`
+	Action      cronJobAction `json:"action"`
+	Enabled     bool          `json:"enabled"`
+	NextRunMs   int64         `json:"nextRunMs,omitempty"`
+	LastRunMs   int64         `json:"lastRunMs,omitempty"`
+	LastStatus  string        `json:"lastStatus,omitempty"`
+	LastErr     string        `json:"lastErr,omitempty"`
+	CreatedAtMs int64         `json:"createdAtMs"`
 }
 
 type cronJobAction struct {
@@ -402,8 +400,8 @@ func readParams(inline, file string) ([]byte, error) {
 }
 
 // renderJobs prints a tab-aligned table sorted by id (the server
-// already sorts; we re-render verbatim). Columns mirror openclaw's
-// `cron list` shape where they line up: id, schedule, method, status.
+// already sorts; we re-render verbatim). Columns are id, schedule,
+// method, and status.
 func renderJobs(jobs []cronJob) {
 	if len(jobs) == 0 {
 		fmt.Println("(no jobs)")

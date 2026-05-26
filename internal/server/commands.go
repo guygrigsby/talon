@@ -3,9 +3,7 @@ package server
 // commands.list — enumerate slash commands the server can surface
 // to the UI's command palette beyond the UI's hardcoded set.
 //
-// openclaw builds this list from three sources: native chat
-// commands, agent-bound skills, and plugin-declared commands.
-// talon's three sources today are all empty:
+// Talon's three command sources today are all empty:
 //
 //   - Native: talon has no server-side command registry. The UI's
 //     built-in commands (/help, /clear, /model, …) are defined
@@ -26,8 +24,8 @@ import (
 	"encoding/json"
 )
 
-// CommandsHandler serves the openclaw commands.* RPCs. Today only
-// commands.list is implemented, as an empty-list stub.
+// CommandsHandler serves the commands.* RPCs. Today only commands.list is
+// implemented, as an empty-list stub.
 type CommandsHandler struct{}
 
 func NewCommandsHandler() *CommandsHandler { return &CommandsHandler{} }

@@ -6,13 +6,11 @@ import (
 	"testing"
 )
 
-// TestParsePluginSpecs_BraveAutoTranslatesAPIKey covers the
-// migration path: existing openclaw config has the brave key at
-// plugins.entries.brave.config.webSearch.apiKey. After flipping
-// to the native plugin (cmd → talon-brave-plugin), parsePluginSpecs
-// should auto-translate that path into the BRAVE_API_KEY env var
-// the new Go plugin reads. Literal key → BRAVE_API_KEY; reference
-// → BRAVE_API_KEY_REF (so the plugin resolves at runtime).
+// TestParsePluginSpecs_BraveAutoTranslatesAPIKey covers the migration
+// path where the brave key lives at
+// plugins.entries.brave.config.webSearch.apiKey. parsePluginSpecs should
+// auto-translate that path into the BRAVE_API_KEY env var the Go plugin
+// reads. Literal key -> BRAVE_API_KEY; reference -> BRAVE_API_KEY_REF.
 func TestParsePluginSpecs_BraveAutoTranslatesAPIKey(t *testing.T) {
 	body := []byte(`{
 		"plugins": {

@@ -6,7 +6,7 @@ import (
 
 	"github.com/voocel/agentcore"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
 // Handler is the agentcore-based replacement for legacy
@@ -18,7 +18,7 @@ import (
 // This remains a package-level entry point for direct callers; the
 // gateway path injects BuildAgent through server.AgentcoreRunFn.
 type Handler struct {
-	paths openclaw.Paths
+	paths talonpath.Paths
 	// configReader returns the merged config bytes. Injected so
 	// tests can pass a fixed config without going through
 	// config.MergedBytes. Production callers pass MergedBytesFn.
@@ -26,7 +26,7 @@ type Handler struct {
 }
 
 // NewHandler constructs a Handler.
-func NewHandler(paths openclaw.Paths, configReader func() ([]byte, error)) *Handler {
+func NewHandler(paths talonpath.Paths, configReader func() ([]byte, error)) *Handler {
 	return &Handler{paths: paths, configReader: configReader}
 }
 

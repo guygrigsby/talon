@@ -25,10 +25,10 @@ const (
 	RoleTool Role = "tool"
 )
 
-// ModelID is the canonical "<provider>/<model>" form used throughout
-// openclaw and talon (e.g. "openai/gpt-5.4-mini"). Providers split on the
-// first "/" — anything to the left is the provider key, anything to the
-// right is the provider-specific model identifier.
+// ModelID is the canonical "<provider>/<model>" form used throughout Talon
+// (e.g. "openai/gpt-5.4-mini"). Providers split on the first "/" — anything
+// to the left is the provider key, anything to the right is the
+// provider-specific model identifier.
 type ModelID string
 
 // Provider returns the provider segment of m, or "" if m is malformed.

@@ -9,7 +9,7 @@ import (
 )
 
 // SessionPref is the per-session settings record. Fields holds the raw
-// patch values keyed by openclaw's UI field names (model, modelProvider,
+// patch values keyed by the UI's field names (model, modelProvider,
 // thinkingLevel, verboseLevel, fastMode, ...). Storing them as raw JSON
 // lets the patch endpoint accept any shape the UI sends and lets
 // downstream consumers (chat.send today, more later) decode just the
@@ -103,9 +103,9 @@ func isJSONNull(raw json.RawMessage) bool {
 	return strings.TrimSpace(string(raw)) == "null"
 }
 
-// SessionsHandler serves the openclaw sessions.* RPCs. ChatStore is
-// optional — when set, sessions.list also includes sessions that have
-// only chat history (no UI patches yet) so the picker can find them.
+// SessionsHandler serves the sessions.* RPCs. ChatStore is optional; when
+// set, sessions.list also includes sessions that have only chat history
+// (no UI patches yet) so the picker can find them.
 type SessionsHandler struct {
 	store     *SessionStore
 	chatStore *ChatStore
@@ -127,8 +127,7 @@ func (h *SessionsHandler) Register(r *Registry) {
 // --- sessions.patch -------------------------------------------------------
 
 // handlePatch accepts {key, ...patchFields} where patchFields are passed
-// through to SessionStore.Patch. The response shape mirrors openclaw's
-// SessionsPatchResultBase: {ok, path, key, entry}.
+// through to SessionStore.Patch. Response: {ok, path, key, entry}.
 func (h *SessionsHandler) handlePatch(ctx context.Context, hc HandlerCtx, params json.RawMessage) (any, *FrameError) {
 	var raw map[string]json.RawMessage
 	if len(params) > 0 {
@@ -175,7 +174,7 @@ func prefAsEntry(key string, p SessionPref) map[string]any {
 
 // --- sessions.list --------------------------------------------------------
 
-// handleList returns the openclaw SessionsListResult shape:
+// handleList returns the sessions list envelope:
 // {ts, path, count, defaults, sessions[]}. Defaults are minimal placeholders
 // today; sessions include any session with prefs OR chat history.
 func (h *SessionsHandler) handleList(ctx context.Context, hc HandlerCtx, _ json.RawMessage) (any, *FrameError) {

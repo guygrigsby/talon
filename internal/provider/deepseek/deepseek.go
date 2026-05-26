@@ -4,14 +4,13 @@
 // shifts:
 //
 //   - BaseURL points at https://api.deepseek.com/v1
-//   - Provider name reports as "deepseek" (matches the user's openclaw
-//     auth profile and the ModelID provider segment in agents.list)
+//   - Provider name reports as "deepseek" (matches the auth profile and
+//     the ModelID provider segment)
 //   - ProviderKey gates ModelID validation so a "deepseek/..." model is
 //     accepted but an "openai/..." or "anthropic/..." model is rejected
 //
-// The openclaw config marks DeepSeek's api as "openai-completions" and
-// supplies the same baseUrl: nothing in DeepSeek's API needs separate
-// handling for tool calls, streaming, or usage accounting.
+// Nothing in DeepSeek's API needs separate handling for tool calls,
+// streaming, or usage accounting.
 package deepseek
 
 import (
@@ -46,9 +45,9 @@ func New(opts Options) *openai.Provider {
 	})
 }
 
-// LoadAPIKey reads the DeepSeek api_key from an openclaw-style
-// auth-profiles.json. Convention: profileID = "deepseek:default" with
-// type=api_key and provider=deepseek.
+// LoadAPIKey reads the DeepSeek api_key from auth-profiles.json.
+// Convention: profileID = "deepseek:default" with type=api_key and
+// provider=deepseek.
 func LoadAPIKey(authProfilesPath string) (string, error) {
 	return openai.LoadProfileKey(authProfilesPath, "deepseek:default", "deepseek")
 }

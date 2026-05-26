@@ -55,8 +55,8 @@ func (h *HostClientHolder) Get() pb.HostClient {
 // SetFromBroker dials the broker id the host sent in
 // InitializeRequest.HostBrokerId and caches the resulting
 // pb.HostClient. Safe to call from a plugin's Initialize handler.
-// Returns nil if brokerID is 0 (legacy host path doesn't populate
-// it) so plugins can call SetFromBroker unconditionally.
+// Returns nil if brokerID is 0 so plugins can call SetFromBroker
+// unconditionally in tests or minimal hosts.
 func (h *HostClientHolder) SetFromBroker(brokerID int64) error {
 	if brokerID == 0 {
 		return nil
@@ -142,9 +142,11 @@ func (h *hclogToSlog) IsInfo() bool  { return h.s.Enabled(context.Background(), 
 func (h *hclogToSlog) IsWarn() bool  { return h.s.Enabled(context.Background(), slog.LevelWarn) }
 func (h *hclogToSlog) IsError() bool { return h.s.Enabled(context.Background(), slog.LevelError) }
 
-func (h *hclogToSlog) ImpliedArgs() []any            { return nil }
-func (h *hclogToSlog) With(args ...any) hclog.Logger { return &hclogToSlog{s: h.s.With(args...), name: h.name} }
-func (h *hclogToSlog) Name() string                  { return h.name }
+func (h *hclogToSlog) ImpliedArgs() []any { return nil }
+func (h *hclogToSlog) With(args ...any) hclog.Logger {
+	return &hclogToSlog{s: h.s.With(args...), name: h.name}
+}
+func (h *hclogToSlog) Name() string { return h.name }
 func (h *hclogToSlog) Named(name string) hclog.Logger {
 	if h.name != "" {
 		name = h.name + "." + name

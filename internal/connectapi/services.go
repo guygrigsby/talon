@@ -346,7 +346,7 @@ type ChannelsService struct {
 }
 
 func (s *ChannelsService) TelegramVerify(ctx context.Context, req *connect.Request[talonv1.TelegramVerifyRequest]) (*connect.Response[talonv1.JSONPayload], error) {
-	raw, err := dispatchJSON(ctx, s.Reg, "channels.telegram.verify", map[string]any{"botToken": req.Msg.GetBotToken()})
+	raw, err := dispatchJSON(ctx, s.Reg, "channels.telegram.verify", map[string]any{"token": req.Msg.GetBotToken()})
 	if err != nil {
 		return nil, err
 	}
@@ -354,9 +354,9 @@ func (s *ChannelsService) TelegramVerify(ctx context.Context, req *connect.Reque
 }
 
 func (s *ChannelsService) TelegramCaptureSender(ctx context.Context, req *connect.Request[talonv1.TelegramCaptureSenderRequest]) (*connect.Response[talonv1.JSONPayload], error) {
-	params := map[string]any{"botToken": req.Msg.GetBotToken()}
+	params := map[string]any{"token": req.Msg.GetBotToken()}
 	if ms := req.Msg.GetTimeoutMs(); ms > 0 {
-		params["timeoutMs"] = ms
+		params["deadlineSec"] = int((ms + 999) / 1000)
 	}
 	raw, err := dispatchJSON(ctx, s.Reg, "channels.telegram.captureSender", params)
 	if err != nil {
@@ -366,10 +366,12 @@ func (s *ChannelsService) TelegramCaptureSender(ctx context.Context, req *connec
 }
 
 func (s *ChannelsService) TelegramPersist(ctx context.Context, req *connect.Request[talonv1.TelegramPersistRequest]) (*connect.Response[talonv1.Empty], error) {
+	chatID := req.Msg.GetChatId()
 	_, err := dispatchJSON(ctx, s.Reg, "channels.telegram.persist", map[string]any{
 		"agentId":  req.Msg.GetAgentId(),
-		"botToken": req.Msg.GetBotToken(),
-		"chatId":   req.Msg.GetChatId(),
+		"token":    req.Msg.GetBotToken(),
+		"senderId": chatID,
+		"chatId":   chatID,
 		"confirm":  req.Msg.GetConfirm(),
 	})
 	if err != nil {

@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
 // clearProviderEnv wipes provider-related env vars so tests don't
@@ -42,7 +42,7 @@ func TestResolveProviderAuth_LiteralKeysPassThrough(t *testing.T) {
 			}
 		}
 	}`)
-	got := ResolveProviderAuth(cfg, openclaw.Paths{})
+	got := ResolveProviderAuth(cfg, talonpath.Paths{})
 	if a, ok := got["openai"]; !ok || a.APIKey != "sk-test-openai" || a.BaseURL != "https://api.openai.com/v1" {
 		t.Errorf("openai entry wrong (key/url mismatch, present=%v)", ok)
 	}
@@ -63,7 +63,7 @@ func TestResolveProviderAuth_LoopbackKeepsEntryWithoutKey(t *testing.T) {
 			"ollama":   {"baseUrl": "http://[::1]:11434/v1"}
 		}}}}}
 	}`)
-	got := ResolveProviderAuth(cfg, openclaw.Paths{})
+	got := ResolveProviderAuth(cfg, talonpath.Paths{})
 	for _, name := range []string{"mlx", "lmstudio", "ollama"} {
 		if _, ok := got[name]; !ok {
 			t.Errorf("loopback provider %q should register even without an API key", name)
@@ -78,7 +78,7 @@ func TestResolveProviderAuth_NonLoopbackSkippedWithoutKey(t *testing.T) {
 			"mistral": {"baseUrl": "https://api.mistral.ai/v1"}
 		}}}}}
 	}`)
-	got := ResolveProviderAuth(cfg, openclaw.Paths{})
+	got := ResolveProviderAuth(cfg, talonpath.Paths{})
 	if _, present := got["mistral"]; present {
 		// SAFETY: never print the resolved struct; it contains the
 		// APIKey. Boolean assertion only.
@@ -94,7 +94,7 @@ func TestResolveProviderAuth_EnvFallback(t *testing.T) {
 			"openai": {"baseUrl": "https://api.openai.com/v1"}
 		}}}}}
 	}`)
-	got := ResolveProviderAuth(cfg, openclaw.Paths{})
+	got := ResolveProviderAuth(cfg, talonpath.Paths{})
 	if a, ok := got["openai"]; !ok || a.APIKey != "sk-from-env" {
 		t.Errorf("env fallback should populate APIKey (present=%v, match=%v)", ok, a.APIKey == "sk-from-env")
 	}
@@ -111,7 +111,7 @@ func TestResolveProviderAuth_RefDoesNotResolveInTestEnv(t *testing.T) {
 			"openai": {"baseUrl": "https://api.openai.com/v1", "apiKey": "op://no-such-vault/no-such-item/credential"}
 		}}}}}
 	}`)
-	got := ResolveProviderAuth(cfg, openclaw.Paths{})
+	got := ResolveProviderAuth(cfg, talonpath.Paths{})
 	if _, present := got["openai"]; present {
 		t.Errorf("unresolvable ref should skip the provider but was present")
 	}

@@ -143,9 +143,8 @@ func (h *ReadHandler) handleAgentsFilesSet(_ context.Context, _ HandlerCtx, para
 	if ferr != nil {
 		return nil, ferr
 	}
-	// MkdirAll matches openclaw's set behavior — first-write to a freshly-
-	// configured agent shouldn't fail just because the workspace dir
-	// hasn't been materialized yet.
+	// First write to a freshly configured agent should not fail just
+	// because the workspace dir has not been materialized yet.
 	if err := os.MkdirAll(workspace, 0o700); err != nil {
 		return nil, &FrameError{Code: ErrCodeInternal, Message: "agents.files.set: mkdir: " + err.Error()}
 	}

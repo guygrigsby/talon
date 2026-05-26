@@ -16,8 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/guygrigsby/talon/internal/provider"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
 // Tool is one callable function exposed to the model.
@@ -88,17 +88,19 @@ func NewWithSubagent(workspace string, runner SubagentRunner) *Registry {
 // NewWithSubagentAndPaths is NewWithSubagent plus the merged-config-aware
 // agents tool. Pass an empty Paths to skip it (used by tests that don't
 // have a real on-disk config layout).
-func NewWithSubagentAndPaths(workspace string, runner SubagentRunner, paths openclaw.Paths) *Registry {
-	r := NewWithSubagent(workspace, runner)
+func NewWithSubagentAndPaths(workspace string, runner SubagentRunner, paths talonpath.Paths) *Registry {
+	r := New(workspace)
 	if workspace == "" {
 		return r
 	}
-	if paths.Talon.Config != "" || paths.Openclaw.Config != "" {
+	if runner != nil {
+		r.Register(&subagentTool{runner: runner, paths: paths})
+	}
+	if paths.Talon.Config != "" {
 		r.Register(NewAgentsTool(paths))
 	}
 	return r
 }
-
 
 // Register adds t to the registry, replacing any prior entry with the same
 // name.

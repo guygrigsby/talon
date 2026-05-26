@@ -1,10 +1,10 @@
-// Package main — `talon gateway diagnostics export` implementation.
+// Package main implements `talon gateway diagnostics export`.
 //
 // Writes a payload-free .zip containing what a support reviewer
 // realistically needs to debug a gateway issue:
 //   - manifest.json:  timestamp, talon/server version, contents
 //   - config.json:    merged config with secrets redacted
-//   - paths.json:     resolved talon overlay + openclaw layer paths
+//   - paths.json:     resolved Talon paths
 //   - health.json:    output of `health` RPC (when reachable)
 //   - logs/config-audit.jsonl: tail of the config-write audit log
 //
@@ -87,17 +87,12 @@ func diagnosticsExportRunE(opts diagnosticsExportOpts) error {
 	}
 	included = append(included, "config.json")
 
-	// 2. Paths layout (where the layered config + state live).
+	// 2. Paths layout (where the config + state live).
 	pathsJSON, _ := json.MarshalIndent(map[string]any{
 		"talon": map[string]string{
 			"dir":    paths.Talon.Dir,
 			"config": paths.Talon.Config,
 		},
-		"openclaw": map[string]string{
-			"dir":    paths.Openclaw.Dir,
-			"config": paths.Openclaw.Config,
-		},
-		"skipOpenclaw": paths.SkipOpenclaw,
 	}, "", "  ")
 	if err := writeZipFile(zw, "paths.json", pathsJSON); err != nil {
 		return err
@@ -146,9 +141,9 @@ func diagnosticsExportRunE(opts diagnosticsExportOpts) error {
 		"talonClient": talonVersion,
 		"contents":    included,
 		"redaction": map[string]any{
-			"appliedTo":     []string{"config.json"},
-			"keyPatterns":   sensitiveKeyParts,
-			"placeholder":   "[REDACTED]",
+			"appliedTo":   []string{"config.json"},
+			"keyPatterns": sensitiveKeyParts,
+			"placeholder": "[REDACTED]",
 		},
 	}, "", "  ")
 	if err := writeZipFile(zw, "manifest.json", manifest); err != nil {
@@ -227,8 +222,8 @@ func redactWalk(v any, parentKey string) {
 }
 
 // shouldRedact returns true when key contains any sensitiveKeyParts
-// substring (case-insensitive). Substring match catches openclaw's
-// camelCase ("botToken") and snake_case ("api_key") variants alike.
+// substring (case-insensitive). Substring match catches camelCase
+// ("botToken") and snake_case ("api_key") variants alike.
 func shouldRedact(key string) bool {
 	if key == "" {
 		return false
@@ -335,4 +330,3 @@ func tryFetchHealth(timeoutMs int) (any, error) {
 	}
 	return v, nil
 }
-

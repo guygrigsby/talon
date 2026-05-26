@@ -8,9 +8,8 @@ import (
 	"time"
 )
 
-// TestE2E_MultiPluginLoading boots a gateway with two plugins
-// configured: the bundled Go testplugin AND the openclaw shim wrapping
-// the fake-tool fixture. Both should load and announce in any order.
+// TestE2E_MultiPluginLoading boots a gateway with two native plugins
+// configured. Both should load and announce in any order.
 //
 // What this guards: the host's per-plugin spawn loop is independent —
 // one plugin's slow Initialize must not gate the other's load, and
@@ -29,9 +28,9 @@ func TestE2E_MultiPluginLoading(t *testing.T) {
 					"enabled": true,
 					"cmd": ["/usr/local/bin/talon-testplugin"]
 				},
-				"openclaw-fake": {
+				"testplugin-two": {
 					"enabled": true,
-					"cmd": ["node", "/usr/local/bin/openclaw-plugin-host", "/opt/test-fixtures/openclaw-fake-tool"]
+					"cmd": ["/usr/local/bin/talon-testplugin"]
 				}
 			}
 		},
@@ -43,8 +42,8 @@ func TestE2E_MultiPluginLoading(t *testing.T) {
 	if _, err := g.WaitForLog(`plugin loaded plugin=testplugin`, 30*time.Second); err != nil {
 		t.Errorf("did not see testplugin load: %v\n--- logs ---\n%s", err, g.LogsString())
 	}
-	if _, err := g.WaitForLog(`plugin loaded plugin=openclaw-fake`, 30*time.Second); err != nil {
-		t.Errorf("did not see shim load: %v\n--- logs ---\n%s", err, g.LogsString())
+	if _, err := g.WaitForLog(`plugin loaded plugin=testplugin-two`, 30*time.Second); err != nil {
+		t.Errorf("did not see second plugin load: %v\n--- logs ---\n%s", err, g.LogsString())
 	}
 
 	// The "talon gateway listening" announce includes plugins=N. With
@@ -55,9 +54,8 @@ func TestE2E_MultiPluginLoading(t *testing.T) {
 }
 
 // TestE2E_PluginCrashOnLoadDoesNotKillGateway is the crash-isolation
-// load-bearing test. The user's working memory documents a real openclaw
-// bug (bonjour) where an in-process plugin crash killed the whole
-// gateway; the talon subprocess model is supposed to make those failures
+// load-bearing test. A subprocess plugin crash must not kill the gateway;
+// the talon plugin host model is supposed to make those failures
 // containable. We force a load failure by pointing cmd at a binary that
 // exits before printing a handshake, and verify the gateway still
 // announces "listening" plus the per-plugin "load failed" line.

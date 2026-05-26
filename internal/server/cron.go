@@ -9,7 +9,7 @@ import (
 	"strings"
 
 	cronpkg "github.com/guygrigsby/talon/internal/cron"
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
 // CronHandler exposes the talon-gateway's cron scheduler over the WS
@@ -37,7 +37,7 @@ type CronHandler struct {
 // dispatch through the server's Registry. New() returns an error if
 // the on-disk job store is unreadable (a corrupt jobs.json should
 // surface at boot, not silently disable cron).
-func NewCronHandler(paths openclaw.Paths, dispatch cronpkg.DispatchFunc) (*CronHandler, error) {
+func NewCronHandler(paths talonpath.Paths, dispatch cronpkg.DispatchFunc) (*CronHandler, error) {
 	store := cronpkg.NewStore(filepath.Join(paths.Talon.Dir, "cron", "jobs.json"))
 	runs := cronpkg.NewRunLog(filepath.Join(paths.Talon.Dir, "cron", "runs.jsonl"))
 	svc, err := cronpkg.New(store, runs, dispatch, nil)

@@ -1,8 +1,7 @@
 // Package main — `talon configure channel <name>`. Interactive wizards
-// per channel. The structure mirrors openclaw's setup-surface so
-// additional channels drop into the same shape.
+// per channel. Additional channels drop into the same shape.
 //
-// Telegram flow (mirrors openclaw's telegramSetupWizard):
+// Telegram flow:
 //   1. Prompt for the bot token (TELEGRAM_BOT_TOKEN env var also accepted)
 //   2. Verify via /getMe — print the bot's @username so the user knows
 //      which bot to message
@@ -10,7 +9,7 @@
 //   4. Long-poll /getUpdates until a message lands; capture from.id
 //   5. Send a confirmation message back via /sendMessage
 //   6. Persist:
-//        channels.telegram.botToken   = <token>
+//        channels.telegram.botToken   = keychain://talon.channels.telegram.botToken/talon
 //        channels.telegram.allowFrom  = ["<from.id>"]
 //        channels.telegram.dmPolicy   = "allowlist"
 //        plugins.entries.telegram     = {enabled, cmd}
@@ -28,7 +27,7 @@
 //   4. Print the webhook URL the user must paste into the BlueBubbles
 //      admin UI
 //   5. Persist:
-//        channels.bluebubbles.serverUrl, password, webhookPort,
+//        channels.bluebubbles.serverUrl, password ref, webhookPort,
 //                              allowFrom, dmPolicy=allowlist, agentId
 //        plugins.entries.bluebubbles = {enabled, cmd}
 
@@ -49,6 +48,7 @@ import (
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
+	"github.com/guygrigsby/talon/internal/secrets"
 	"github.com/guygrigsby/talon/internal/telegram"
 	"github.com/spf13/cobra"
 )
@@ -136,11 +136,9 @@ func findWizard(kind, name string) (configureWizard, bool) {
 	return configureWizard{}, false
 }
 
-// runConfigureMenu drives the top-level interactive picker. Mirrors
-// openclaw's `openclaw configure` UX: numbered list, single keypress
-// (well, line — we read until newline) to pick, q to quit. Loops
-// after a wizard finishes so users can do channel-then-provider in
-// one sitting.
+// runConfigureMenu drives the top-level interactive picker: numbered list,
+// single line to pick, q to quit. Loops after a wizard finishes so users can
+// do channel-then-provider in one sitting.
 func runConfigureMenu(in io.Reader, out io.Writer) error {
 	reader := bufio.NewReader(in)
 	wizards := configureWizardsForTest
@@ -284,8 +282,7 @@ func configureTelegram(in io.Reader, out io.Writer) error {
 	fmt.Fprintln(out, "Telegram setup")
 	fmt.Fprintln(out)
 
-	// 1. Token. Prefer env, fall back to prompt. Mirrors openclaw's
-	//    "TELEGRAM_BOT_TOKEN detected" behavior.
+	// 1. Token. Prefer env, fall back to prompt.
 	token := strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
 	if token != "" {
 		fmt.Fprintf(out, "Found TELEGRAM_BOT_TOKEN in environment. Use it? [Y/n] ")
@@ -361,9 +358,8 @@ func configureTelegram(in io.Reader, out io.Writer) error {
 	fmt.Fprintln(out, " got it.")
 	fmt.Fprintf(out, "✓ Captured sender id %d (%s)\n", chat.SenderID, chat.DisplayName)
 
-	// 4. Send the confirmation message — the "openclaw sends me a
-	//    telegram" moment. Establishes that the round-trip works
-	//    AND closes the loop the user expects.
+	// 4. Send the confirmation message. Establishes that the round-trip
+	//    works and closes the loop the user expects.
 	confirm := fmt.Sprintf("✓ talon configured for @%s.\nFuture replies in this chat are routed through your agent.", bot.Username)
 	if err := telegram.SendMessage(ctx, token, chat.ChatID, confirm); err != nil {
 		// Non-fatal — the config write is still valuable. Log and continue.
@@ -375,11 +371,17 @@ func configureTelegram(in io.Reader, out io.Writer) error {
 	//    plugin rather than running it without a token.
 	paths := resolvePaths()
 	senderIDStr := strconv.FormatInt(chat.SenderID, 10)
+	storeCtx, storeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer storeCancel()
+	tokenRef, err := secrets.StoreKeychainSecret(storeCtx, "talon.channels.telegram.botToken", token)
+	if err != nil {
+		return fmt.Errorf("store Telegram token in keychain: %w", err)
+	}
 	writes := []struct {
 		path  []string
 		value any
 	}{
-		{[]string{"channels", "telegram", "botToken"}, token},
+		{[]string{"channels", "telegram", "botToken"}, tokenRef},
 		{[]string{"channels", "telegram", "allowFrom"}, []any{senderIDStr}},
 		{[]string{"channels", "telegram", "dmPolicy"}, "allowlist"},
 		{[]string{"channels", "telegram", "agentId"}, "main"},
@@ -516,12 +518,18 @@ func configureBluebubbles(in io.Reader, out io.Writer) error {
 	// 6. Persist. Channel config first so a half-applied wizard
 	//    leaves the plugin entry disabled — same shape as telegram.
 	paths := resolvePaths()
+	storeCtx, storeCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer storeCancel()
+	passwordRef, err := secrets.StoreKeychainSecret(storeCtx, "talon.channels.bluebubbles.password", password)
+	if err != nil {
+		return fmt.Errorf("store BlueBubbles password in keychain: %w", err)
+	}
 	writes := []struct {
 		path  []string
 		value any
 	}{
 		{[]string{"channels", "bluebubbles", "serverUrl"}, serverURL},
-		{[]string{"channels", "bluebubbles", "password"}, password},
+		{[]string{"channels", "bluebubbles", "password"}, passwordRef},
 		{[]string{"channels", "bluebubbles", "webhookPort"}, webhookPort},
 		{[]string{"channels", "bluebubbles", "allowFrom"}, []any{handle}},
 		{[]string{"channels", "bluebubbles", "dmPolicy"}, "allowlist"},

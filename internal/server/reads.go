@@ -13,8 +13,9 @@ import (
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/memory"
-	"github.com/guygrigsby/talon/internal/openclaw"
-	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
+	plugin "github.com/guygrigsby/talon/internal/plugin/host"
+	"github.com/guygrigsby/talon/internal/subagents"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/tidwall/gjson"
 )
 
@@ -23,7 +24,7 @@ import (
 // credentials or per-session state, so they live in their own type rather
 // than being bolted onto ChatHandler.
 type ReadHandler struct {
-	paths openclaw.Paths
+	paths talonpath.Paths
 	// host, when non-nil, lets models.list surface models advertised
 	// by loaded plugins via their Manifest.OffersProviders. nil host
 	// = catalog + user-config only.
@@ -33,7 +34,7 @@ type ReadHandler struct {
 // NewReadHandler constructs a ReadHandler bound to the given Paths. The
 // merged config is re-read on each call (cheap; bytes are pulled from the
 // already-cached overlay JSON).
-func NewReadHandler(paths openclaw.Paths) *ReadHandler {
+func NewReadHandler(paths talonpath.Paths) *ReadHandler {
 	return &ReadHandler{paths: paths}
 }
 
@@ -81,11 +82,13 @@ func (h *ReadHandler) handleAgentsList(ctx context.Context, hc HandlerCtx, _ jso
 	})
 
 	var agents []map[string]any
+	seen := map[string]bool{}
 	gjson.GetBytes(merged, "agents.list").ForEach(func(_, agent gjson.Result) bool {
 		id := agent.Get("id").Str
 		if id == "" {
 			return true
 		}
+		seen[id] = true
 		// Always emit a non-empty name. Some UIs hide rows whose
 		// label is missing — falling back to the id keeps a freshly
 		// configured agent visible even before the user fills in
@@ -94,7 +97,7 @@ func (h *ReadHandler) handleAgentsList(ctx context.Context, hc HandlerCtx, _ jso
 		if name == "" {
 			name = id
 		}
-		row := map[string]any{"id": id, "name": name}
+		row := map[string]any{"id": id, "name": name, "kind": "main"}
 		if ws := agent.Get("workspace").Str; ws != "" {
 			row["workspace"] = ws
 		}
@@ -102,14 +105,18 @@ func (h *ReadHandler) handleAgentsList(ctx context.Context, hc HandlerCtx, _ jso
 		// per-agent .model.primary → per-agent .model (string) →
 		// agents.defaults.model.primary.
 		primary := defaultPrimary
+		modelSource := "default"
 		if v := agent.Get("model.primary"); v.Exists() && v.Str != "" {
 			primary = v.Str
+			modelSource = "agent"
 		} else if v := agent.Get("model"); v.Exists() && v.Type == gjson.String && v.Str != "" {
 			primary = v.Str
+			modelSource = "agent"
 		}
 		modelEntry := map[string]any{
 			"primary":   primary,
 			"fallbacks": defaultFallbacks,
+			"source":    modelSource,
 		}
 		// Attach the human-readable name for the resolved primary
 		// model so the UI's "default selection" can render a label
@@ -124,16 +131,58 @@ func (h *ReadHandler) handleAgentsList(ctx context.Context, hc HandlerCtx, _ jso
 		return true
 	})
 
+	subagentDefs, err := subagents.LoadDir(h.paths.Talon.SubagentsDir())
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "agents.list: " + err.Error()}
+	}
+	for _, def := range subagentDefs {
+		if seen[def.ID] {
+			continue
+		}
+		primary := def.Model
+		modelSource := "frontmatter"
+		if primary == "" {
+			primary = defaultPrimary
+			modelSource = "default"
+		}
+		modelEntry := map[string]any{
+			"primary":   primary,
+			"fallbacks": defaultFallbacks,
+			"source":    modelSource,
+		}
+		if name := resolveModelDisplayName(merged, primary); name != "" {
+			modelEntry["primaryName"] = name
+		}
+		row := map[string]any{
+			"id":          def.ID,
+			"name":        def.Name,
+			"kind":        "subagent",
+			"source":      "subagent-file",
+			"description": def.Description,
+			"path":        def.Path,
+			"model":       modelEntry,
+			"workspace":   resolveWorkspace(merged, defaultAgentID(agents)),
+		}
+		if def.Prompt != "" {
+			row["promptChars"] = len(def.Prompt)
+		}
+		if len(def.Tools) > 0 {
+			row["tools"] = def.Tools
+		}
+		agents = append(agents, row)
+	}
+
 	defaultID := "main"
 	if !hasAgentID(agents, defaultID) && len(agents) > 0 {
 		defaultID = agents[0]["id"].(string)
 	}
 
 	return map[string]any{
-		"agents":    agents,
-		"defaultId": defaultID,
-		"mainKey":   "main",
-		"scope":     "per-sender",
+		"agents":       agents,
+		"defaultId":    defaultID,
+		"mainKey":      "main",
+		"scope":        "per-sender",
+		"subagentsDir": h.paths.Talon.SubagentsDir(),
 	}, nil
 }
 
@@ -169,6 +218,19 @@ func hasAgentID(agents []map[string]any, id string) bool {
 		}
 	}
 	return false
+}
+
+func defaultAgentID(agents []map[string]any) string {
+	if hasAgentID(agents, "main") {
+		return "main"
+	}
+	if len(agents) == 0 {
+		return ""
+	}
+	if id, ok := agents[0]["id"].(string); ok {
+		return id
+	}
+	return ""
 }
 
 // --- models.list -----------------------------------------------------------
@@ -335,11 +397,15 @@ func modelCostForListRow(merged []byte, modelKey string, model gjson.Result) map
 		return cost
 	}
 	if price, ok := builtinModelPrices[modelKey]; ok {
-		return map[string]any{
+		out := map[string]any{
 			"input":  price.In,
 			"output": price.Out,
 			"source": "builtin",
 		}
+		if price.CacheRead > 0 {
+			out["cacheRead"] = price.CacheRead
+		}
+		return out
 	}
 	return nil
 }
@@ -357,12 +423,10 @@ type agentIdentityParams struct {
 	SessionKey string `json:"sessionKey"`
 }
 
-// handleAgentIdentityGet resolves the requested agent in three tiers,
-// matching openclaw's plugin-bootstrap surface: explicit agentId →
-// derived from sessionKey → default "main". The openclaw web UI calls
-// this with {sessionKey} and never agentId, so requiring agentId would
-// silently break the chat label (the UI's catch swallows the error and
-// the assistant stays as "Assistant" forever).
+// handleAgentIdentityGet resolves the requested agent in three tiers:
+// explicit agentId, derived from sessionKey, then default "main".
+// The UI may call this with only {sessionKey}, so requiring agentId
+// would silently break the chat label.
 func (h *ReadHandler) handleAgentIdentityGet(ctx context.Context, hc HandlerCtx, params json.RawMessage) (any, *FrameError) {
 	var p agentIdentityParams
 	if len(params) > 0 {
@@ -418,8 +482,8 @@ func (h *ReadHandler) handleAgentIdentityGet(ctx context.Context, hc HandlerCtx,
 	return resp, nil
 }
 
-// pickAvatar mirrors openclaw's behavior: if the avatar field is empty,
-// the emoji doubles as the rendered avatar.
+// pickAvatar uses the emoji as the rendered avatar when the avatar
+// field is empty.
 func pickAvatar(avatar, emoji string) string {
 	if avatar != "" {
 		return avatar
@@ -434,12 +498,11 @@ type identityFields struct {
 }
 
 // parseIdentityMarkdown extracts the three IDENTITY.md fields the UI cares
-// about. The expected format (per openclaw's bootstrap) is a markdown
-// bullet list:
+// about. The expected format is a markdown bullet list:
 //
 //   - **Name:** Clawdia
 //   - **Emoji:** 🦞
-//   - **Avatar:** avatars/openclaw.png
+//   - **Avatar:** avatars/talon.png
 //
 // Lines may use either `- **Key:** value` or `- **Key:**\n  value`. Trailing
 // italics or markdown decorations on the value line are stripped. Empty
@@ -575,8 +638,8 @@ type skillsStatusParams struct {
 	AgentID string `json:"agentId"`
 }
 
-// handleSkillsStatus returns the SkillStatusReport shape the openclaw web
-// UI consumes, with an empty skills list. Distinct from the chat tool
+// handleSkillsStatus returns the SkillStatusReport shape the web UI
+// consumes, with an empty skills list. Distinct from the chat tool
 // surface — talon's chat tools (read/write/edit/bash/glob/grep) are
 // builtin function-calling primitives, not user-installable skills. A
 // real skills runtime (scan managedSkillsDir, parse SKILL.md frontmatter)
@@ -616,6 +679,8 @@ func resolveWorkspace(merged []byte, agentID string) string {
 		if v := agent.Get("workspace"); v.Exists() && v.Str != "" {
 			return v.Str
 		}
+	} else if agentID != "" && agentID != "main" {
+		return ""
 	}
 	if v := gjson.GetBytes(merged, "agents.defaults.workspace"); v.Exists() && v.Str != "" {
 		return v.Str
@@ -626,9 +691,8 @@ func resolveWorkspace(merged []byte, agentID string) string {
 // --- config.get ------------------------------------------------------------
 
 // secretLeafKeys is the set of leaf keys whose values get replaced with
-// "***REDACTED***" before config.get returns. We don't have openclaw's
-// schema-driven uiHints to drive redaction, so this is a conservative
-// hardcoded list covering the common openclaw secret-bearing keys
+// "***REDACTED***" before config.get returns. This is a conservative
+// hardcoded list covering common secret-bearing keys
 // (gateway.auth.{token,password}, channels.<x>.{token,botToken,apiKey},
 // plugins.entries.<x>.config..apiKey, skills.entries.<x>.apiKey, etc).
 //
@@ -671,8 +735,8 @@ func redactSecretsInPlace(v any) {
 	}
 }
 
-// handleConfigGet returns the merged config in the openclaw ConfigSnapshot
-// envelope shape the UI's controllers/config.ts consumes:
+// handleConfigGet returns the merged config in the ConfigSnapshot envelope
+// shape the UI consumes:
 //
 //	{path, exists, raw, hash, parsed, valid, config, issues}
 //
@@ -717,8 +781,8 @@ func (h *ReadHandler) handleConfigGet(ctx context.Context, hc HandlerCtx, _ json
 
 // --- config.set ------------------------------------------------------------
 
-// handleConfigSet writes a value at a dotted path in the talon
-// overlay. Params: {path: "<dotted>", valueJson: "<JSON>", merge: bool?}.
+// handleConfigSet writes a value at a dotted path in Talon's native config.
+// Params: {path: "<dotted>", valueJson: "<JSON>", merge: bool?}.
 // Empty valueJson deletes the path; otherwise the JSON is parsed
 // and config.Set applies it under SetMerge or SetReplaceSafe
 // depending on the merge flag.
@@ -753,10 +817,9 @@ func (h *ReadHandler) handleConfigSet(_ context.Context, _ HandlerCtx, params js
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "config.set: " + err.Error()}
 	}
 	return map[string]any{
-		"path":               res.Path,
-		"wrote":              res.Wrote,
-		"prunedPaths":        res.PrunedPaths,
-		"staleOpenclawPaths": res.StaleOpenclawPaths,
+		"path":        res.Path,
+		"wrote":       res.Wrote,
+		"prunedPaths": res.PrunedPaths,
 	}, nil
 }
 
@@ -774,9 +837,8 @@ func (h *ReadHandler) handleConfigSchema(ctx context.Context, hc HandlerCtx, _ j
 			// permissive envelope: a JSON Schema that accepts any
 			// object. The UI's config editor loses field-level
 			// validation hints but the rest of the surface stays
-			// usable. Re-running `talon config schema --refresh`
-			// against an openclaw gateway populates the real
-			// envelope and replaces this stub.
+			// usable. Re-running schema refresh once native schema
+			// generation exists will replace this stub.
 			return permissiveSchemaEnvelope(), nil
 		}
 		return nil, &FrameError{Code: ErrCodeInternal, Message: "config.schema: read cache: " + err.Error()}
@@ -790,9 +852,8 @@ func (h *ReadHandler) handleConfigSchema(ctx context.Context, hc HandlerCtx, _ j
 }
 
 // permissiveSchemaEnvelope returns the fallback envelope for the
-// no-cache path. Shape mirrors what an openclaw gateway would
-// return — generatedAt + schema — so the UI's parsing path stays
-// the same. The schema itself is "any object permitted" so the UI's
+// no-cache path. Shape is generatedAt + schema so the UI's parsing path
+// stays the same. The schema itself is "any object permitted" so the UI's
 // editor renders the config tree without per-field constraints.
 func permissiveSchemaEnvelope() any {
 	return map[string]any{

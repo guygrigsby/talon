@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/guygrigsby/talon/internal/plugin/legacy"
+	pluginhost "github.com/guygrigsby/talon/internal/plugin/host"
 	"github.com/guygrigsby/talon/internal/plugin/native"
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 )
@@ -48,7 +48,7 @@ func TestNativeSpawn_RoundTrip(t *testing.T) {
 		t.Fatalf("build testplugin: %v\n%s", err, out)
 	}
 
-	host := legacy.NewHost("")
+	host := pluginhost.NewHost()
 	t.Cleanup(host.Shutdown)
 
 	factory := func(name string, _ *native.ManifestHolder) pb.HostServer {

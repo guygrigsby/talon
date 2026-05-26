@@ -11,7 +11,7 @@ import (
 
 	"github.com/tidwall/gjson"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/guygrigsby/talon/internal/provider/openai"
 	"github.com/guygrigsby/talon/internal/secrets"
 )
@@ -39,14 +39,13 @@ type ProviderAuth struct {
 const secretsTimeout = 15 * time.Second
 
 // ResolveProviderAuth resolves every configured provider's credentials
-// to literal values, following the same chain the legacy plugin
-// stack uses:
+// to literal values:
 //
 //  1. plugins.entries.openai-compat.config.providers.<name>.apiKey
 //     (or plugins.entries.anthropic.config.apiKey for anthropic)
 //  2. <NAME>_API_KEY env var
 //  3. <NAME>_API_KEY_REF env var (a secret reference)
-//  4. ~/.openclaw/agents/main/agent/auth-profiles.json profile
+//  4. ~/.talon/agents/main/agent/auth-profiles.json profile
 //     "<name>:default"
 //
 // Step 1 values, env REFs, and profile keys may be op:// /
@@ -57,10 +56,10 @@ const secretsTimeout = 15 * time.Second
 // returned map — callers decide whether that's an error (chat
 // requested against the missing provider) or fine (provider just
 // won't appear in the picker).
-func ResolveProviderAuth(merged []byte, paths openclaw.Paths) map[string]ProviderAuth {
+func ResolveProviderAuth(merged []byte, paths talonpath.Paths) map[string]ProviderAuth {
 	out := map[string]ProviderAuth{}
-	authPath := filepath.Join(paths.Openclaw.Dir, "agents", "main", "agent", "auth-profiles.json")
-	if paths.Openclaw.Dir == "" {
+	authPath := filepath.Join(paths.Talon.Dir, "agents", "main", "agent", "auth-profiles.json")
+	if paths.Talon.Dir == "" {
 		// Tests typically pass an empty Paths; fall through with
 		// a path that doesn't exist so the profile step no-ops.
 		authPath = ""

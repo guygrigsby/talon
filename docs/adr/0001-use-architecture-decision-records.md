@@ -7,7 +7,7 @@ Date: 2026-05-26
 ## Context
 
 Talon has accumulated compatibility code, config conventions, and migration
-choices from its OpenClaw-compatible phase. Those choices are now scattered
+choices from its earlier compatibility phase. Those choices are now scattered
 across code comments, tests, docs, and local config paths, which makes it hard
 to tell which decisions still apply to Talon as a standalone agentic server.
 

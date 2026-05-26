@@ -31,8 +31,7 @@ type ChatSendRequest struct {
 	SessionKey string                 `protobuf:"bytes,1,opt,name=session_key,json=sessionKey,proto3" json:"session_key,omitempty"`
 	Message    string                 `protobuf:"bytes,2,opt,name=message,proto3" json:"message,omitempty"`
 	// IdempotencyKey is also the run_id the server echoes back on
-	// events — the openclaw UI keys its run-tracking state off this
-	// value. Leave empty to let the server mint a fresh run_id.
+	// events. Leave empty to let the server mint a fresh run_id.
 	IdempotencyKey string `protobuf:"bytes,3,opt,name=idempotency_key,json=idempotencyKey,proto3" json:"idempotency_key,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -416,7 +415,7 @@ type AssistantMessage struct {
 	Text string `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
 	// ToolUses appears when this assistant turn invoked tools; one
 	// entry per tool call. Renders alongside the text as the
-	// multi-part assistant message the openclaw UI expects.
+	// multi-part assistant message the UI expects.
 	ToolUses      []*ToolUseMessage `protobuf:"bytes,2,rep,name=tool_uses,json=toolUses,proto3" json:"tool_uses,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

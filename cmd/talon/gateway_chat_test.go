@@ -7,34 +7,43 @@ import (
 	"testing"
 
 	"github.com/guygrigsby/talon/internal/netutil"
-	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/guygrigsby/talon/internal/server"
+	"github.com/guygrigsby/talon/internal/talonconfig"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
-func writeFixture(t *testing.T, body string) openclaw.Paths {
+func writeFixture(t *testing.T, body string) talonpath.Paths {
 	t.Helper()
 	dir := t.TempDir()
 	talonDir := filepath.Join(dir, "talon")
-	openclawDir := filepath.Join(dir, "openclaw")
 	if err := os.MkdirAll(talonDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(openclawDir, 0o700); err != nil {
+	cfg, err := talonconfig.FromRuntimeJSON([]byte(body))
+	if err != nil {
 		t.Fatal(err)
 	}
-	openclawCfg := filepath.Join(openclawDir, "openclaw.json")
-	if err := os.WriteFile(openclawCfg, []byte(body), 0o600); err != nil {
+	configPath := filepath.Join(talonDir, "config.toml")
+	if err := os.WriteFile(configPath, talonconfig.MarshalTOML(cfg, talonconfig.MarshalOptions{}), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	return openclaw.Paths{
-		Talon:    openclaw.Layer{Dir: talonDir, Config: filepath.Join(talonDir, "openclaw.json")},
-		Openclaw: openclaw.Layer{Dir: openclawDir, Config: openclawCfg},
+	return talonpath.Paths{
+		Talon: talonpath.Layer{Dir: talonDir, Config: configPath},
 	}
 }
 
-// Mirrors the user's actual ~/.openclaw/openclaw.json layout: "main" has no
-// model field and inherits from defaults; sibling agents store `model` as a
-// bare string shorthand.
+func writeSubagent(t *testing.T, paths talonpath.Paths, name, body string) {
+	t.Helper()
+	dir := paths.Talon.SubagentsDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Main inherits from defaults; subagents are file-backed task/model profiles.
 const fixtureRealisticAgents = `{
 	"agents": {
 		"defaults": {
@@ -63,7 +72,13 @@ func TestConfigAgentResolver_FallsBackToDefaultsWhenAgentHasNoModel(t *testing.T
 }
 
 func TestConfigAgentResolver_ReadsPerAgentStringShorthand(t *testing.T) {
-	r := &configAgentResolver{paths: writeFixture(t, fixtureRealisticAgents)}
+	paths := writeFixture(t, fixtureRealisticAgents)
+	writeSubagent(t, paths, "coding.md", `---
+model: anthropic/claude-opus-4-7
+---
+Code work.
+`)
+	r := &configAgentResolver{paths: paths}
 	got, err := r.PrimaryModel("coding")
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +89,13 @@ func TestConfigAgentResolver_ReadsPerAgentStringShorthand(t *testing.T) {
 }
 
 func TestConfigAgentResolver_ReadsPerAgentObjectForm(t *testing.T) {
-	r := &configAgentResolver{paths: writeFixture(t, fixtureRealisticAgents)}
+	paths := writeFixture(t, fixtureRealisticAgents)
+	writeSubagent(t, paths, "future.md", `---
+model: deepseek/deepseek-reasoner
+---
+Future-looking work.
+`)
+	r := &configAgentResolver{paths: paths}
 	got, err := r.PrimaryModel("future")
 	if err != nil {
 		t.Fatal(err)
@@ -179,9 +200,9 @@ func TestConfigAgentResolver_ToolsEnabledDefaultTrue(t *testing.T) {
 
 func TestConfigAgentResolver_ToolsEnabledExplicitFalse(t *testing.T) {
 	r := &configAgentResolver{paths: writeFixture(t, `{
-		"agents": {"list": [{"id": "chat", "tools": {"enabled": false}}]}
+		"agents": {"list": [{"id": "main", "tools": {"enabled": false}}]}
 	}`)}
-	got, err := r.ToolsEnabled("chat")
+	got, err := r.ToolsEnabled("main")
 	if err != nil {
 		t.Fatal(err)
 	}

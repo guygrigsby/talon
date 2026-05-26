@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/guygrigsby/talon/internal/telegram"
 	"github.com/tidwall/gjson"
 )
@@ -56,7 +56,7 @@ type gatewayEvent struct {
 // loops, and sends a Telegram alert if the threshold is hit (and
 // we haven't alerted recently). Errors are logged to stderr but
 // never returned — startup must not depend on this.
-func recordStartupAndAlert(ctx context.Context, paths openclaw.Paths) {
+func recordStartupAndAlert(ctx context.Context, paths talonpath.Paths) {
 	if paths.Talon.Dir == "" {
 		return
 	}
@@ -92,13 +92,13 @@ func recordStartupAndAlert(ctx context.Context, paths openclaw.Paths) {
 	}()
 }
 
-func eventsPath(paths openclaw.Paths) string {
+func eventsPath(paths talonpath.Paths) string {
 	return filepath.Join(paths.Talon.Dir, gatewayEventsFile)
 }
 
 // appendGatewayEvent serializes ev as a single JSON line and
 // appends it to the events file. Creates parent dirs as needed.
-func appendGatewayEvent(paths openclaw.Paths, ev gatewayEvent) error {
+func appendGatewayEvent(paths talonpath.Paths, ev gatewayEvent) error {
 	p := eventsPath(paths)
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		return err
@@ -121,7 +121,7 @@ func appendGatewayEvent(paths openclaw.Paths, ev gatewayEvent) error {
 // file. For our window (5 min, ~10 entries max) we just read the
 // whole file — there's no point optimizing for a log we cap at
 // dozens of entries per day.
-func tailGatewayEvents(paths openclaw.Paths, n int) ([]gatewayEvent, error) {
+func tailGatewayEvents(paths talonpath.Paths, n int) ([]gatewayEvent, error) {
 	f, err := os.Open(eventsPath(paths))
 	if err != nil {
 		return nil, err
@@ -177,7 +177,7 @@ func recentlyAlerted(events []gatewayEvent, now time.Time) bool {
 // sendCrashLoopAlert composes a short Telegram DM to allowFrom[0]
 // describing the crash loop. Best-effort: missing token /
 // allowFrom returns a clean error so the caller logs and moves on.
-func sendCrashLoopAlert(ctx context.Context, paths openclaw.Paths, events []gatewayEvent, now time.Time) error {
+func sendCrashLoopAlert(ctx context.Context, paths talonpath.Paths, events []gatewayEvent, now time.Time) error {
 	merged, err := config.MergedBytes(paths)
 	if err != nil {
 		return err

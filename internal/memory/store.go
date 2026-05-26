@@ -1,8 +1,8 @@
 // Package memory writes durable notes to an agent's workspace memory dir.
 // The on-disk shape matches what agentcontext.Build reads back into the
 // system prompt: <workspace>/memory/<YYYY-MM-DD>.md, one file per day,
-// markdown body. Plain text only — no DB, no embeddings — so the user's
-// existing openclaw memory dir Just Works and stays grep-able.
+// markdown body. Plain text only — no DB, no embeddings — so memory stays
+// grep-able.
 package memory
 
 import (

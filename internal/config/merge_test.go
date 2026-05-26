@@ -95,9 +95,9 @@ func TestMergeJSON_TypeMismatch_OverlayWins(t *testing.T) {
 func TestMergeJSON_NullOverlayDoesNotEraseBase(t *testing.T) {
 	// JSON null in the overlay is currently treated as "no value" by
 	// mergeValues so the base wins. This is intentional: tombstones
-	// (talon-9ic) will be the explicit way to delete openclaw-layer
-	// entries from the merged view; a literal null in the talon overlay
-	// must NOT silently erase openclaw config.
+	// (talon-9ic) will be the explicit way to delete base-layer entries
+	// from the merged view; a literal null in the overlay must NOT
+	// silently erase base config.
 	base := []byte(`{"x":1}`)
 	overlay := []byte(`{"x":null}`)
 	got, err := mergeJSON(base, overlay)
@@ -220,125 +220,5 @@ func TestMergeJSON_NestedIDKeyedArray(t *testing.T) {
 	}
 	if v := gjson.GetBytes(got, `models.providers.deepseek.models.#(id=="chat").cost`).Int(); v != 2 {
 		t.Errorf("chat.cost = %d, want preserved 2", v)
-	}
-}
-
-// --- write-time merge (SetMerge mode → mergeAtPath / mergeRecursive) -------
-
-func TestSet_Merge_DeepObjectPreservesSiblings(t *testing.T) {
-	// SetMerge into a sub-tree with siblings already in the talon overlay
-	// should preserve the siblings (path-by-path sjson set, not subtree
-	// replace).
-	src := `{"models":{"providers":{"openai":{"api":"x"},"anthropic":{"api":"y"}}}}`
-	p := fixture(t, "", src)
-	patch := map[string]any{"openai": map[string]any{"api": "z"}}
-	if _, err := Set(p, mustParse(t, "models.providers"), patch, SetOpts{Mode: SetMerge}); err != nil {
-		t.Fatal(err)
-	}
-	got := readFile(t, p.Talon.Config)
-	if v := gjson.Get(got, "models.providers.openai.api").Str; v != "z" {
-		t.Errorf("openai.api = %q, want %q", v, "z")
-	}
-	if v := gjson.Get(got, "models.providers.anthropic.api").Str; v != "y" {
-		t.Errorf("anthropic.api = %q, want preserved %q", v, "y")
-	}
-}
-
-func TestSet_Merge_NestedPatch(t *testing.T) {
-	// A nested merge patch should leave unspecified sibling fields alone
-	// at every level.
-	src := `{"a":{"b":{"c":1,"d":2},"e":3}}`
-	p := fixture(t, "", src)
-	patch := map[string]any{"b": map[string]any{"c": 99}}
-	if _, err := Set(p, mustParse(t, "a"), patch, SetOpts{Mode: SetMerge}); err != nil {
-		t.Fatal(err)
-	}
-	got := readFile(t, p.Talon.Config)
-	checks := map[string]int64{
-		"a.b.c": 99,
-		"a.b.d": 2,
-		"a.e":   3,
-	}
-	for path, want := range checks {
-		if v := gjson.Get(got, path).Int(); v != want {
-			t.Errorf("%s = %d, want %d", path, v, want)
-		}
-	}
-}
-
-func TestSet_Merge_AgentsListMergesByID(t *testing.T) {
-	// SetMerge on agents.list should merge by id, not replace.
-	src := `{"agents":{"list":[{"id":"main","model":"a"},{"id":"coding","model":"b"}]}}`
-	p := fixture(t, "", src)
-	patch := []any{
-		map[string]any{"id": "coding", "model": "c"},
-		map[string]any{"id": "research", "model": "d"},
-	}
-	if _, err := Set(p, mustParse(t, "agents.list"), patch, SetOpts{Mode: SetMerge}); err != nil {
-		t.Fatal(err)
-	}
-	got := readFile(t, p.Talon.Config)
-	checks := map[string]string{
-		`agents.list.#(id=="main").model`:     "a",
-		`agents.list.#(id=="coding").model`:   "c",
-		`agents.list.#(id=="research").model`: "d",
-	}
-	for path, want := range checks {
-		if v := gjson.Get(got, path).Str; v != want {
-			t.Errorf("%s = %q, want %q", path, v, want)
-		}
-	}
-}
-
-func TestSet_Merge_RefusesScalarOverObject(t *testing.T) {
-	// Merging a scalar into a map path is ambiguous; mergeRecursive
-	// should error rather than silently replace.
-	src := `{"x":{"a":1}}`
-	p := fixture(t, "", src)
-	_, err := Set(p, mustParse(t, "x"), map[string]any{"b": map[string]any{"c": 1}}, SetOpts{Mode: SetMerge})
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Now try to merge a map at "x.b" but the existing "x.b" is already
-	// a map, so this should succeed. The error case is when target is
-	// not an object but patch is — try x.a (scalar) with map patch.
-	_, err = Set(p, mustParse(t, "x.a"), map[string]any{"sub": 1}, SetOpts{Mode: SetMerge})
-	if err == nil {
-		t.Errorf("expected merge error when target is scalar but patch is map")
-	}
-}
-
-func TestSet_Merge_BootstrapsTalonOverlayFromNothing(t *testing.T) {
-	// SetMerge with no talon overlay yet should still produce a sparse
-	// overlay containing only the merged patch.
-	p := fixture(t, `{"openclaw":"only"}`, "")
-	patch := map[string]any{"new": map[string]any{"key": "val"}}
-	if _, err := Set(p, mustParse(t, "talon"), patch, SetOpts{Mode: SetMerge}); err != nil {
-		t.Fatal(err)
-	}
-	overlay := readFile(t, p.Talon.Config)
-	if v := gjson.Get(overlay, "talon.new.key").Str; v != "val" {
-		t.Errorf("overlay.talon.new.key = %q, want %q", v, "val")
-	}
-	if gjson.Get(overlay, "openclaw").Exists() {
-		t.Errorf("openclaw key leaked into talon overlay: %s", overlay)
-	}
-}
-
-func TestSet_Merge_LeavesUnrelatedOverlayKeys(t *testing.T) {
-	// SetMerge edits a sub-tree; unrelated talon-overlay keys must
-	// survive (the openclaw-side fixture is irrelevant here).
-	overlay := `{"gateway":{"port":19000},"unrelated":{"keep":true}}`
-	p := fixture(t, "", overlay)
-	patch := map[string]any{"port": 19001}
-	if _, err := Set(p, mustParse(t, "gateway"), patch, SetOpts{Mode: SetMerge}); err != nil {
-		t.Fatal(err)
-	}
-	got := readFile(t, p.Talon.Config)
-	if v := gjson.Get(got, "gateway.port").Int(); v != 19001 {
-		t.Errorf("gateway.port = %d, want 19001", v)
-	}
-	if v := gjson.Get(got, "unrelated.keep").Bool(); !v {
-		t.Errorf("unrelated.keep should survive: %s", got)
 	}
 }

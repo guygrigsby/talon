@@ -22,14 +22,14 @@ func TestAgentIDFromSessionKey(t *testing.T) {
 	}{
 		{"agent:main:main", "main"},
 		{"agent:coding:abc123", "coding"},
-		{"agent:research", "research"}, // legacy short form
+		{"agent:research", "research"}, // short form
 		{"main", "main"},               // bare form — what the UI sends from ?session=main
 		{"deepwork", "deepwork"},
 		{"", ""},
-		{"foo:bar:baz", ""},        // wrong prefix
-		{"agent:", ""},              // empty agent — caller treats this as invalid
-		{"agent::convo", ""},        // empty agent before colon
-		{"agent:x:y:z", "x"},        // extra segments → first wins
+		{"foo:bar:baz", ""},  // wrong prefix
+		{"agent:", ""},       // empty agent — caller treats this as invalid
+		{"agent::convo", ""}, // empty agent before colon
+		{"agent:x:y:z", "x"}, // extra segments → first wins
 	}
 	for _, tc := range cases {
 		if got := AgentIDFromSessionKey(tc.in); got != tc.want {
@@ -285,11 +285,8 @@ func TestChatHandler_IdempotencyReturnsSameRunID(t *testing.T) {
 }
 
 func TestChatHandler_RunIDEqualsIdempotencyKey(t *testing.T) {
-	// The openclaw web UI generates a UUID, sends it as idempotencyKey,
-	// and matches subsequent chat events on payload.runId === that UUID.
-	// chat.send must echo the idempotencyKey back as runId or the UI
-	// won't recognize the run as terminal and the typing indicator will
-	// stick.
+	// The UI sends a UUID as idempotencyKey and matches subsequent chat
+	// events on payload.runId. chat.send must echo it back as runId.
 	h := NewChatHandler(
 		&stubResolver{models: map[string]provider.ModelID{"main": "openai/gpt-4o-mini"}},
 		&stubFactory{provider: provider.NewStub("openai", []provider.Delta{{Kind: provider.DeltaText, Text: "hi"}})},
@@ -358,11 +355,11 @@ func TestChatHandler_HistoryReturnsStoredMessages(t *testing.T) {
 	if msgs[2]["role"] != "user" || textOf(msgs[2]) != "second" {
 		t.Errorf("third message = %+v", msgs[2])
 	}
-	// __openclaw metadata must be unique within the session and stable
+	// __talon metadata must be unique within the session and stable
 	// across reads (we'll re-call below to confirm).
 	seen := map[string]bool{}
 	for _, m := range msgs {
-		oc := m["__openclaw"].(openclawMeta)
+		oc := m["__talon"].(talonMeta)
 		if oc.ID == "" || seen[oc.ID] {
 			t.Errorf("ids should be non-empty and unique: %+v", oc)
 		}
@@ -371,12 +368,12 @@ func TestChatHandler_HistoryReturnsStoredMessages(t *testing.T) {
 			t.Errorf("seq must be >= 1: %+v", oc)
 		}
 	}
-	// Stability: same input → same ids.
+	// Stability: same input -> same ids.
 	res2, _ := h.handleHistory(t.Context(), HandlerCtx{}, []byte(`{"sessionKey":"agent:main:main","limit":50}`))
 	msgs2 := res2.(map[string]any)["messages"].([]map[string]any)
 	for i := range msgs {
-		o1 := msgs[i]["__openclaw"].(openclawMeta)
-		o2 := msgs2[i]["__openclaw"].(openclawMeta)
+		o1 := msgs[i]["__talon"].(talonMeta)
+		o2 := msgs2[i]["__talon"].(talonMeta)
 		if o1.ID != o2.ID {
 			t.Errorf("id %d not stable: %s vs %s", i, o1.ID, o2.ID)
 		}

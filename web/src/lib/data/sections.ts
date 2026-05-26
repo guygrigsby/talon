@@ -7,10 +7,10 @@ export type Section = { key: string; label: string; desc: string };
 export const sections: Section[] = [
 	{ key: 'health', label: 'Health', desc: 'gateway probe, plugin status, latency histogram' },
 	{ key: 'channels', label: 'Channels', desc: 'paired sources, peers, last-seen, errors' },
-	{ key: 'agents', label: 'Agents', desc: 'identities, models, fallbacks, workspaces' },
+	{ key: 'agents', label: 'Agents', desc: 'main agent, subagents, models' },
 	{ key: 'models', label: 'Models', desc: 'available, default, fallbacks, aliases, auth' },
 	{ key: 'secrets', label: 'Secrets', desc: 'audit (literal / ref / empty), migrate, reload' },
-	{ key: 'config', label: 'Config', desc: 'merged view (~/.openclaw + ~/.talon), set / unset' },
+	{ key: 'config', label: 'Config', desc: 'Talon config, set / unset' },
 	{ key: 'logs', label: 'Logs', desc: 'streaming gateway log, filter by handler / channel' },
 ];
 

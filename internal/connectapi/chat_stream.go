@@ -23,8 +23,8 @@ import (
 // sendMu.
 //
 // Filter: if runID is non-empty the sink drops events that don't
-// match. Matches the existing WS contract where the openclaw UI's
-// state.chatRunId scopes a stream to one run.
+// match. Matches the WS contract where state.chatRunId scopes a stream to
+// one run.
 type connectSink struct {
 	stream *connect.ServerStream[talonv1.ChatEvent]
 	runID  string

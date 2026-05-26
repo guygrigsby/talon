@@ -55,21 +55,18 @@ func (s *ChatService) Send(ctx context.Context, req *connect.Request[talonv1.Cha
 	return connect.NewResponse(&talonv1.ChatSendResponse{RunId: resp.RunID}), nil
 }
 
-// chatHistoryRaw decodes the openclaw row shape produced by the
-// chat.history WS handler. Kept package-private; only History uses
-// it. Fields that are absent in a given row variant just stay zero
-// (no per-variant struct needed because the variant is selected by
-// role, not by a tag field).
+// chatHistoryRaw decodes the row shape produced by the chat.history handler.
+// Fields that are absent in a given row variant just stay zero.
 type chatHistoryRaw struct {
 	Messages []chatHistoryRow `json:"messages"`
 }
 
 type chatHistoryRow struct {
-	Meta       chatHistoryMeta        `json:"__openclaw"`
-	Role       string                 `json:"role"`
-	Content    []chatHistoryContent   `json:"content"`
-	ToolCallID string                 `json:"toolCallId,omitempty"`
-	ToolName   string                 `json:"toolName,omitempty"`
+	Meta       chatHistoryMeta      `json:"__talon"`
+	Role       string               `json:"role"`
+	Content    []chatHistoryContent `json:"content"`
+	ToolCallID string               `json:"toolCallId,omitempty"`
+	ToolName   string               `json:"toolName,omitempty"`
 }
 
 type chatHistoryMeta struct {
@@ -112,8 +109,8 @@ func (s *ChatService) History(ctx context.Context, req *connect.Request[talonv1.
 	return connect.NewResponse(out), nil
 }
 
-// historyRowToProto converts one openclaw-shaped history row into
-// the typed HistoryRow variant. Returns nil for roles the proto
+// historyRowToProto converts one history row into the typed HistoryRow
+// variant. Returns nil for roles the proto
 // doesn't model (e.g. "system" — never persisted today but cheap
 // to handle defensively) so unknown rows are dropped rather than
 // surfaced as empty bodies.

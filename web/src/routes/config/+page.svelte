@@ -2,8 +2,7 @@
 	// Config view: read the merged talon config via
 	// ConfigService.Get("") and render as a clickable tree. Writes
 	// land in a follow-up; this read-only pass closes the gap where
-	// the user had to `cat ~/.talon/openclaw.json` to see what was
-	// loaded.
+	// the user had to inspect config files by hand to see what was loaded.
 
 	import { create } from '@bufbuild/protobuf';
 	import { ConfigGetRequestSchema } from '$lib/gateway/gen/talon/v1/config_pb.js';

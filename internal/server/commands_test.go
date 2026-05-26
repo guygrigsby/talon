@@ -6,10 +6,9 @@ import (
 	"testing"
 )
 
-// TestCommandsList_ReturnsEmptyList covers talon-18k: openclaw's UI
-// calls commands.list on every connect to populate slash-commands.
-// talon has no skill/plugin command surface yet (talon-ced, talon-aub),
-// so an empty {commands: []} is the correct response — the UI's
+// TestCommandsList_ReturnsEmptyList covers the UI's commands.list call on
+// every connect to populate slash-commands. Talon has no skill/plugin
+// command surface yet, so an empty {commands: []} is the correct response; the UI's
 // [...local, ...remote] merge keeps its built-in commands and no
 // error toast fires.
 func TestCommandsList_ReturnsEmptyList(t *testing.T) {
@@ -33,10 +32,9 @@ func TestCommandsList_ReturnsEmptyList(t *testing.T) {
 	}
 }
 
-// TestCommandsList_AcceptsVariedParams confirms the handler accepts
-// the param shapes openclaw's UI actually sends: {} on a bare call,
-// {scope, includeArgs} from slash-commands.ts, plus null/nil bodies
-// for robustness against future callers.
+// TestCommandsList_AcceptsVariedParams confirms the handler accepts {}
+// on a bare call, {scope, includeArgs} from slash-commands.ts, plus
+// null/nil bodies for robustness against future callers.
 func TestCommandsList_AcceptsVariedParams(t *testing.T) {
 	r := NewRegistry()
 	NewCommandsHandler().Register(r)

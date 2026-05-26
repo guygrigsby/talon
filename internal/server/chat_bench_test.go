@@ -5,7 +5,7 @@ import (
 	"io"
 	"log"
 	"log/slog"
-	"strings"
+	"strconv"
 	"testing"
 
 	"github.com/guygrigsby/talon/internal/provider"
@@ -74,7 +74,7 @@ func BenchmarkChatTurn_SingleDelta(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		// RunForSession with a fresh sessionKey each iter to avoid
 		// history accumulation skewing the measurement.
-		key := "bench:" + itoa(i)
+		key := "bench:" + strconv.Itoa(i)
 		// Prime the new instantProvider per call so the prebuffered
 		// channel isn't drained.
 		h.factory.(*stubFactory).provider = &instantProvider{deltas: deltas}
@@ -104,7 +104,7 @@ func BenchmarkChatTurn_ManyDeltas(b *testing.B) {
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		h.factory.(*stubFactory).provider = &instantProvider{deltas: deltas}
-		_, err := h.RunForSession(ctx, "bench-many:"+itoa(i), "main", "ping")
+		_, err := h.RunForSession(ctx, "bench-many:"+strconv.Itoa(i), "main", "ping")
 		if err != nil {
 			b.Fatalf("RunForSession: %v", err)
 		}
@@ -149,7 +149,7 @@ func BenchmarkChatTurn_WithToolDispatch(b *testing.B) {
 		// Refresh scripts so the provider stub doesn't run out.
 		prov.idx = 0
 		prov.calls = nil
-		_, err := h.RunForSession(ctx, "bench-tool:"+itoa(i), "main", "ping")
+		_, err := h.RunForSession(ctx, "bench-tool:"+strconv.Itoa(i), "main", "ping")
 		if err != nil {
 			b.Fatalf("RunForSession: %v", err)
 		}
@@ -164,7 +164,7 @@ func BenchmarkChatStore_AppendSnapshot(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		key := "bench:" + itoa(i)
+		key := "bench:" + strconv.Itoa(i)
 		s.Append(key, "user", "hello")
 		s.Append(key, "assistant", "hi there")
 		_ = s.Snapshot(key)
@@ -177,7 +177,7 @@ func BenchmarkChatStore_AppendSnapshot(b *testing.B) {
 func BenchmarkChatStore_LongHistorySnapshot(b *testing.B) {
 	cases := []int{10, 100, 500}
 	for _, n := range cases {
-		b.Run(itoa(n)+"_turns", func(b *testing.B) {
+		b.Run(strconv.Itoa(n)+"_turns", func(b *testing.B) {
 			s := NewChatStore()
 			for i := 0; i < n; i++ {
 				s.Append("k", "user", "u")
@@ -190,27 +190,4 @@ func BenchmarkChatStore_LongHistorySnapshot(b *testing.B) {
 			}
 		})
 	}
-}
-
-// itoa avoids a strconv import for a private helper.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		buf[i] = '-'
-	}
-	return strings.Clone(string(buf[i:]))
 }

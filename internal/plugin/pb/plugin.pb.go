@@ -1,6 +1,5 @@
-// talon.plugin.v1 is the wire contract every plugin (native or shim-hosted
-// openclaw extension) implements to participate in talon-gateway. Two
-// services:
+// talon.plugin.v1 is the wire contract every native plugin implements to
+// participate in talon-gateway. Two services:
 //
 //   service Plugin — host calls these on the plugin (ListTools, RunTool,
 //                    StreamCompletion, StartChannel, etc).
@@ -815,10 +814,9 @@ func (x *Usage) GetReasoningTokens() int32 {
 
 type InitializeRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Auth cookie negotiated during the subprocess handshake. DEPRECATED
-	// — only populated on the legacy (openclaw Node shim) path. The
-	// native go-plugin host uses connection identity captured at
-	// GRPCBroker.AcceptAndServe time instead.
+	// Auth cookie negotiated during the deprecated pre-go-plugin subprocess
+	// handshake. The native go-plugin host uses connection identity captured
+	// at GRPCBroker.AcceptAndServe time instead.
 	//
 	// Deprecated: Marked as deprecated in plugin.proto.
 	AuthCookie string `protobuf:"bytes,1,opt,name=auth_cookie,json=authCookie,proto3" json:"auth_cookie,omitempty"`
@@ -829,7 +827,7 @@ type InitializeRequest struct {
 	HostAddress string `protobuf:"bytes,2,opt,name=host_address,json=hostAddress,proto3" json:"host_address,omitempty"`
 	// GRPCBroker id the plugin dials back to reach the host's Host
 	// service over the existing gRPC connection. Populated by the
-	// native host (talon-e4h); zero on the legacy path.
+	// native host (talon-e4h); zero on the direct provider path.
 	HostBrokerId  int64 `protobuf:"varint,3,opt,name=host_broker_id,json=hostBrokerId,proto3" json:"host_broker_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1710,7 +1708,7 @@ func (*ListAgentsRequest) Descriptor() ([]byte, []int) {
 
 type ListAgentsResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	RawJson       []byte                 `protobuf:"bytes,1,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"` // openclaw-shape envelope (see agents.list)
+	RawJson       []byte                 `protobuf:"bytes,1,opt,name=raw_json,json=rawJson,proto3" json:"raw_json,omitempty"` // JSON envelope (see agents.list)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

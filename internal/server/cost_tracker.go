@@ -12,10 +12,12 @@ package server
 // Config inputs:
 //   - agents.defaults.dailyUsdCap: USD per agent per UTC day. 0 or
 //     unset disables the cap (no tracking either, save the work).
-//   - models.<id>.priceUsdPer1M.in / .out: per-million-token price
-//     in USD. When unset, falls back to a builtin price table for
-//     well-known models. Unknown models with no price tracked at
-//     0 cost (they don't contribute to the cap).
+//   - models.providers.<provider>.models[].cost: per-million-token
+//     price in USD. Legacy models.<id>.priceUsdPer1M.{in,out} is
+//     still honored before TOML adaptation. When unset, falls back
+//     to a builtin price table for well-known models. Unknown models
+//     with no price tracked at 0 cost (they don't contribute to the
+//     cap).
 //
 // Day rollover: time.Now().UTC().YearDay() comparison; flip the
 // stored day stamp and zero the per-agent accumulator on mismatch.
@@ -23,12 +25,15 @@ package server
 // for the "I left for a weekend" case, not invariant audit).
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
-	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/guygrigsby/talon/internal/provider"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/tidwall/gjson"
 )
 
@@ -36,7 +41,7 @@ import (
 // chat requests for agents that have hit the cap. Safe for
 // concurrent use.
 type CostTracker struct {
-	paths openclaw.Paths
+	paths talonpath.Paths
 
 	mu    sync.Mutex
 	today map[string]float64 // agentID → USD spent today
@@ -47,7 +52,7 @@ type CostTracker struct {
 // + price table from the merged config on each call (cheap thanks
 // to the MergedBytes stat-keyed cache); avoids stale-config issues
 // when the user updates limits without restarting the gateway.
-func NewCostTracker(paths openclaw.Paths) *CostTracker {
+func NewCostTracker(paths talonpath.Paths) *CostTracker {
 	return &CostTracker{
 		paths: paths,
 		today: map[string]float64{},
@@ -144,13 +149,15 @@ func (t *CostTracker) costForUsage(model provider.ModelID, u provider.Usage) flo
 }
 
 // priceFor returns (inputUsdPer1M, outputUsdPer1M) for model,
-// preferring config overrides at models.<id>.priceUsdPer1M.{in,out}
-// over the builtin table.
+// preferring config model costs over the builtin table.
 func (t *CostTracker) priceFor(model provider.ModelID) (inUSD, outUSD float64) {
 	id := string(model)
 	merged, err := config.MergedBytes(t.paths)
 	if err == nil {
 		if p, ok := configuredModelPrice(merged, id); ok {
+			return p.In, p.Out
+		}
+		if p, ok := configuredProviderModelPrice(merged, id); ok {
 			return p.In, p.Out
 		}
 	}
@@ -183,13 +190,37 @@ func configuredModelPrice(merged []byte, modelKey string) (modelPrice, bool) {
 	return out, found && (out.In > 0 || out.Out > 0)
 }
 
+func configuredProviderModelPrice(merged []byte, modelKey string) (modelPrice, bool) {
+	var out modelPrice
+	providerID, modelID, ok := strings.Cut(modelKey, "/")
+	if !ok || providerID == "" || modelID == "" {
+		return modelPrice{}, false
+	}
+	q := fmt.Sprintf("models.providers.%s.models.#(id==%q).cost", providerID, modelID)
+	cost := gjson.GetBytes(merged, q)
+	if !cost.Exists() {
+		return modelPrice{}, false
+	}
+	copyPriceField(&out.In, cost.Get("input"))
+	copyPriceField(&out.Out, cost.Get("output"))
+	copyPriceField(&out.CacheRead, cost.Get("cacheRead"))
+	return out, out.In > 0 || out.Out > 0 || out.CacheRead > 0
+}
+
+func copyPriceField(dst *float64, v gjson.Result) {
+	if v.Exists() && v.Type == gjson.Number {
+		*dst = v.Float()
+	}
+}
+
 // modelPrice is one entry in the builtin pricing table. USD per 1M
 // tokens. Sourced from public pricing pages; rough enough for the
 // cap-tripping use case (we're not invoicing customers, just
 // preventing runaway burn).
 type modelPrice struct {
-	In  float64
-	Out float64
+	In        float64
+	Out       float64
+	CacheRead float64
 }
 
 // builtinModelPrices covers the providers/models we ship support
@@ -197,16 +228,37 @@ type modelPrice struct {
 // about pricing of a model we haven't checked. Users override via
 // config.
 var builtinModelPrices = map[string]modelPrice{
-	// Anthropic — claude-3.5/4 family approximations
-	"anthropic/claude-opus-4-7":   {In: 15.0, Out: 75.0},
-	"anthropic/claude-sonnet-4-6": {In: 3.0, Out: 15.0},
-	// OpenAI
+	// OpenAI standard rates, USD per 1M tokens.
+	"openai/gpt-5.5":       {In: 5.0, Out: 30.0, CacheRead: 0.50},
+	"openai/gpt-5.5-pro":   {In: 30.0, Out: 180.0},
+	"openai/gpt-5.4":       {In: 2.5, Out: 15.0, CacheRead: 0.25},
+	"openai/gpt-5.4-mini":  {In: 0.75, Out: 4.50, CacheRead: 0.075},
+	"openai/gpt-5.4-nano":  {In: 0.20, Out: 1.25, CacheRead: 0.02},
+	"openai/gpt-5.4-pro":   {In: 30.0, Out: 180.0},
+	"openai/gpt-5":         {In: 1.25, Out: 10.0, CacheRead: 0.125},
+	"openai/gpt-5-mini":    {In: 0.25, Out: 2.0, CacheRead: 0.025},
+	"openai/gpt-5-nano":    {In: 0.05, Out: 0.40, CacheRead: 0.005},
 	"openai/gpt-4o":        {In: 2.5, Out: 10.0},
 	"openai/gpt-4o-mini":   {In: 0.15, Out: 0.60},
+	"openai/gpt-4.1":       {In: 2.0, Out: 8.0},
+	"openai/gpt-4.1-mini":  {In: 0.40, Out: 1.60},
+	"openai/gpt-4.1-nano":  {In: 0.10, Out: 0.40},
 	"openai/gpt-3.5-turbo": {In: 0.5, Out: 1.5},
-	// DeepSeek (deeply cheap)
-	"deepseek/deepseek-chat":     {In: 0.27, Out: 1.10},
-	"deepseek/deepseek-reasoner": {In: 0.55, Out: 2.19},
+
+	// Anthropic first-party Claude API rates, USD per 1M tokens.
+	"anthropic/claude-opus-4-7":   {In: 5.0, Out: 25.0, CacheRead: 0.50},
+	"anthropic/claude-opus-4-6":   {In: 5.0, Out: 25.0, CacheRead: 0.50},
+	"anthropic/claude-opus-4-5":   {In: 5.0, Out: 25.0, CacheRead: 0.50},
+	"anthropic/claude-opus-4-1":   {In: 15.0, Out: 75.0, CacheRead: 1.50},
+	"anthropic/claude-opus-4":     {In: 15.0, Out: 75.0, CacheRead: 1.50},
+	"anthropic/claude-sonnet-4-6": {In: 3.0, Out: 15.0, CacheRead: 0.30},
+	"anthropic/claude-sonnet-4-5": {In: 3.0, Out: 15.0, CacheRead: 0.30},
+	"anthropic/claude-sonnet-4":   {In: 3.0, Out: 15.0, CacheRead: 0.30},
+	"anthropic/claude-haiku-4-5":  {In: 1.0, Out: 5.0, CacheRead: 0.10},
+
+	// DeepSeek API rates, USD per 1M tokens.
+	"deepseek/deepseek-chat":     {In: 0.27, Out: 1.10, CacheRead: 0.07},
+	"deepseek/deepseek-reasoner": {In: 0.55, Out: 2.19, CacheRead: 0.14},
 }
 
 // costCapError is the error type Allow returns when an agent has
@@ -225,54 +277,13 @@ func (e *costCapError) Error() string {
 }
 
 // ftoa formats a USD value with 4 decimal places, trimming trailing
-// zeros so $0.50 doesn't render as "$0.5000". Avoids pulling in
-// strconv for one call by composing manually.
+// zeros so $0.50 doesn't render as "$0.5000".
 func ftoa(f float64) string {
-	// Quick path: integer dollars.
-	if f == float64(int64(f)) {
-		buf := []byte{}
-		buf = appendInt(buf, int64(f))
-		return string(buf) + ".00"
+	s := strconv.FormatFloat(f, 'f', 4, 64)
+	if dot := strings.IndexByte(s, '.'); dot >= 0 {
+		for len(s)-dot-1 > 2 && strings.HasSuffix(s, "0") {
+			s = s[:len(s)-1]
+		}
 	}
-	// fmt.Sprintf would work but pulls in fmt; stay lightweight.
-	cents := int64((f * 10000) + 0.5) // round to 4 decimals
-	whole := cents / 10000
-	frac := cents % 10000
-	out := []byte{}
-	out = appendInt(out, whole)
-	out = append(out, '.')
-	// pad fractional to 4 digits, then trim trailing zeros (but
-	// keep at least 2 digits — "$1.50" beats "$1.5").
-	digits := []byte{
-		byte('0' + frac/1000%10),
-		byte('0' + frac/100%10),
-		byte('0' + frac/10%10),
-		byte('0' + frac%10),
-	}
-	end := 4
-	for end > 2 && digits[end-1] == '0' {
-		end--
-	}
-	out = append(out, digits[:end]...)
-	return string(out)
-}
-
-func appendInt(buf []byte, n int64) []byte {
-	if n == 0 {
-		return append(buf, '0')
-	}
-	if n < 0 {
-		buf = append(buf, '-')
-		n = -n
-	}
-	start := len(buf)
-	for n > 0 {
-		buf = append(buf, byte('0'+n%10))
-		n /= 10
-	}
-	// Reverse the digits we just appended.
-	for i, j := start, len(buf)-1; i < j; i, j = i+1, j-1 {
-		buf[i], buf[j] = buf[j], buf[i]
-	}
-	return buf
+	return s
 }

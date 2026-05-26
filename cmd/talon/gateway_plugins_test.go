@@ -1,17 +1,14 @@
 package main
 
 import (
-	"fmt"
-	"os"
-	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
-	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
+	plugin "github.com/guygrigsby/talon/internal/plugin/host"
 	"github.com/guygrigsby/talon/internal/provider"
 	"github.com/guygrigsby/talon/internal/server"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
 // --- parsePluginSpecs --------------------------------------------------
@@ -89,42 +86,6 @@ func TestParsePluginSpecs_AutoFillsFromBuiltinRegistry(t *testing.T) {
 	}
 }
 
-func TestParsePluginSpecs_KindDispatch(t *testing.T) {
-	// First-party entries (no cmd/bundled) should land as kindNative
-	// so the dispatcher routes them through native.Spawn. Entries with
-	// an explicit cmd or a bundled extension stay kindLegacy.
-	body := []byte(`{
-		"plugins": {
-			"bundled": {"paths": ["/some/extensions"]},
-			"entries": {
-				"openai-compat": {"enabled": true},
-				"telegram":      {"enabled": true},
-				"explicit":      {"enabled": true, "cmd": ["/usr/local/bin/talon-thirdparty"]},
-				"bundled1":      {"enabled": true, "bundled": "anthropic"}
-			}
-		}
-	}`)
-	got := parsePluginSpecs(body, pluginParseDefaults{})
-	byName := map[string]specKind{}
-	for _, s := range got {
-		byName[s.name] = s.kind
-	}
-	if byName["openai-compat"] != kindNative {
-		t.Errorf("openai-compat kind = %v, want kindNative", byName["openai-compat"])
-	}
-	if byName["telegram"] != kindNative {
-		t.Errorf("telegram kind = %v, want kindNative", byName["telegram"])
-	}
-	if byName["explicit"] != kindLegacy {
-		t.Errorf("explicit-cmd kind = %v, want kindLegacy", byName["explicit"])
-	}
-	// bundled1 may not appear if resolveBundledDir misses; tolerate
-	// either outcome but verify if-present.
-	if k, present := byName["bundled1"]; present && k != kindLegacy {
-		t.Errorf("bundled1 kind = %v, want kindLegacy", k)
-	}
-}
-
 func TestParsePluginSpecs_NoEntriesSection(t *testing.T) {
 	got := parsePluginSpecs([]byte(`{}`), pluginParseDefaults{})
 	if len(got) != 0 {
@@ -154,104 +115,6 @@ func TestParsePluginSpecs_FiltersBlankCmdEntries(t *testing.T) {
 	}
 	if got[0].name != "b" || len(got[0].cmd) != 1 || got[0].cmd[0] != "bin" {
 		t.Errorf("b parsed wrong: %+v", got[0])
-	}
-}
-
-func TestParsePluginSpecs_BundledExpandsToShimCmd(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "anthropic"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	body := []byte(fmt.Sprintf(`{
-		"plugins": {
-			"bundled": {"path": %q},
-			"entries": {
-				"anthropic": {"enabled": true, "bundled": "anthropic"},
-				"brave":     {"enabled": false, "bundled": "brave"}
-			}
-		}
-	}`, root))
-	got := parsePluginSpecs(body, pluginParseDefaults{})
-	if len(got) != 1 {
-		t.Fatalf("got %d specs, want 1 (anthropic only — brave is disabled)", len(got))
-	}
-	want := []string{"node", "openclaw-plugin-host", filepath.Join(root, "anthropic")}
-	if got[0].name != "anthropic" || !reflect.DeepEqual(got[0].cmd, want) {
-		t.Errorf("anthropic resolved wrong: %+v (want %v)", got[0], want)
-	}
-}
-
-func TestParsePluginSpecs_BundledHonorsShimCmdOverride(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "anthropic"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	body := []byte(fmt.Sprintf(`{
-		"plugins": {
-			"bundled": {
-				"path": %q,
-				"shimCmd": ["/usr/bin/node", "--experimental-vm-modules", "/opt/openclaw-plugin-host/bin/openclaw-plugin-host.mjs"]
-			},
-			"entries": {
-				"anthropic": {"enabled": true, "bundled": "anthropic"}
-			}
-		}
-	}`, root))
-	got := parsePluginSpecs(body, pluginParseDefaults{})
-	if len(got) != 1 || got[0].cmd[0] != "/usr/bin/node" || got[0].cmd[3] != filepath.Join(root, "anthropic") {
-		t.Fatalf("shimCmd override not applied: %+v", got)
-	}
-}
-
-func TestParsePluginSpecs_BundledWithoutPathSkips(t *testing.T) {
-	body := []byte(`{
-		"plugins": {
-			"entries": {"anthropic": {"enabled": true, "bundled": "anthropic"}}
-		}
-	}`)
-	got := parsePluginSpecs(body, pluginParseDefaults{})
-	if len(got) != 0 {
-		t.Errorf("expected bundled entry without path to be skipped, got %+v", got)
-	}
-}
-
-func TestParsePluginSpecs_BundledLookupChainPrefersFirstHit(t *testing.T) {
-	// Two roots; the same extension exists in both. The first root
-	// in defaults.bundledPaths wins, mirroring the talon-overlay >
-	// openclaw > image-bundle precedence the resolver enforces in
-	// production.
-	overlayRoot := t.TempDir()
-	bundleRoot := t.TempDir()
-	for _, r := range []string{overlayRoot, bundleRoot} {
-		if err := os.MkdirAll(filepath.Join(r, "anthropic"), 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	body := []byte(`{
-		"plugins": {"entries": {"anthropic": {"enabled": true, "bundled": "anthropic"}}}
-	}`)
-	got := parsePluginSpecs(body, pluginParseDefaults{
-		bundledPaths: []string{overlayRoot, bundleRoot},
-	})
-	if len(got) != 1 || got[0].cmd[2] != filepath.Join(overlayRoot, "anthropic") {
-		t.Errorf("expected first-path hit to win: %+v", got)
-	}
-}
-
-func TestParsePluginSpecs_BundledFallsThroughWhenFirstPathMissing(t *testing.T) {
-	overlayRoot := t.TempDir() // empty — no anthropic here
-	bundleRoot := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(bundleRoot, "anthropic"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	body := []byte(`{
-		"plugins": {"entries": {"anthropic": {"enabled": true, "bundled": "anthropic"}}}
-	}`)
-	got := parsePluginSpecs(body, pluginParseDefaults{
-		bundledPaths: []string{overlayRoot, bundleRoot},
-	})
-	if len(got) != 1 || got[0].cmd[2] != filepath.Join(bundleRoot, "anthropic") {
-		t.Errorf("expected fallthrough to second path: %+v", got)
 	}
 }
 
@@ -308,8 +171,8 @@ func TestParseChannelBindings_SkipsChannelsWithNoConfig(t *testing.T) {
 	merged := []byte(`{"channels": {"telegram": {"botToken": "x"}}}`)
 	offers := []pluginChannelOffer{
 		{PluginName: "tg", Channel: "telegram"},
-		{PluginName: "tg", Channel: "discord"},  // not configured
-		{PluginName: "tg", Channel: "matrix"},   // not configured
+		{PluginName: "tg", Channel: "discord"}, // not configured
+		{PluginName: "tg", Channel: "matrix"},  // not configured
 	}
 	got := parseChannelBindings(merged, offers)
 	if len(got) != 1 || got[0].Binding.ChannelName != "telegram" {
@@ -333,6 +196,34 @@ func TestParseChannelBindings_NoOffers(t *testing.T) {
 	}
 }
 
+func TestResolveChannelConfigSecrets_ResolvesSensitiveRefs(t *testing.T) {
+	raw := []byte(`{
+		"botToken": "op://talon/telegram/token",
+		"allowFrom": ["42"],
+		"nested": {
+			"apiKey": "keychain://provider/key",
+			"publicKey": "leave-alone"
+		}
+	}`)
+	got, err := resolveChannelConfigSecrets(raw, func(v string) (string, error) {
+		return "resolved:" + v, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(got)
+	for _, want := range []string{
+		`"botToken":"resolved:op://talon/telegram/token"`,
+		`"apiKey":"resolved:keychain://provider/key"`,
+		`"publicKey":"leave-alone"`,
+		`"allowFrom":["42"]`,
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("resolved config missing %s: %s", want, text)
+		}
+	}
+}
+
 // --- collectChannelOffers ----------------------------------------------
 
 func TestCollectChannelOffers_WalksManifestEntries(t *testing.T) {
@@ -344,7 +235,7 @@ func TestCollectChannelOffers_WalksManifestEntries(t *testing.T) {
 	// directly through the public API. Simplest path: assert that an
 	// EMPTY host yields zero offers (the meaningful walking-logic is
 	// already covered by parseChannelBindings tests).
-	host := plugin.NewHost("")
+	host := plugin.NewHost()
 	if got := collectChannelOffers(host); len(got) != 0 {
 		t.Errorf("empty host should yield zero offers, got %d", len(got))
 	}
@@ -356,11 +247,11 @@ func TestCollectChannelOffers_WalksManifestEntries(t *testing.T) {
 // builtins without depending on the full tools package.
 type stubLocal struct{}
 
-func (stubLocal) Specs() []provider.ToolSpec { return []provider.ToolSpec{{Name: "read"}} }
+func (stubLocal) Specs() []provider.ToolSpec                 { return []provider.ToolSpec{{Name: "read"}} }
 func (stubLocal) Run(_ any, _ string, _ any) (string, error) { panic("not used") }
 
 func TestNewToolRunnerFactory_NilHostDelegatesToBase(t *testing.T) {
-	factory := newToolRunnerFactory(nil, openclaw.Paths{})
+	factory := newToolRunnerFactory(nil, talonpath.Paths{})
 	runner := factory(t.TempDir(), nil)
 	specs := runner.Specs()
 	names := []string{}
@@ -378,8 +269,8 @@ func TestNewToolRunnerFactory_NilHostDelegatesToBase(t *testing.T) {
 }
 
 func TestNewToolRunnerFactory_NonNilHostReturnsRouter(t *testing.T) {
-	host := plugin.NewHost("")
-	factory := newToolRunnerFactory(host, openclaw.Paths{})
+	host := plugin.NewHost()
+	factory := newToolRunnerFactory(host, talonpath.Paths{})
 	runner := factory(t.TempDir(), nil)
 	// Factory should produce a *plugin.ToolRouter when host is non-nil
 	// — even with no plugins loaded yet, the type ensures live-loaded

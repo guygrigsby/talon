@@ -8,36 +8,36 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 	"github.com/guygrigsby/talon/internal/provider"
+	"github.com/guygrigsby/talon/internal/talonconfig"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/tidwall/gjson"
 )
 
 // hostsvcFixture wires a HostService against fresh ChatStore /
-// SessionStore + a ReadHandler bound to an openclaw config we control.
+// SessionStore + a ReadHandler bound to a config we control.
 // The chatHandler argument is optional — pass nil for tests that don't
 // exercise RunSubagent / GetChatHistory.
-func hostsvcFixture(t *testing.T, openclawJSON string, withChat bool) (*HostService, openclaw.Paths, *ChatStore, *SessionStore) {
+func hostsvcFixture(t *testing.T, runtimeJSON string, withChat bool) (*HostService, talonpath.Paths, *ChatStore, *SessionStore) {
 	t.Helper()
 	dir := t.TempDir()
 	talonDir := filepath.Join(dir, "talon")
-	openclawDir := filepath.Join(dir, "openclaw")
 	if err := os.MkdirAll(talonDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(openclawDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	cfgPath := filepath.Join(openclawDir, "openclaw.json")
-	if openclawJSON != "" {
-		if err := os.WriteFile(cfgPath, []byte(openclawJSON), 0o600); err != nil {
+	cfgPath := filepath.Join(talonDir, "config.toml")
+	if runtimeJSON != "" {
+		cfg, err := talonconfig.FromRuntimeJSON([]byte(runtimeJSON))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(cfgPath, talonconfig.MarshalTOML(cfg, talonconfig.MarshalOptions{}), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	paths := openclaw.Paths{
-		Talon:    openclaw.Layer{Dir: talonDir, Config: filepath.Join(talonDir, "openclaw.json")},
-		Openclaw: openclaw.Layer{Dir: openclawDir, Config: cfgPath},
+	paths := talonpath.Paths{
+		Talon: talonpath.Layer{Dir: talonDir, Config: cfgPath},
 	}
 	chatStore := NewChatStore()
 	sessionStore := NewSessionStore()
@@ -114,12 +114,25 @@ func TestHostService_GetConfig_MissingPathReturnsNull(t *testing.T) {
 // --- ListAgents -------------------------------------------------------
 
 func TestHostService_ListAgents_ReturnsEnvelope(t *testing.T) {
-	hs, _, _, _ := hostsvcFixture(t, `{
+	hs, paths, _, _ := hostsvcFixture(t, `{
 		"agents": {
 			"defaults": {"model": {"primary": "openai/gpt-5.4-mini", "fallbacks": []}},
-			"list": [{"id": "main"}, {"id": "coding", "model": "anthropic/claude-opus-4-7"}]
+			"list": [{"id": "main"}]
 		}
 	}`, false)
+	subagentsDir := paths.Talon.SubagentsDir()
+	if err := os.MkdirAll(subagentsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subagentsDir, "coding.md"), []byte(`---
+description: Handles focused code changes.
+model: anthropic/claude-opus-4-7
+tools: [read, grep]
+---
+You are a focused coding subagent.
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	res, err := hs.ListAgents(context.Background(), &pb.ListAgentsRequest{})
 	if err != nil {
 		t.Fatal(err)
@@ -127,6 +140,9 @@ func TestHostService_ListAgents_ReturnsEnvelope(t *testing.T) {
 	raw := res.GetRawJson()
 	if gjson.GetBytes(raw, "agents.#").Int() != 2 {
 		t.Errorf("expected 2 agents in envelope: %s", raw)
+	}
+	if gjson.GetBytes(raw, `agents.#(id=="coding").kind`).Str != "subagent" {
+		t.Errorf("expected coding subagent in envelope: %s", raw)
 	}
 	if gjson.GetBytes(raw, "defaultId").Str != "main" {
 		t.Errorf("defaultId wrong: %s", raw)

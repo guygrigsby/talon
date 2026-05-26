@@ -34,8 +34,7 @@ var canonicalOrder = []string{
 // file exists; chat.send then sends an empty system message
 // (which providers tolerate).
 //
-// SOUL.md gets a one-line preamble nudge when present, matching
-// the original openclaw behavior.
+// SOUL.md gets a one-line preamble nudge when present.
 func Build(workspace string) string {
 	if workspace == "" {
 		return ""
@@ -77,9 +76,8 @@ func loadFiles(workspace string) []loadedFile {
 			continue
 		}
 		if strings.TrimSpace(string(raw)) == "" {
-			// Empty / whitespace-only files (the openclaw IDENTITY.md
-			// template starts that way before bootstrap) carry no signal
-			// and just dilute the prompt.
+			// Empty / whitespace-only files carry no signal and just
+			// dilute the prompt.
 			continue
 		}
 		out = append(out, loadedFile{name: name, content: string(raw)})

@@ -1,6 +1,5 @@
-// talon.plugin.v1 is the wire contract every plugin (native or shim-hosted
-// openclaw extension) implements to participate in talon-gateway. Two
-// services:
+// talon.plugin.v1 is the wire contract every native plugin implements to
+// participate in talon-gateway. Two services:
 //
 //   service Plugin — host calls these on the plugin (ListTools, RunTool,
 //                    StreamCompletion, StartChannel, etc).
@@ -197,17 +196,16 @@ service Plugin {
 }
 
 message InitializeRequest {
-  // Auth cookie negotiated during the subprocess handshake. DEPRECATED
-  // — only populated on the legacy (openclaw Node shim) path. The
-  // native go-plugin host uses connection identity captured at
-  // GRPCBroker.AcceptAndServe time instead.
+  // Auth cookie negotiated during the deprecated pre-go-plugin subprocess
+  // handshake. The native go-plugin host uses connection identity captured
+  // at GRPCBroker.AcceptAndServe time instead.
   string auth_cookie = 1 [deprecated = true];
   // Address (host:port) of the host's Host-service. DEPRECATED — see
   // above. Native plugins dial back via host_broker_id.
   string host_address = 2 [deprecated = true];
   // GRPCBroker id the plugin dials back to reach the host's Host
   // service over the existing gRPC connection. Populated by the
-  // native host (talon-e4h); zero on the legacy path.
+  // native host; zero when not applicable.
   int64 host_broker_id = 3;
 }
 
@@ -350,7 +348,7 @@ message GetConfigResponse {
 
 message ListAgentsRequest {}
 message ListAgentsResponse {
-  bytes raw_json = 1;  // openclaw-shape envelope (see agents.list)
+  bytes raw_json = 1;  // JSON envelope (see agents.list)
 }
 
 message GetAgentIdentityRequest {

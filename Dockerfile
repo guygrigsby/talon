@@ -21,62 +21,16 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -o /out/talon \
     ./cmd/talon
 
-# Sibling Go-plugin binaries shipped alongside the gateway. Each one
-# implements a self-contained gRPC plugin (see internal/plugin) so
-# users can enable them per-config without a separate install step.
-RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
-    -o /out/talon-deepseek-plugin \
-    ./apps/talon-deepseek-plugin
-RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
-    -o /out/talon-telegram-plugin \
-    ./apps/talon-telegram-plugin
+# Secret resolver helper shipped alongside the gateway.
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w" \
     -o /out/talon-op-plugin \
     ./apps/talon-op-plugin
-RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
-    -o /out/talon-keychain-plugin \
-    ./apps/talon-keychain-plugin
-RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
-    -o /out/talon-brave-plugin \
-    ./apps/talon-brave-plugin
-RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
-    -o /out/talon-whisper-plugin \
-    ./apps/talon-whisper-plugin
-RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
-    -o /out/talon-bluebubbles-plugin \
-    ./apps/talon-bluebubbles-plugin
-# mac-notify is built for image consistency, but mac_notify itself is
-# macOS-only and returns a clear "non-darwin" error if invoked here.
-# The binary stays useful when the same image is run on a Mac via
-# Docker Desktop with file mounts, etc.
-RUN CGO_ENABLED=0 GOOS=linux go build \
-    -ldflags="-s -w" \
-    -o /out/talon-mac-notify-plugin \
-    ./apps/talon-mac-notify-plugin
-
-# ---- shim install (Node) -------------------------------------------------
-# openclaw-plugin-host is the Node subprocess that loads vendored
-# openclaw extensions and bridges them to talon's gRPC plugin protocol.
-# Installed under a fixed path so plugins.bundled.shimCmd defaults work
-# without per-host configuration.
-FROM node:20-alpine AS shim-install
-WORKDIR /shim
-COPY apps/openclaw-plugin-host/package.json ./package.json
-RUN npm install --omit=dev --no-audit --no-fund
-COPY apps/openclaw-plugin-host/ ./
 
 # ---- runtime ----------------------------------------------------------
 # Alpine instead of distroless because (a) the bash tool execs /bin/sh -c
-# and the model is likely to invoke common Unix utilities, and (b) the
-# openclaw-plugin-host shim needs Node. coreutils + git + grep + bash
-# cover the typical surface; nodejs runs the shim subprocesses.
+# and the model is likely to invoke common Unix utilities. coreutils + git +
+# grep + bash cover the typical surface.
 FROM alpine:3.20
 
 RUN apk add --no-cache \
@@ -85,29 +39,10 @@ RUN apk add --no-cache \
     grep \
     git \
     findutils \
-    bash \
-    nodejs \
-    npm
+    bash
 
 COPY --from=builder /out/talon /usr/local/bin/talon
-COPY --from=builder /out/talon-deepseek-plugin /usr/local/bin/talon-deepseek-plugin
-COPY --from=builder /out/talon-telegram-plugin /usr/local/bin/talon-telegram-plugin
 COPY --from=builder /out/talon-op-plugin /usr/local/bin/talon-op-plugin
-COPY --from=builder /out/talon-keychain-plugin /usr/local/bin/talon-keychain-plugin
-COPY --from=builder /out/talon-brave-plugin /usr/local/bin/talon-brave-plugin
-COPY --from=builder /out/talon-whisper-plugin /usr/local/bin/talon-whisper-plugin
-COPY --from=builder /out/talon-bluebubbles-plugin /usr/local/bin/talon-bluebubbles-plugin
-COPY --from=builder /out/talon-mac-notify-plugin /usr/local/bin/talon-mac-notify-plugin
-COPY --from=shim-install /shim /opt/openclaw-plugin-host
-# Stable wrapper so plugins.bundled.shimCmd defaults can be a single
-# string ("openclaw-plugin-host") that resolves via PATH.
-RUN ln -s /opt/openclaw-plugin-host/bin/openclaw-plugin-host.mjs /usr/local/bin/openclaw-plugin-host
-
-# Bundled openclaw extensions (vendored from openclaw@<sha>; see
-# extensions/UPSTREAM.md). Users enable per-extension via
-# plugins.entries.<name>.bundled = "<dir-name>" — the gateway expands
-# that to a shim spawn against /opt/extensions/<dir-name>.
-COPY extensions /opt/extensions
 
 EXPOSE 18789
 

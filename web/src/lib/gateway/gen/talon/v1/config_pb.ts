@@ -90,9 +90,8 @@ export const ConfigSetRequestSchema: GenMessage<ConfigSetRequest> = /*@__PURE__*
   messageDesc(file_talon_v1_config, 2);
 
 /**
- * ConfigService surfaces the merged talon config (~/.talon over
- * ~/.openclaw) and the cached config schema, plus write access
- * against the talon overlay.
+ * ConfigService surfaces Talon's config and cached config schema, plus
+ * write access against native config.
  *
  * @generated from service talon.v1.ConfigService
  */
@@ -120,9 +119,8 @@ export const ConfigService: GenService<{
     output: typeof JSONPayloadSchema;
   },
   /**
-   * Set writes value_json at path into the talon overlay. Empty
-   * value_json deletes the path. Always writes the overlay; never
-   * the openclaw layer (which is read-only).
+   * Set writes value_json at path into native config. Empty value_json
+   * deletes the path.
    *
    * @generated from rpc talon.v1.ConfigService.Set
    */
@@ -133,4 +131,3 @@ export const ConfigService: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_talon_v1_config, 0);
-

@@ -15,11 +15,11 @@ import (
 
 	"github.com/guygrigsby/talon/internal/agentcore_chat"
 	"github.com/guygrigsby/talon/internal/config"
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/guygrigsby/talon/internal/server"
 )
 
-func buildAgentcoreRunner(paths openclaw.Paths, mem *server.MemoryConfig) server.AgentcoreRunFn {
+func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) server.AgentcoreRunFn {
 	return func(
 		ctx context.Context,
 		agentID, sessionKey, runID, userText, modelOverride string,

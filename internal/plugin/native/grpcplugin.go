@@ -1,11 +1,8 @@
 // Package native is the hashicorp/go-plugin-based host and serve
-// implementation for first-party Go plugins. The legacy package
-// (internal/plugin/legacy) continues to handle the openclaw Node shim
-// path.
+// implementation for Talon plugins.
 //
-// The two paths share the same .proto (internal/plugin/pb) and the
-// same capability map (internal/plugin/pkgutil) — only spawn,
-// handshake, and Host-service transport differ.
+// The host and plugin process share the same .proto
+// (internal/plugin/pb) and capability map (internal/plugin/pkgutil).
 package native
 
 import (
@@ -18,9 +15,7 @@ import (
 )
 
 // Handshake is the magic-cookie pair go-plugin uses to refuse bare
-// shell invocations. Cookie key matches the legacy package's
-// TALON_PLUGIN_HANDSHAKE env var so a sysadmin's diagnosis flow stays
-// the same across both transports.
+// shell invocations.
 var Handshake = goplugin.HandshakeConfig{
 	ProtocolVersion:  1,
 	MagicCookieKey:   "TALON_PLUGIN_HANDSHAKE",

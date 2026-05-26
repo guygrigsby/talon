@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -14,35 +15,24 @@ import (
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/gateway"
 	talonlog "github.com/guygrigsby/talon/internal/log"
-	"github.com/guygrigsby/talon/internal/openclaw"
 	"github.com/guygrigsby/talon/internal/secrets"
 	"github.com/guygrigsby/talon/internal/talonconfig"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/spf13/cobra"
 )
 
 var (
-	flagTalonConfig      string
-	flagOpenclawConfig   string
-	flagOpenclawFallback bool
-	flagJSON             bool
-	flagLogFormat        string
+	flagTalonConfig string
+	flagJSON        bool
+	flagLogFormat   string
 )
 
-// resolvePaths returns the layered paths for this invocation, applying any
-// global --config / --openclaw-config / --openclaw-fallback overrides.
-// Talon defaults to talon-only at read time; pass --openclaw-fallback to
-// merge in the ~/.openclaw layer (legacy behavior, useful right after
-// `talon migrate-from-openclaw` while you verify the cutover).
-func resolvePaths() openclaw.Paths {
-	p := openclaw.DefaultPaths()
+// resolvePaths returns the Talon paths for this invocation, applying the
+// global --config override.
+func resolvePaths() talonpath.Paths {
+	p := talonpath.DefaultPaths()
 	if flagTalonConfig != "" {
 		p.Talon.Config = flagTalonConfig
-	}
-	if flagOpenclawConfig != "" {
-		p.Openclaw.Config = flagOpenclawConfig
-	}
-	if flagOpenclawFallback {
-		p.SkipOpenclaw = false
 	}
 	return p
 }
@@ -55,22 +45,19 @@ const talonVersion = "0.1.0-dev"
 func main() {
 	root := &cobra.Command{
 		Use:   "talon",
-		Short: "Fast openclaw-compatible gateway client",
+		Short: "Talon local agent gateway",
 		// Version drives Cobra's auto-generated -v/--version flag
-		// (we bind -V manually below since openclaw uses -V). Format
-		// matches `talon version` for byte-equivalence.
+		// (we bind -V manually below). Format matches `talon version`
+		// for byte-equivalence.
 		Version: "talon " + talonVersion,
 	}
-	// openclaw's commander uses -V (capital), not -v. Match that for
-	// drop-in alias parity. SetVersionTemplate strips the default
+	// SetVersionTemplate strips the default
 	// "{name} version {version}" wrapping so the output matches our
 	// `version` subcommand exactly.
 	root.SetVersionTemplate("{{.Version}}\n")
 	root.Flags().BoolP("version", "V", false, "Print version and exit")
 
-	root.PersistentFlags().StringVar(&flagTalonConfig, "config", "", "path to the talon overlay config (default: $TALON_CONFIG_PATH or ~/.talon/talon.json)")
-	root.PersistentFlags().StringVar(&flagOpenclawConfig, "openclaw-config", "", "path to the read-only openclaw config (default: $OPENCLAW_CONFIG_PATH or ~/.openclaw/openclaw.json)")
-	root.PersistentFlags().BoolVar(&flagOpenclawFallback, "openclaw-fallback", false, "ALSO read from the legacy ~/.openclaw layer (default: talon-only)")
+	root.PersistentFlags().StringVar(&flagTalonConfig, "config", "", "path to the Talon config (default: $TALON_CONFIG_PATH or ~/.talon/config.toml)")
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "emit raw JSON response")
 	root.PersistentFlags().StringVar(&flagLogFormat, "log-format", "", "log handler: text (default, ANSI-colored on TTY) or json. Env override: TALON_LOG_FORMAT")
 
@@ -108,7 +95,6 @@ func main() {
 	root.AddCommand(dashboardCmd())
 	root.AddCommand(cronCmd())
 	root.AddCommand(pluginCmd())
-	root.AddCommand(migrateOpenclawCmd())
 
 	// closeSharedRPC is wired as the post-run hook so any RPC client
 	// the command branches lazily opened gets its WS shut cleanly
@@ -280,55 +266,53 @@ func healthCmd() *cobra.Command {
 }
 
 func configCmd() *cobra.Command {
-	c := &cobra.Command{Use: "config", Short: "Inspect and edit the layered openclaw config (no gateway)"}
+	c := &cobra.Command{Use: "config", Short: "Inspect and edit the Talon config (no gateway)"}
 
 	var fileAll bool
 	fileCmd := &cobra.Command{
 		Use:   "file",
-		Short: "Print the talon overlay path (or both layers with --all)",
+		Short: "Print the Talon config path",
 		Run: func(cmd *cobra.Command, args []string) {
 			p := resolvePaths()
 			if fileAll {
 				fmt.Printf("talon:    %s\n", p.Talon.Config)
-				if !p.SkipOpenclaw {
-					fmt.Printf("openclaw: %s\n", p.Openclaw.Config)
-				}
 				return
 			}
 			fmt.Println(p.Talon.Config)
 		},
 	}
-	fileCmd.Flags().BoolVar(&fileAll, "all", false, "print both the talon and openclaw paths")
+	fileCmd.Flags().BoolVar(&fileAll, "all", false, "print labeled paths")
 	c.AddCommand(fileCmd)
 
 	var (
-		migrateReveal      bool
 		migrateSummaryOnly bool
 	)
 	migrateTOMLCmd := &cobra.Command{
-		Use:   "migrate-toml",
-		Short: "Preview the native TOML config migration",
-		Long: `Reads the current merged JSON config and prints a proposed native
-~/.talon/config.toml. This command is read-only: it does not write config.toml
-or move state files yet.
+		Use:   "migrate-toml [openclaw-json-file]",
+		Short: "Preview an OpenClaw JSON to Talon TOML migration",
+		Long: `Reads an OpenClaw JSON config and prints a proposed native
+~/.talon/config.toml. With no argument it tries ~/.openclaw/openclaw.json and
+then falls back to Talon's current runtime view. This command is read-only: it
+does not write config.toml or move state files.
 
 The preview keeps the main chat agent's workspace, including IDENTITY.md,
-SOUL.md, and the other existing Markdown files. Subagents migrate as task/model
-profiles only; their legacy workspaces and identity files are intentionally
-listed as cleanup candidates.`,
+SOUL.md, and the other existing Markdown files. Subagent definitions now live
+as markdown files under ~/.talon/subagents.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			raw, err := config.MergedBytes(resolvePaths())
+			raw, source, err := migrationJSONSource(resolvePaths(), args)
 			if err != nil {
 				return err
 			}
-			next, report, err := talonconfig.FromLegacyJSON(raw)
+			next, report, err := talonconfig.FromOpenClawJSON(raw)
 			if err != nil {
 				return err
 			}
-			preview := talonconfig.MarshalTOML(next, talonconfig.MarshalOptions{RedactSecrets: !migrateReveal})
+			preview := talonconfig.MarshalTOML(next, talonconfig.MarshalOptions{RedactSecrets: true})
 			if err := talonconfig.ValidateTOMLBytes(preview); err != nil {
 				return fmt.Errorf("generated TOML did not validate through Viper: %w", err)
 			}
+			fmt.Fprintf(cmd.ErrOrStderr(), "talon: migration source: %s\n", source)
 			printMigrationSummary(cmd.ErrOrStderr(), report)
 			if migrateSummaryOnly {
 				return nil
@@ -337,7 +321,6 @@ listed as cleanup candidates.`,
 			return err
 		},
 	}
-	migrateTOMLCmd.Flags().BoolVar(&migrateReveal, "reveal", false, "include literal secrets in the TOML preview instead of redacting them")
 	migrateTOMLCmd.Flags().BoolVar(&migrateSummaryOnly, "summary-only", false, "print only migration notes, not the TOML preview")
 	c.AddCommand(migrateTOMLCmd)
 
@@ -347,7 +330,7 @@ listed as cleanup candidates.`,
 	)
 	getCmd := &cobra.Command{
 		Use:   "get <path>",
-		Short: "Get a value from the merged config (talon overrides openclaw)",
+		Short: "Get a value from the config",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			segments, err := config.ParsePath(args[0])
@@ -375,7 +358,7 @@ listed as cleanup candidates.`,
 
 	var (
 		strictJSON bool
-		legacyJSON bool
+		jsonAlias  bool
 		dryRun     bool
 		mergeFlag  bool
 		replaceAll bool
@@ -384,14 +367,14 @@ listed as cleanup candidates.`,
 	setCmd := &cobra.Command{
 		Use:   "set <path> <value>",
 		Short: "Set a config value by path (atomic file edit)",
-		Long: `Set a config value at <path>. Writes always target the talon overlay
-(~/.talon/talon.json); the openclaw layer is read-only.
+		Long: `Set a config value at <path>. Writes target the native Talon TOML
+config (~/.talon/config.toml by default).
 
 <value> is parsed as JSON when possible and falls back to a raw string. With
 --strict-json, value must be valid JSON.
 
-Path syntax mirrors openclaw: dot-separated, with [N] for array indices and
-["key"] for keys containing dots or other reserved characters. Example paths:
+Path syntax is dot-separated, with [N] for array indices and ["key"] for keys
+containing dots or other reserved characters. Example paths:
 
   gateway.port
   agents.list[1].model
@@ -400,10 +383,8 @@ Path syntax mirrors openclaw: dot-separated, with [N] for array indices and
 The protected-path guard refuses to replace a protected map/list
 (agents.defaults.models, models.providers[.<id>], plugins.entries,
 auth.profiles, agents.list, models.providers.<id>.models) if your write
-would shadow or drop entries from the merged view. Pass --merge to layer
-additively, or --replace to bypass the guard. Note: --replace cannot delete
-entries that come from the openclaw layer (it's read-only); the merged view
-will continue to show those entries.
+would shadow or drop entries from the current view. Pass --merge to layer
+additively, or --replace to bypass the guard.
 
 talon never auto-restarts the gateway. After a successful set, the output
 includes a class-aware hint about whether you need to do anything (next-rpc:
@@ -423,7 +404,7 @@ override the registry's classification for paths it doesn't know about.`,
 				return fmt.Errorf("choose either --merge or --replace, not both")
 			}
 
-			strict := strictJSON || legacyJSON
+			strict := strictJSON || jsonAlias
 			var typed any
 			if strict {
 				if err := json.Unmarshal([]byte(val), &typed); err != nil {
@@ -465,14 +446,11 @@ override the registry's classification for paths it doesn't know about.`,
 			for _, pp := range res.PrunedPaths {
 				fmt.Printf("pruned %s (inactive for new gateway.auth.mode)\n", pp)
 			}
-			for _, sp := range res.StaleOpenclawPaths {
-				fmt.Fprintf(os.Stderr, "warn: %s still set in the openclaw layer; merged view will keep that value until you remove it from ~/.openclaw/openclaw.json\n", sp)
-			}
 			return nil
 		},
 	}
 	setCmd.Flags().BoolVar(&strictJSON, "strict-json", false, "require <value> to be valid JSON (no raw-string fallback)")
-	setCmd.Flags().BoolVar(&legacyJSON, "json", false, "legacy alias for --strict-json")
+	setCmd.Flags().BoolVar(&jsonAlias, "json", false, "alias for --strict-json")
 	setCmd.Flags().BoolVar(&dryRun, "dry-run", false, "validate the change without writing the config file")
 	setCmd.Flags().BoolVar(&mergeFlag, "merge", false, "deep-merge object/map values instead of replacing")
 	setCmd.Flags().BoolVar(&replaceAll, "replace", false, "allow full replacement of protected map/list paths")
@@ -481,7 +459,7 @@ override the registry's classification for paths it doesn't know about.`,
 
 	c.AddCommand(&cobra.Command{
 		Use:   "unset <path>",
-		Short: "Remove a value from the talon overlay (does not modify openclaw)",
+		Short: "Remove a value from the Talon config",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			segments, err := config.ParsePath(args[0])
@@ -489,10 +467,6 @@ override the registry's classification for paths it doesn't know about.`,
 				return err
 			}
 			if err := config.Unset(resolvePaths(), segments); err != nil {
-				if errors.Is(err, config.ErrNotInOverlay) {
-					fmt.Fprintf(os.Stderr, "%v\n", err)
-					return err
-				}
 				return err
 			}
 			fmt.Printf("unset %s\n", config.SegPath(segments))
@@ -506,8 +480,8 @@ override the registry's classification for paths it doesn't know about.`,
 	)
 	validateCmd := &cobra.Command{
 		Use:   "validate",
-		Short: "Validate the merged config (schema-aware when cached) and refresh the last-good sidecar",
-		Long: `Validates the merged talon-over-openclaw config. By default uses the cached
+		Short: "Validate the config (schema-aware when cached) and refresh the last-good sidecar",
+		Long: `Validates the Talon config. By default uses the cached
 JSON schema at ~/.talon/cache/config-schema.json — populate it with
 "talon config schema --refresh" against a running gateway.
 
@@ -619,10 +593,33 @@ top-level properties tree. Names may be dotted to drill in (e.g.
 	return c
 }
 
+func migrationJSONSource(paths talonpath.Paths, args []string) ([]byte, string, error) {
+	if len(args) > 0 {
+		raw, err := os.ReadFile(args[0])
+		return raw, args[0], err
+	}
+	if path := defaultOpenClawConfigPath(); path != "" {
+		if raw, err := os.ReadFile(path); err == nil {
+			return raw, path, nil
+		} else if !os.IsNotExist(err) {
+			return nil, path, err
+		}
+	}
+	raw, err := config.MergedBytes(paths)
+	return raw, "current Talon runtime view", err
+}
+
+func defaultOpenClawConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".openclaw", "openclaw.json")
+}
+
 func printMigrationSummary(w io.Writer, report talonconfig.MigrationReport) {
 	fmt.Fprintln(w, "talon: native TOML migration preview")
 	fmt.Fprintf(w, "  source keys: %s\n", strings.Join(report.SourceTopLevelKeys, ", "))
-	fmt.Fprintf(w, "  legacy OpenClaw plugin shim: %t\n", report.LegacyPluginShim)
 	if len(report.SecretCounts) > 0 {
 		parts := make([]string, 0, len(report.SecretCounts))
 		for _, kind := range []string{"literal", "op-ref", "keychain-ref", "env-ref", "empty"} {
@@ -644,9 +641,7 @@ func modelsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "models",
 		Short: "Model discovery, defaults, fallbacks, and aliases",
-		// Parent default mirrors openclaw: bare `models` prints the
-		// list. Keeps backward compat for users who learned it as a
-		// single command before subcommands landed.
+		// Parent default: bare `models` prints the list.
 		RunE: func(cmd *cobra.Command, args []string) error {
 			payload, err := runRPC("models.list", nil)
 			if err != nil {

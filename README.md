@@ -84,12 +84,9 @@ talon chat "hello"
 ## Configuring an LLM provider
 
 API keys live in 1Password (`op://...`) or the macOS keychain
-(`keychain://...`). Direct plaintext in config is discouraged.
+(`keychain://...`). Talon rejects plaintext secrets in persisted config.
 
 ```bash
-# Bootstrap the 1Password service-account token into your keychain
-talon secrets keychain-bootstrap
-
 # Point a provider at its key in 1Password
 talon config set plugins.entries.openai-compat.config.providers.openai.apiKey \
   op://talon/openai-api-key/credential
@@ -156,31 +153,27 @@ The gateway spawns these automatically via `BuiltinPluginCmd`, which
 resolves to `[<talon-executable>, "plugin", "run", <name>]`. No separate
 plugin binaries are needed on non-Docker installs.
 
-> **Migration in progress.** The `anthropic` and `openai-compat` plugins are
-> being replaced by direct `agentcore/llm` dispatch in-process. See
+> **Migration in progress.** Provider dispatch is moving to direct
+> `agentcore/llm` in-process execution. See
 > [`docs/migration-agentcore.md`](./docs/migration-agentcore.md).
 
-## Layered config
+## Config
 
-talon's config lives in `~/.talon/talon.json`. talon never writes anywhere
-else.
-
-For machines that previously ran openclaw, talon reads from `~/.openclaw`
-as a read-only fallback layer during migration. Pure-talon installs only
-need `~/.talon`.
-
-Reads merge `~/.talon` over `~/.openclaw` (talon priority for overlapping
-keys; id-keyed arrays like `agents.list` merge by id). Writes always target
+talon's config lives in `~/.talon/config.toml`. Runtime state, logs,
+credentials, subagents, and third-party plugin binaries live under
 `~/.talon`. Override paths with `TALON_STATE_DIR` and `TALON_CONFIG_PATH`.
 
+The main agent's Markdown context files live directly in `~/.talon`.
+Subagents are Markdown files under `~/.talon/subagents/*.md`.
+
 ```bash
-# Read the merged view
+# Read config
 talon config get gateway.port
 
-# Write to ~/.talon/talon.json
+# Write to ~/.talon/config.toml
 talon config set gateway.port 19000
 
-# Validate the merged config
+# Validate config
 talon config validate
 
 # Schema cache
@@ -240,8 +233,6 @@ talon configure channel telegram
 talon configure channel bluebubbles
 
 talon secrets audit [--check]
-talon secrets migrate <path> [--vault Personal]
-talon secrets keychain-bootstrap
 
 talon plugin run <name>
 ```
@@ -263,16 +254,15 @@ map/list (`agents.defaults.models`, `models.providers[.<id>]`,
 `models.providers.<id>.models`). Pass `--merge` to layer additively, or
 `--replace` to bypass the guard.
 
-## Layered-write side effects
+## Config Write Side Effects
 
-- **Backups** rotate on every overlay write: `~/.talon/talon.json.bak`,
-  `.bak.1` … `.bak.4`.
+- **Backups** rotate on every config write: `~/.talon/config.toml.bak`,
+  `.bak.1` ... `.bak.4`.
 - **Audit log** appends one JSONL record per write to
   `~/.talon/logs/config-audit.jsonl` with sha256 hashes, gateway-mode
   changes, pid/ppid/argv.
-- **Last-good** sidecar at `~/.talon/talon.json.last-good` is refreshed by
+- **Last-good** sidecar at `~/.talon/config.toml.last-good` is refreshed by
   `config validate` on success.
-- `~/.openclaw` (when present) is never modified.
 
 ## Development
 
@@ -303,13 +293,13 @@ regression gate via `TALON_BENCH=1`.
 ## Project structure
 
 - `cmd/talon/`. Cobra CLI (root + subcommands)
-- `internal/config/`. Layered config: `config.go`, `merge.go`, `edit.go`,
+- `internal/config/`. Native config adapter and editing: `config.go`, `merge.go`, `edit.go`,
   `backup.go`, `schema.go`, `path.go`, `reload.go`
-- `internal/openclaw/`. Path resolution for the two state layers (migration-era)
+- `internal/talonpath/`. Talon state path resolution
 - `internal/gateway/`. WebSocket client
 - `internal/server/`. Embedded gateway: protocol framing, session lifecycle,
   auth, method registry
-- `internal/plugin/`. Plugin host (native go-plugin + legacy transports)
+- `internal/plugin/`. Native gRPC plugin host
 - `internal/plugins/<name>/`. First-party plugin implementations
 - `internal/secrets/`. `op://` + `keychain://` resolution
 - `apps/talon-op-plugin/`. 1Password CLI secrets-resolver subprocess

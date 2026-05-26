@@ -23,14 +23,14 @@ import (
 	"github.com/voocel/agentcore"
 
 	"github.com/guygrigsby/talon/internal/config"
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
 // integrationConfig loads the user's actual merged config so
 // integration tests use the same auth + base URLs as production.
-func integrationConfig(t *testing.T) ([]byte, openclaw.Paths) {
+func integrationConfig(t *testing.T) ([]byte, talonpath.Paths) {
 	t.Helper()
-	paths := openclaw.DefaultPaths()
+	paths := talonpath.DefaultPaths()
 	merged, err := config.MergedBytes(paths)
 	if err != nil {
 		t.Fatalf("load merged config: %v", err)

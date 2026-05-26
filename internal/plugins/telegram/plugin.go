@@ -1,14 +1,15 @@
-// Package telegram implements the Telegram bot channel as a talon plugin library.
-// The subprocess entrypoint (apps/talon-telegram-plugin/main.go) calls New()
-// and pluginrun.Serve() to wire it up.
+// Package telegram implements the Telegram bot channel as a Talon plugin.
+// The subprocess entrypoint is `talon plugin run telegram`.
 package telegram
 
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -30,6 +31,8 @@ const telegramAPIBase = "https://api.telegram.org"
 // message; >0 means we get woken up immediately on inbound. 30s is
 // the standard recommendation in the Bot API docs.
 const pollTimeout = 30 * time.Second
+
+const transientPollWarnInterval = 10 * time.Minute
 
 type telegramPlugin struct {
 	pb.UnimplementedPluginServer
@@ -120,12 +123,12 @@ func (s *telegramPlugin) runTelegramSend(ctx context.Context, req *pb.RunToolReq
 	endpoint := fmt.Sprintf("%s/bot%s/sendMessage", telegramAPIBase, token)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
-		return &pb.RunToolResponse{Output: "telegram_send: " + err.Error(), IsError: true}, nil
+		return &pb.RunToolResponse{Output: "telegram_send: " + sanitizeTelegramError(err), IsError: true}, nil
 	}
 	httpReq.URL.RawQuery = body.Encode()
 	resp, err := s.http.Do(httpReq)
 	if err != nil {
-		return &pb.RunToolResponse{Output: "telegram_send: " + err.Error(), IsError: true}, nil
+		return &pb.RunToolResponse{Output: "telegram_send: " + sanitizeTelegramError(err), IsError: true}, nil
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -139,14 +142,12 @@ func (s *telegramPlugin) runTelegramSend(ctx context.Context, req *pb.RunToolReq
 }
 
 // channelConfig is the per-channel JSON the host passes in
-// StartChannelRequest.channel_config. Mirrors the
-// channels.telegram.* sub-tree of openclaw's config schema; we only
-// pull the fields we use today.
+// StartChannelRequest.channel_config. It mirrors the channels.telegram.*
+// config subtree; we only pull the fields we use today.
 //
-// AllowFrom is the openclaw-style allowlist of numeric sender IDs.
-// When set, the plugin drops inbound messages whose from.id isn't on
-// the list. Empty list = accept-all (matches openclaw's "open"
-// dmPolicy). Configured by the configure-wizard during setup.
+// AllowFrom is the allowlist of numeric sender IDs. When set, the plugin
+// drops inbound messages whose from.id isn't on the list. Empty list =
+// accept-all. Configured by the configure-wizard during setup.
 type channelConfig struct {
 	BotToken  string   `json:"botToken"`
 	AllowFrom []string `json:"allowFrom"`
@@ -168,7 +169,7 @@ func (s *telegramPlugin) StartChannel(req *pb.StartChannelRequest, stream pb.Plu
 		}
 	}
 	if cfg.BotToken == "" {
-		return fmt.Errorf("telegram plugin: channels.telegram.botToken is empty — set it in your config before enabling the channel")
+		return fmt.Errorf("telegram plugin: bot token is empty — set [channels.telegram].bot_token_ref or channels.telegram.botToken before enabling the channel")
 	}
 	// Cache the token for SendChannelMessage; it runs outside this
 	// RPC and needs the same auth.
@@ -230,8 +231,7 @@ func (s *telegramPlugin) StartChannel(req *pb.StartChannelRequest, stream pb.Plu
 // req.room_id. The dispatcher round-trips room_id verbatim from the
 // inbound IncomingChannelMessage, so any value we put there in the
 // poll loop comes back in the right form here. We use parse_mode=
-// "Markdown" since openclaw's tg extension does the same and the
-// agent is markdown-aware by convention.
+// "Markdown" because the agent is markdown-aware by convention.
 func (s *telegramPlugin) SendChannelMessage(ctx context.Context, req *pb.SendChannelMessageRequest) (*pb.SendChannelMessageResponse, error) {
 	cfg, err := tokenForSendFromEnv()
 	if err != nil {
@@ -250,12 +250,12 @@ func (s *telegramPlugin) SendChannelMessage(ctx context.Context, req *pb.SendCha
 	endpoint := fmt.Sprintf("%s/bot%s/sendMessage", telegramAPIBase, cfg)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
-		return &pb.SendChannelMessageResponse{Ok: false}, err
+		return &pb.SendChannelMessageResponse{Ok: false}, sanitizeTelegramURLError(err)
 	}
 	httpReq.URL.RawQuery = body.Encode()
 	resp, err := s.http.Do(httpReq)
 	if err != nil {
-		return &pb.SendChannelMessageResponse{Ok: false}, err
+		return &pb.SendChannelMessageResponse{Ok: false}, sanitizeTelegramURLError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -308,18 +308,23 @@ type getUpdatesResp struct {
 
 // pollLoop runs Telegram long-polling until ctx is canceled. Each
 // inbound message becomes one IncomingChannelMessage on the channel.
-// allow is the optional sender-id allowlist; empty = accept-all
-// (openclaw's "open" dmPolicy). Errors from a single getUpdates call
-// are logged to stderr and retried with a small backoff — transient
-// network blips shouldn't take down the channel.
+// allow is the optional sender-id allowlist; empty = accept-all. Errors
+// from a single getUpdates call are logged to stderr and retried with a
+// small backoff — transient network blips shouldn't take down the channel.
 func (s *telegramPlugin) pollLoop(ctx context.Context, token string, allow map[string]struct{}, out chan<- *pb.IncomingChannelMessage) error {
 	// One identity probe up front so the user sees in the log
 	// that the bot token actually works (vs. silently long-polling
 	// against a 401). getMe is cheap (no offset / state) and
 	// surfaces the bot username for clarity.
 	if username, err := s.getMe(ctx, token); err != nil {
+		if isPermanentAuthErr(err) {
+			clearSendState()
+			slog.Error("telegram channel disabled — bot token is invalid; check [channels.telegram].bot_token_ref or channels.telegram.botToken and restart the gateway",
+				"plugin", "telegram", "err", sanitizeTelegramError(err))
+			return nil
+		}
 		slog.Warn("telegram getMe failed — token may be wrong or revoked",
-			"plugin", "telegram", "err", err)
+			"plugin", "telegram", "err", sanitizeTelegramError(err))
 	} else {
 		slog.Info("telegram polling started",
 			"plugin", "telegram", "bot", "@"+username, "allowlist_size", len(allow))
@@ -328,6 +333,8 @@ func (s *telegramPlugin) pollLoop(ctx context.Context, token string, allow map[s
 	var offset int64
 	backoff := time.Second
 	totalReceived := 0
+	consecutiveErrors := 0
+	lastPollWarn := time.Time{}
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -342,14 +349,28 @@ func (s *telegramPlugin) pollLoop(ctx context.Context, token string, allow map[s
 			// themselves during this process lifetime. Log once
 			// with an actionable hint and stop polling rather
 			// than spamming the gateway log every 30s forever.
-			// The user fixes the token via `talon config set
-			// channels.telegram.botToken …` and restarts.
+			// The user fixes the token by updating its op:// or
+			// keychain:// reference and restarts.
 			if isPermanentAuthErr(err) {
-				slog.Error("telegram polling stopped — bot token is invalid; fix with `talon config set channels.telegram.botToken <token>` and restart the gateway",
-					"plugin", "telegram", "err", err)
-				return err
+				clearSendState()
+				slog.Error("telegram channel disabled — bot token is invalid; check [channels.telegram].bot_token_ref or channels.telegram.botToken and restart the gateway",
+					"plugin", "telegram", "err", sanitizeTelegramError(err))
+				return nil
 			}
-			slog.Warn("telegram getUpdates error", "plugin", "telegram", "err", err, "backoff", backoff)
+			consecutiveErrors++
+			now := time.Now()
+			attrs := []any{
+				"plugin", "telegram",
+				"err", sanitizeTelegramError(err),
+				"backoff", backoff.String(),
+				"consecutive_errors", consecutiveErrors,
+			}
+			if shouldLogTelegramPollWarn(err, consecutiveErrors, lastPollWarn, now) {
+				slog.Warn("telegram getUpdates error", attrs...)
+				lastPollWarn = now
+			} else {
+				slog.Debug("telegram getUpdates retry suppressed", attrs...)
+			}
 			select {
 			case <-time.After(backoff):
 			case <-ctx.Done():
@@ -360,6 +381,12 @@ func (s *telegramPlugin) pollLoop(ctx context.Context, token string, allow map[s
 			}
 			continue
 		}
+		if consecutiveErrors > 0 {
+			slog.Info("telegram polling recovered",
+				"plugin", "telegram", "recovered_after_errors", consecutiveErrors)
+		}
+		consecutiveErrors = 0
+		lastPollWarn = time.Time{}
 		backoff = time.Second
 		for _, u := range updates {
 			if u.UpdateID >= offset {
@@ -400,8 +427,104 @@ func isPermanentAuthErr(err error) bool {
 	if err == nil {
 		return false
 	}
+	var httpErr *telegramHTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.Status == http.StatusUnauthorized || httpErr.Status == http.StatusNotFound
+	}
 	msg := err.Error()
 	return strings.Contains(msg, "http 401") || strings.Contains(msg, "http 404")
+}
+
+func shouldLogTelegramPollWarn(err error, consecutiveErrors int, lastWarn, now time.Time) bool {
+	if !isTransientTelegramPollErr(err) {
+		return true
+	}
+	if consecutiveErrors <= 1 || lastWarn.IsZero() {
+		return true
+	}
+	return now.Sub(lastWarn) >= transientPollWarnInterval
+}
+
+func isTransientTelegramPollErr(err error) bool {
+	if err == nil {
+		return false
+	}
+	var httpErr *telegramHTTPError
+	if errors.As(err, &httpErr) {
+		return httpErr.Status == http.StatusTooManyRequests || httpErr.Status >= http.StatusInternalServerError
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
+}
+
+type telegramHTTPError struct {
+	Method string
+	Status int
+	Body   string
+}
+
+func (e *telegramHTTPError) Error() string {
+	if e == nil {
+		return ""
+	}
+	if e.Body == "" {
+		return fmt.Sprintf("%s http %d", e.Method, e.Status)
+	}
+	return fmt.Sprintf("%s http %d: %s", e.Method, e.Status, redactTelegramBotToken(e.Body))
+}
+
+type sanitizedTelegramError struct {
+	err error
+	msg string
+}
+
+func (e *sanitizedTelegramError) Error() string { return e.msg }
+func (e *sanitizedTelegramError) Unwrap() error { return e.err }
+
+func sanitizeTelegramURLError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &sanitizedTelegramError{
+		err: err,
+		msg: sanitizeTelegramError(err),
+	}
+}
+
+func sanitizeTelegramError(err error) string {
+	if err == nil {
+		return ""
+	}
+	return redactTelegramBotToken(err.Error())
+}
+
+func redactTelegramBotToken(s string) string {
+	const marker = "/bot"
+	var out strings.Builder
+	for {
+		idx := strings.Index(s, marker)
+		if idx < 0 {
+			out.WriteString(s)
+			return out.String()
+		}
+		out.WriteString(s[:idx+len(marker)])
+		rest := s[idx+len(marker):]
+		if rest == "" {
+			return out.String()
+		}
+		end := strings.IndexAny(rest, `/?"& `)
+		if end < 0 {
+			out.WriteString("<redacted>")
+			return out.String()
+		}
+		if end > 0 {
+			out.WriteString("<redacted>")
+		}
+		s = rest[end:]
+	}
 }
 
 // getMe pings Telegram's bot-identity endpoint to confirm the
@@ -411,16 +534,16 @@ func (s *telegramPlugin) getMe(ctx context.Context, token string) (string, error
 	endpoint := fmt.Sprintf("%s/bot%s/getMe", telegramAPIBase, token)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return "", err
+		return "", sanitizeTelegramURLError(err)
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := s.http.Do(req)
 	if err != nil {
-		return "", err
+		return "", sanitizeTelegramURLError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("getMe http %d: %s", resp.StatusCode, truncate(string(raw), 256))
+		return "", &telegramHTTPError{Method: "getMe", Status: resp.StatusCode, Body: truncate(string(raw), 256)}
 	}
 	var out struct {
 		OK     bool `json:"ok"`
@@ -446,16 +569,16 @@ func (s *telegramPlugin) getUpdates(ctx context.Context, token string, offset in
 	endpoint := fmt.Sprintf("%s/bot%s/getUpdates?%s", telegramAPIBase, token, q.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, err
+		return nil, sanitizeTelegramURLError(err)
 	}
 	resp, err := s.http.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, sanitizeTelegramURLError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("getUpdates http %d: %s", resp.StatusCode, truncate(string(raw), 256))
+		return nil, &telegramHTTPError{Method: "getUpdates", Status: resp.StatusCode, Body: truncate(string(raw), 256)}
 	}
 	var out getUpdatesResp
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -526,6 +649,13 @@ func tokenForSendFromEnv() (string, error) {
 func setSendToken(tok string) {
 	sendTokenMu.Lock()
 	sendToken = tok
+	sendTokenMu.Unlock()
+}
+
+func clearSendState() {
+	sendTokenMu.Lock()
+	sendToken = ""
+	defaultChatID = ""
 	sendTokenMu.Unlock()
 }
 

@@ -6,11 +6,10 @@ import (
 	"testing"
 )
 
-// TestNodeList_ReturnsEmptyList covers talon-4cd: openclaw's UI calls
-// node.list on every connect and surfaces a METHOD_NOT_FOUND log line
-// when it's missing. talon is single-process and has no remote-node
-// concept today, so an empty {nodes: []} is the correct response —
-// the UI's filter falls through cleanly and no error toast fires.
+// TestNodeList_ReturnsEmptyList covers the UI's node.list call on every
+// connect. Talon is single-process and has no remote-node concept today,
+// so an empty {nodes: []} is the correct response; the UI's filter falls
+// through cleanly and no error toast fires.
 func TestNodeList_ReturnsEmptyList(t *testing.T) {
 	r := NewRegistry()
 	NewNodesHandler().Register(r)
@@ -32,9 +31,8 @@ func TestNodeList_ReturnsEmptyList(t *testing.T) {
 	}
 }
 
-// TestNodeList_AcceptsNilParams is a minor robustness check — the
-// openclaw UI sends `{}` today, but old/new clients sending an
-// empty body or `null` should still get a clean response.
+// TestNodeList_AcceptsNilParams is a minor robustness check. Clients
+// sending `{}`, an empty body, or `null` should get a clean response.
 func TestNodeList_AcceptsNilParams(t *testing.T) {
 	r := NewRegistry()
 	NewNodesHandler().Register(r)

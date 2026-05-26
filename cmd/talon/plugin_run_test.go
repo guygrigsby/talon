@@ -10,8 +10,8 @@ import (
 // gap that just bit us with mac-open: a plugin can be added to
 // pluginConstructors (so `talon plugin run <name>` works) but
 // forgotten in internal/server.builtinPlugins (so the gateway's
-// spec parser doesn't recognize it as first-party, falls through
-// to legacy with no cmd, and load fails at runtime).
+// spec parser doesn't recognize it as first-party, has no default
+// spawn command, and load fails at runtime).
 //
 // Every name registered in pluginConstructors must round-trip
 // through BuiltinPluginCmd to produce a non-empty spawn cmd.

@@ -7,20 +7,18 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"strconv"
 	"strings"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/secrets"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/pretty"
 	"github.com/tidwall/sjson"
 )
 
-// canonicalPrettyOptions defines talon's on-disk overlay format. Output matches
-// openclaw's writer (Node `JSON.stringify(v, null, 2) + "\n"`) byte-for-byte:
-// 2-space indent, spaces after colons, no key sort, one element per line, and
-// a trailing newline. This is verified in TestSetWriteFormatMatchesOpenclaw.
-//
-// Keep in sync with both writers' tests if the format ever changes.
+// canonicalPrettyOptions defines the internal JSON view used before converting
+// back to native TOML.
 var canonicalPrettyOptions = &pretty.Options{Indent: "  ", SortKeys: false, Width: 0}
 
 // canonicalPretty returns the post-pretty form of raw with talon's canonical
@@ -61,17 +59,12 @@ type SetResult struct {
 	// PrunedPaths lists sibling keys removed from the talon overlay (e.g.
 	// gateway.auth.password when gateway.auth.mode changed).
 	PrunedPaths []string
-	// StaleOpenclawPaths lists openclaw-layer paths that the prune logic
-	// could not remove because openclaw is read-only. The merged view will
-	// still report those values until the user clears them on the openclaw
-	// side or the talon overlay tombstones them.
-	StaleOpenclawPaths []string
 	// Wrote is true when the talon overlay was written (false in DryRun).
 	Wrote bool
 }
 
 // Get returns the merged value at the parsed segment path.
-func Get(p openclaw.Paths, segments []string) (gjson.Result, error) {
+func Get(p talonpath.Paths, segments []string) (gjson.Result, error) {
 	merged, err := MergedBytes(p)
 	if err != nil {
 		return gjson.Result{}, err
@@ -82,13 +75,9 @@ func Get(p openclaw.Paths, segments []string) (gjson.Result, error) {
 	return gjson.GetBytes(merged, ToSjsonPath(segments)), nil
 }
 
-// Set applies a typed value at the parsed segment path. Writes target the
-// talon overlay (p.Talon.Config); the openclaw layer is read-only.
-//
-// The protected-path guard checks the merged view, not just the overlay, so a
-// destructive replacement is refused even when the entries being dropped live
-// only in the openclaw layer.
-func Set(p openclaw.Paths, segments []string, value any, opts SetOpts) (SetResult, error) {
+// Set applies a typed value at the parsed segment path and writes the native
+// TOML config.
+func Set(p talonpath.Paths, segments []string, value any, opts SetOpts) (SetResult, error) {
 	if len(segments) == 0 {
 		return SetResult{}, fmt.Errorf("path is empty")
 	}
@@ -101,79 +90,62 @@ func Set(p openclaw.Paths, segments []string, value any, opts SetOpts) (SetResul
 			return SetResult{}, err
 		}
 	}
-	overlay, err := readOverlayOrEmpty(p.Talon.Config)
+	if err := assertNoPlaintextSecretWrite(segments, value); err != nil {
+		return SetResult{}, err
+	}
+	updated, err := applySet(merged, segments, value, opts.Mode)
 	if err != nil {
 		return SetResult{}, err
 	}
-	updated, err := applySet(overlay, segments, value, opts.Mode)
-	if err != nil {
-		return SetResult{}, err
-	}
-	pruned, stale, updated, err := pruneInactiveGatewayAuth(updated, p, segments)
+	pruned, updated, err := pruneInactiveGatewayAuth(updated, segments)
 	if err != nil {
 		return SetResult{}, err
 	}
 	res := SetResult{
-		Path:               SegPath(segments),
-		PrunedPaths:        pruned,
-		StaleOpenclawPaths: stale,
+		Path:        SegPath(segments),
+		PrunedPaths: pruned,
 	}
 	if opts.DryRun {
 		return res, nil
 	}
 	updated = canonicalPretty(updated)
-	// Idempotent short-circuit: if the post-pretty bytes already match what's
-	// on disk, skip the write. Avoids rotating .bak files and appending a no-op
-	// audit record when the user re-issues an unchanged set (talon-7vk).
-	onDisk, _ := os.ReadFile(p.Talon.Config)
-	if onDisk != nil && bytes.Equal(onDisk, updated) {
+	if bytes.Equal(canonicalPretty(merged), updated) {
 		return res, nil
 	}
-	if err := writeOverlay(p.Talon, overlay, updated, []string{SegPath(segments)}); err != nil {
+	if err := writeNativeFromRuntimeJSON(p.Talon, merged, updated, []string{SegPath(segments)}); err != nil {
 		return res, err
 	}
 	res.Wrote = true
 	return res, nil
 }
 
-// Unset removes a key/element from the talon overlay.
-//
-// Note: Unset only touches the talon overlay. If the same path is set in the
-// openclaw layer, the merged view will continue to report the openclaw value
-// after Unset returns. ErrNotInOverlay signals this case.
-func Unset(p openclaw.Paths, segments []string) error {
+// Unset removes a key/element from the native config.
+func Unset(p talonpath.Paths, segments []string) error {
 	if len(segments) == 0 {
 		return fmt.Errorf("path is empty")
 	}
-	overlay, err := readOverlayOrEmpty(p.Talon.Config)
+	merged, err := MergedBytes(p)
 	if err != nil {
 		return err
 	}
 	sjPath := ToSjsonPath(segments)
-	if !gjson.GetBytes(overlay, sjPath).Exists() {
-		// Nothing to remove from talon's overlay. If openclaw has the path,
-		// surface that to the caller so they can decide what to do.
-		merged, mErr := MergedBytes(p)
-		if mErr == nil && gjson.GetBytes(merged, sjPath).Exists() {
-			return fmt.Errorf("%w: %s exists only in the openclaw layer (read-only)", ErrNotInOverlay, SegPath(segments))
-		}
+	if !gjson.GetBytes(merged, sjPath).Exists() {
 		return fmt.Errorf("path not found: %s", SegPath(segments))
 	}
-	updated, err := sjson.DeleteBytes(overlay, sjPath)
+	updated, err := sjson.DeleteBytes(merged, sjPath)
 	if err != nil {
 		return fmt.Errorf("unset %s: %w", SegPath(segments), err)
 	}
 	updated = canonicalPretty(updated)
-	onDisk, _ := os.ReadFile(p.Talon.Config)
-	if onDisk != nil && bytes.Equal(onDisk, updated) {
+	if bytes.Equal(canonicalPretty(merged), updated) {
 		return nil
 	}
-	return writeOverlay(p.Talon, overlay, updated, []string{SegPath(segments)})
+	return writeNativeFromRuntimeJSON(p.Talon, merged, updated, []string{SegPath(segments)})
 }
 
 // Validate parses the merged config and, on success, refreshes the talon
 // overlay's "last-good" sidecar.
-func Validate(p openclaw.Paths) error {
+func Validate(p talonpath.Paths) error {
 	merged, err := MergedBytes(p)
 	if err != nil {
 		return err
@@ -182,20 +154,16 @@ func Validate(p openclaw.Paths) error {
 	if err := json.Unmarshal(merged, &v); err != nil {
 		return fmt.Errorf("parse: %w", err)
 	}
-	overlay, err := readOverlayOrEmpty(p.Talon.Config)
+	raw, err := os.ReadFile(p.Talon.Config)
 	if err != nil {
-		return err
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("read %s: %w", p.Talon.Config, err)
 	}
-	// Only refresh last-good if the talon overlay exists on disk.
-	if _, statErr := os.Stat(p.Talon.Config); statErr == nil {
-		_ = writeFile(p.Talon.LastGoodPath(), overlay, 0o600)
-	}
+	_ = writeFile(p.Talon.LastGoodPath(), raw, 0o600)
 	return nil
 }
-
-// ErrNotInOverlay is returned by Unset when the requested path exists in the
-// openclaw layer but not in the talon overlay (so Unset cannot remove it).
-var ErrNotInOverlay = errors.New("config path exists only in the openclaw layer")
 
 func readOverlayOrEmpty(path string) ([]byte, error) {
 	if path == "" {
@@ -229,6 +197,72 @@ func applySet(raw []byte, segments []string, value any, mode SetMode) ([]byte, e
 	}
 }
 
+// --- secret-write guard ----------------------------------------------------
+
+func assertNoPlaintextSecretWrite(segments []string, value any) error {
+	if len(segments) == 0 {
+		return nil
+	}
+	label := SegPath(segments)
+	key := segments[len(segments)-1]
+	return walkSecretWrite(label, key, value)
+}
+
+func walkSecretWrite(label, key string, value any) error {
+	switch v := value.(type) {
+	case map[string]any:
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sortStrings(keys)
+		for _, k := range keys {
+			if err := walkSecretWrite(joinLabel(label, k), k, v[k]); err != nil {
+				return err
+			}
+		}
+	case map[string]string:
+		keys := make([]string, 0, len(v))
+		for k := range v {
+			keys = append(keys, k)
+		}
+		sortStrings(keys)
+		for _, k := range keys {
+			if err := walkSecretWrite(joinLabel(label, k), k, v[k]); err != nil {
+				return err
+			}
+		}
+	case []any:
+		for i, item := range v {
+			if err := walkSecretWrite(label+"["+strconv.Itoa(i)+"]", key, item); err != nil {
+				return err
+			}
+		}
+	case []string:
+		for i, item := range v {
+			if err := walkSecretWrite(label+"["+strconv.Itoa(i)+"]", key, item); err != nil {
+				return err
+			}
+		}
+	case string:
+		if strings.TrimSpace(v) == "" || !secrets.IsSensitiveKey(key) {
+			return nil
+		}
+		if secrets.IsReference(v) {
+			return nil
+		}
+		return fmt.Errorf("refusing to write plaintext secret to %s; store it in 1Password or the OS keychain and set an op:// or keychain:// reference", label)
+	}
+	return nil
+}
+
+func joinLabel(prefix, child string) string {
+	if prefix == "" {
+		return child
+	}
+	return prefix + "." + child
+}
+
 // --- protected-path guard ---------------------------------------------------
 
 func assertNonDestructive(merged []byte, segments []string, value any) error {
@@ -244,7 +278,7 @@ func assertNonDestructive(merged []byte, segments []string, value any) error {
 		}
 		removed := mapKeysMissingFrom(existing, patchMap)
 		if len(removed) > 0 {
-			return fmt.Errorf("refusing to replace %s; the merged view contains entries your write would shadow or drop: %s. Use --merge to layer your changes additively, or --replace to override the guard. (Note: --replace cannot delete entries that come from the openclaw layer; tombstones are not yet implemented — see talon-9ic.)", pathLabel, formatRemoved(removed))
+			return fmt.Errorf("refusing to replace %s; the merged view contains entries your write would shadow or drop: %s. Use --merge to layer your changes additively, or --replace to override the guard.", pathLabel, formatRemoved(removed))
 		}
 	}
 	if isProtectedArrayByIDPath(segments) && existing.IsArray() {
@@ -440,13 +474,11 @@ func sortStrings(s []string) {
 
 // --- gateway.auth pruning ---------------------------------------------------
 
-// pruneInactiveGatewayAuth prunes credentials from the talon overlay that no
-// longer apply after a gateway.auth.mode change. If the openclaw layer still
-// has stale credentials, those paths are returned in stalePaths so the caller
-// can warn the user (we can't delete from openclaw).
-func pruneInactiveGatewayAuth(overlay []byte, p openclaw.Paths, segments []string) (pruned, stalePaths []string, out []byte, err error) {
+// pruneInactiveGatewayAuth prunes credentials that no longer apply after a
+// gateway.auth.mode change.
+func pruneInactiveGatewayAuth(overlay []byte, segments []string) (pruned []string, out []byte, err error) {
 	if SegPath(segments) != "gateway.auth.mode" {
-		return nil, nil, overlay, nil
+		return nil, overlay, nil
 	}
 	mode := gjson.GetBytes(overlay, "gateway.auth.mode").String()
 	prune := func(key string) error {
@@ -459,31 +491,24 @@ func pruneInactiveGatewayAuth(overlay []byte, p openclaw.Paths, segments []strin
 			overlay = next
 			pruned = append(pruned, path)
 		}
-		// Check whether the openclaw layer still has the now-inactive key.
-		if !p.SkipOpenclaw {
-			openclawRaw, oerr := os.ReadFile(p.Openclaw.Config)
-			if oerr == nil && gjson.GetBytes(openclawRaw, path).Exists() {
-				stalePaths = append(stalePaths, path)
-			}
-		}
 		return nil
 	}
 	switch mode {
 	case "token":
 		if err = prune("password"); err != nil {
-			return nil, nil, overlay, err
+			return nil, overlay, err
 		}
 	case "password":
 		if err = prune("token"); err != nil {
-			return nil, nil, overlay, err
+			return nil, overlay, err
 		}
 	case "trusted-proxy", "none", "":
 		if err = prune("token"); err != nil {
-			return nil, nil, overlay, err
+			return nil, overlay, err
 		}
 		if err = prune("password"); err != nil {
-			return nil, nil, overlay, err
+			return nil, overlay, err
 		}
 	}
-	return pruned, stalePaths, overlay, nil
+	return pruned, overlay, nil
 }

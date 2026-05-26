@@ -38,7 +38,7 @@ This file + `docs/dependencies.md` + the CLAUDE.md rewrite. No code change.
 | 1.5 — jess memory + agentcore builtin tools | ✅ done. `Builder.WithMemory` wires jess RememberTool/RecallTool when the gateway has the memory sidecar. agentcore/tools Read/Write/Edit/Bash/Glob/Grep/Ls attached automatically. |
 | 2 — integration tests | ⚠️ 2/3 passing. openai/gpt-4o-mini ✅ (~1s TTFB). deepseek/deepseek-chat ✅ (~1.3s TTFB, streams thinking deltas). anthropic ❌ — blocked on upstream LiteLLM issue (auto-fills top_p=1.0, Anthropic rejects when temperature is also set). |
 | 3 — gateway dispatch behind flag | ✅ done. `chat.handler: "agentcore"` in merged config routes through the new handler. `WithPaths` + `WithAgentcoreRunner` on `ChatHandler`. |
-| 4 — delete legacy stack | 🚫 **blocked** by Phase 2 anthropic failure. Until LiteLLM ships a top_p fix (or talon adds a deeper wrapper), the anthropic plugin remains required. |
+| 4 — delete direct provider stack | 🚫 **blocked** by Phase 2 anthropic failure. Until LiteLLM ships a top_p fix (or talon adds a deeper wrapper), the anthropic plugin remains required. |
 | 5 — followups | open: per-session model override + cost-cap Record() + sinks fan-out integration in the agentcore path; FE wire-shape Playwright verification; `client.id` rename. |
 
 **Anthropic blocker detail:** `agentcore/llm/litellm.go`'s `Generate`/`GenerateStream` doesn't set `req.TopP`, so it's nil when reaching `litellm.Client.applyChatDefaults` at `client_runtime.go:81-84`, which fills it with `c.defaults.TopP = 1.0`. The Anthropic provider then includes both `temperature` and `top_p` in the outgoing request, and Anthropic 400s with "cannot both be specified for this model." Two-line upstream fix in `litellm/providers/anthropic.go` (drop top_p when temperature is present) or in `agentcore/llm/litellm.go` (expose a no-top_p option). Talon convention says contribute upstream.
@@ -99,14 +99,11 @@ In one commit (or a small commit cluster), remove:
 
 ### Phase 5 — followups (separate commits)
 
-- Drop the `~/.openclaw` overlay layer entirely (it's a migration artifact).
-  Pure-talon installs already work with just `~/.talon`. Add a one-shot
-  `talon migrate` command that copies legacy state, then remove the
-  read-side merge.
-- Audit code comments + log messages for stale "openclaw" mentions.
-- The `client.id = "openclaw-tui"` hardcode in `internal/gateway/client.go`
-  was for upstream openclaw acceptance; can become `"talon"` once we're
-  fully standalone.
+- Continue moving provider dispatch, memory recall, and tool execution onto
+  agentcore/jess primitives.
+- Remove remaining in-tree provider/plugin paths once the agentcore path is
+  the only production chat handler.
+- Keep ADRs current as the migration deletes runtime surfaces.
 
 ## Inverse case: when NOT to remove a piece
 

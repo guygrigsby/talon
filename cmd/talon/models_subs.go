@@ -1,13 +1,12 @@
-// Package main — `talon models` subcommands beyond `list`.
+// Package main implements `talon models` subcommands beyond `list`.
 //
 // Each subcommand here is a thin wrapper over config writes:
 //   - models set <model>:           agents.defaults.model.primary = <model>
 //   - models fallbacks list/add/remove/clear: agents.defaults.model.fallbacks
 //   - models aliases  list/add/remove:        agents.defaults.models.<id>.alias
 //
-// Mirrors openclaw's surface so muscle-memory ports between the two
-// CLIs. Live probes (`models status --probe`) and OpenRouter scans
-// (`models scan`) require additional infrastructure and are deferred.
+// Live probes (`models status --probe`) and OpenRouter scans (`models scan`)
+// require additional infrastructure and are deferred.
 
 package main
 

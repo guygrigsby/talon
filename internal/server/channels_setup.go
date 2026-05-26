@@ -4,16 +4,16 @@
 // can drive an identical flow without shelling out. Three plain
 // (non-streaming) RPCs map to the wizard's three blocking steps:
 //
-//   1. channels.telegram.verify({token})
-//        → calls getMe; returns {ok, bot:{id, username, firstName}}.
-//   2. channels.telegram.captureSender({token, deadlineSec?})
-//        → drains pending updates, then long-polls until the user DMs
-//          the bot or deadline expires. Returns {chatId, senderId,
-//          displayName}. Default deadline is 90s; max 300s.
-//   3. channels.telegram.persist({token, senderId, agentId?})
-//        → writes channels.telegram.* + plugins.entries.telegram into
-//          the talon overlay; sends the confirmation DM. Returns {ok,
-//          restartHint}.
+//  1. channels.telegram.verify({token})
+//     → calls getMe; returns {ok, bot:{id, username, firstName}}.
+//  2. channels.telegram.captureSender({token, deadlineSec?})
+//     → drains pending updates, then long-polls until the user DMs
+//     the bot or deadline expires. Returns {chatId, senderId,
+//     displayName}. Default deadline is 90s; max 300s.
+//  3. channels.telegram.persist({token, senderId, agentId?})
+//     → writes channels.telegram.* + plugins.entries.telegram into
+//     the talon overlay; sends the confirmation DM. Returns {ok,
+//     restartHint}.
 //
 // Splitting into three RPCs (vs. one streaming RPC) keeps the UI
 // simple — each call has a tidy response and the UI renders progress
@@ -30,7 +30,8 @@ import (
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/secrets"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/guygrigsby/talon/internal/telegram"
 )
 
@@ -40,14 +41,16 @@ import (
 // plugins.entries.telegram.cmd. Defaults to the bundled binary path
 // inside the docker image. Override via WithPluginCmd in tests.
 type ChannelsSetupHandler struct {
-	paths     openclaw.Paths
-	pluginCmd []string
+	paths       talonpath.Paths
+	pluginCmd   []string
+	secretStore func(context.Context, string, string) (string, error)
 }
 
-func NewChannelsSetupHandler(paths openclaw.Paths) *ChannelsSetupHandler {
+func NewChannelsSetupHandler(paths talonpath.Paths) *ChannelsSetupHandler {
 	return &ChannelsSetupHandler{
-		paths:     paths,
-		pluginCmd: nil, // nil → use BuiltinPluginCmd fallback at spawn time
+		paths:       paths,
+		pluginCmd:   nil, // nil → use BuiltinPluginCmd fallback at spawn time
+		secretStore: secrets.StoreKeychainSecret,
 	}
 }
 
@@ -55,6 +58,13 @@ func NewChannelsSetupHandler(paths openclaw.Paths) *ChannelsSetupHandler {
 // Used by tests to avoid leaving production paths in fixtures.
 func (h *ChannelsSetupHandler) WithPluginCmd(cmd []string) *ChannelsSetupHandler {
 	h.pluginCmd = append([]string(nil), cmd...)
+	return h
+}
+
+// WithSecretStore overrides secret persistence. Tests use it to avoid touching
+// the developer's keychain.
+func (h *ChannelsSetupHandler) WithSecretStore(store func(context.Context, string, string) (string, error)) *ChannelsSetupHandler {
+	h.secretStore = store
 	return h
 }
 
@@ -173,13 +183,23 @@ func (h *ChannelsSetupHandler) handlePersist(ctx context.Context, _ HandlerCtx, 
 	if agentID == "" {
 		agentID = "main"
 	}
+	storeSecret := h.secretStore
+	if storeSecret == nil {
+		storeSecret = secrets.StoreKeychainSecret
+	}
+	storeCtx, storeCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer storeCancel()
+	tokenRef, err := storeSecret(storeCtx, "talon.channels.telegram.botToken", p.Token)
+	if err != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "channels.telegram.persist: store token: " + err.Error()}
+	}
 
 	senderIDStr := strconv.FormatInt(p.SenderID, 10)
 	writes := []struct {
 		path  []string
 		value any
 	}{
-		{[]string{"channels", "telegram", "botToken"}, p.Token},
+		{[]string{"channels", "telegram", "botToken"}, tokenRef},
 		{[]string{"channels", "telegram", "allowFrom"}, []any{senderIDStr}},
 		{[]string{"channels", "telegram", "dmPolicy"}, "allowlist"},
 		{[]string{"channels", "telegram", "agentId"}, agentID},

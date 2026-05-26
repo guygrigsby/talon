@@ -1,6 +1,5 @@
-// talon.plugin.v1 is the wire contract every plugin (native or shim-hosted
-// openclaw extension) implements to participate in talon-gateway. Two
-// services:
+// talon.plugin.v1 is the wire contract every native plugin implements to
+// participate in talon-gateway. Two services:
 //
 //   service Plugin — host calls these on the plugin (ListTools, RunTool,
 //                    StreamCompletion, StartChannel, etc).

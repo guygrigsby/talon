@@ -1,7 +1,5 @@
-// Package pkgutil holds helpers shared between the legacy and native
-// plugin hosts. Both need to resolve a configured plugin cmd against
-// the filesystem (with sibling-of-talon + PATH fallbacks) and both
-// gate Host-service calls against the same method->capability map.
+// Package pkgutil holds helpers shared by the plugin host surfaces:
+// configured command resolution and Host-service method capability mapping.
 package pkgutil
 
 import (

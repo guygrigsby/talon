@@ -20,6 +20,3 @@ coverage.out
 .git/
 .github/
 node_modules/
-
-# Existing UI sibling repo lookups (not used by the docker build).
-../openclaw/

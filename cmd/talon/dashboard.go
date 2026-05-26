@@ -1,13 +1,12 @@
-// Package main — `talon dashboard`. Drop-in for openclaw's
-// `dashboard` command: prints the gateway URL, copies it to the
-// clipboard, and opens the browser. The token is resolved through
-// the secrets resolver so a `gateway.auth.token: op://...` config
-// works the same as a literal token.
+// Package main implements `talon dashboard`: print the gateway URL, copy it
+// to the clipboard, and open the browser. The token is resolved through the
+// secrets resolver so a `gateway.auth.token: op://...` config works the same
+// as a literal token.
 //
-// Defaults that mirror openclaw's behavior:
+// Defaults:
 //   - port:       gateway.port (config) || 18789
 //   - bind:       gateway.bind (config) || "loopback"
-//   - LAN coerce: lan → loopback for the URL host (browsers refuse
+//   - LAN coerce: lan -> loopback for the URL host (browsers refuse
 //                 secure-context features on raw LAN IPs anyway)
 //   - --no-open:  skip the browser launch (still prints + copies)
 
@@ -52,8 +51,8 @@ func dashboardCmd() *cobra.Command {
 			//      running with a CLI-only --token that isn't in
 			//      config)
 			//   2. gateway.auth.token from merged config, routed
-			//      through the secrets resolver so op://...,
-			//      keychain://..., and literal values all work
+			//      through the secrets resolver so op://... and
+			//      keychain://... references work
 			//   3. empty — URL goes out without #token=, the FE
 			//      surfaces a friendly auth-required message
 			token := tokenFlag
@@ -70,10 +69,8 @@ func dashboardCmd() *cobra.Command {
 					}
 				}
 			}
-			// Default path is "/" — the SvelteKit chat lives at the
-			// root route. The legacy openclaw UI used "/chat";
-			// pass --ui-host together with a route override if you
-			// need to target it.
+			// Default path is "/": the SvelteKit chat lives at the
+			// root route.
 			u := buildUIURL(uiHost, "localhost", port, token, session, "/")
 			fmt.Fprintln(cmd.OutOrStdout(), "Dashboard URL:", u)
 			if token != "" {

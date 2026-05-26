@@ -6,17 +6,17 @@ import (
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/memory"
-	"github.com/guygrigsby/talon/internal/openclaw"
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/tidwall/gjson"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-// openclaw is referenced via openclaw.Paths in NewHostService — keep
-// the import explicit even if Go tooling otherwise warns about disuse
-// in tests where only the constructor is exercised.
-var _ openclaw.Paths
+// talonpath.Paths is referenced in NewHostService; keep the import explicit
+// even if Go tooling otherwise warns about disuse in tests where only the
+// constructor is exercised.
+var _ talonpath.Paths
 
 // HostService implements pb.HostServer — the back-channel surface
 // plugins call into talon. Each method maps to the same in-process
@@ -34,7 +34,7 @@ var _ openclaw.Paths
 type HostService struct {
 	pb.UnimplementedHostServer
 
-	paths     openclaw.Paths
+	paths     talonpath.Paths
 	reads     *ReadHandler
 	chat      *ChatHandler // may be nil when chat is not configured
 	chatStore *ChatStore
@@ -44,7 +44,7 @@ type HostService struct {
 // NewHostService constructs the back-channel service from already-
 // running talon state. reads, chatStore, and sessions are required;
 // chat may be nil (Host.RunSubagent will then return Unimplemented).
-func NewHostService(paths openclaw.Paths, reads *ReadHandler, chat *ChatHandler, chatStore *ChatStore, sessions *SessionStore) *HostService {
+func NewHostService(paths talonpath.Paths, reads *ReadHandler, chat *ChatHandler, chatStore *ChatStore, sessions *SessionStore) *HostService {
 	return &HostService{
 		paths:     paths,
 		reads:     reads,
@@ -253,4 +253,3 @@ func stringField(m map[string]any, k string) string {
 	}
 	return ""
 }
-

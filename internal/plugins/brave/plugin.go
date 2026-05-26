@@ -1,6 +1,5 @@
-// Package brave implements the Brave Search web_search tool as a talon plugin library.
-// The subprocess entrypoint (apps/talon-brave-plugin/main.go) calls New()
-// and pluginrun.Serve() to wire it up.
+// Package brave implements the Brave Search web_search tool as a Talon plugin.
+// The subprocess entrypoint is `talon plugin run brave`.
 package brave
 
 import (

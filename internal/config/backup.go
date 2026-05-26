@@ -12,13 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonconfig"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/tidwall/gjson"
 )
 
-// configBackupCount controls the .bak rotation depth on the talon overlay.
-// We mirror openclaw's depth (5 = unnumbered + .1..4) so admin tooling that
-// inspects ~/.talon expects the same shape.
+// configBackupCount controls the .bak rotation depth on the Talon config.
 const configBackupCount = 5
 
 // writeOverlay performs:
@@ -30,7 +29,7 @@ const configBackupCount = 5
 // previous and next are the overlay byte streams BEFORE any pretty-printing
 // difference, used to compute hashes and gateway-mode-change for the audit
 // record.
-func writeOverlay(layer openclaw.Layer, previous, next []byte, operations []string) error {
+func writeOverlay(layer talonpath.Layer, previous, next []byte, operations []string) error {
 	if err := os.MkdirAll(filepath.Dir(layer.Config), 0o700); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
@@ -51,10 +50,21 @@ func writeOverlay(layer openclaw.Layer, previous, next []byte, operations []stri
 	return nil
 }
 
+// writeNativeFromRuntimeJSON converts the gateway's runtime JSON view back
+// into Talon's native TOML before writing it to disk.
+func writeNativeFromRuntimeJSON(layer talonpath.Layer, previousRuntime, nextRuntime []byte, operations []string) error {
+	nextCfg, err := talonconfig.FromRuntimeJSON(nextRuntime)
+	if err != nil {
+		return fmt.Errorf("convert config to native TOML: %w", err)
+	}
+	next := talonconfig.MarshalTOML(nextCfg, talonconfig.MarshalOptions{})
+	return writeOverlay(layer, previousRuntime, next, operations)
+}
+
 // rotateBackups performs a 5-deep rotation of <Config>.bak[.N]. Best-effort —
 // missing siblings are ignored. Anything that fails permission-wise is left
 // alone; we never want a backup-rotation failure to block the primary write.
-func rotateBackups(layer openclaw.Layer) error {
+func rotateBackups(layer talonpath.Layer) error {
 	// drop .bak.4 (the oldest)
 	_ = os.Remove(layer.ConfigBackupPath(configBackupCount - 1))
 	// shift .bak.N → .bak.N+1, descending so we never collide
@@ -105,29 +115,27 @@ func writeFile(path string, data []byte, mode os.FileMode) error {
 }
 
 // AuditRecord is the shape of a single JSONL line in the talon config audit
-// log. It deliberately overlaps with openclaw's record format on the fields
-// that matter for cross-process correlation (configPath, hashes, gateway mode
-// change) without trying to be a strict superset.
+// log.
 type AuditRecord struct {
-	Ts                 string   `json:"ts"`
-	Source             string   `json:"source"`
-	Event              string   `json:"event"`
-	Result             string   `json:"result"`
-	ConfigPath         string   `json:"configPath"`
-	Pid                int      `json:"pid"`
-	Ppid               int      `json:"ppid"`
-	Cwd                string   `json:"cwd,omitempty"`
-	Argv               []string `json:"argv,omitempty"`
-	Operations         []string `json:"operations,omitempty"`
-	PreviousHash       string   `json:"previousHash,omitempty"`
-	NextHash           string   `json:"nextHash,omitempty"`
-	PreviousBytes      int      `json:"previousBytes,omitempty"`
-	NextBytes          int      `json:"nextBytes,omitempty"`
-	GatewayModeBefore  string   `json:"gatewayModeBefore,omitempty"`
-	GatewayModeAfter   string   `json:"gatewayModeAfter,omitempty"`
+	Ts                string   `json:"ts"`
+	Source            string   `json:"source"`
+	Event             string   `json:"event"`
+	Result            string   `json:"result"`
+	ConfigPath        string   `json:"configPath"`
+	Pid               int      `json:"pid"`
+	Ppid              int      `json:"ppid"`
+	Cwd               string   `json:"cwd,omitempty"`
+	Argv              []string `json:"argv,omitempty"`
+	Operations        []string `json:"operations,omitempty"`
+	PreviousHash      string   `json:"previousHash,omitempty"`
+	NextHash          string   `json:"nextHash,omitempty"`
+	PreviousBytes     int      `json:"previousBytes,omitempty"`
+	NextBytes         int      `json:"nextBytes,omitempty"`
+	GatewayModeBefore string   `json:"gatewayModeBefore,omitempty"`
+	GatewayModeAfter  string   `json:"gatewayModeAfter,omitempty"`
 }
 
-func auditRecord(layer openclaw.Layer, previous, next []byte, operations []string, result string) AuditRecord {
+func auditRecord(layer talonpath.Layer, previous, next []byte, operations []string, result string) AuditRecord {
 	cwd, _ := os.Getwd()
 	return AuditRecord{
 		Ts:                time.Now().UTC().Format(time.RFC3339Nano),
@@ -149,7 +157,7 @@ func auditRecord(layer openclaw.Layer, previous, next []byte, operations []strin
 	}
 }
 
-func appendAudit(layer openclaw.Layer, rec AuditRecord) error {
+func appendAudit(layer talonpath.Layer, rec AuditRecord) error {
 	if err := os.MkdirAll(layer.LogsDir(), 0o700); err != nil {
 		return err
 	}
@@ -190,7 +198,7 @@ func jsonString(raw []byte, path string) string {
 
 // IsAuditLogReadable returns nil if the audit log exists and is readable.
 // Used by callers that want to surface an "audit not initialized" hint.
-func IsAuditLogReadable(layer openclaw.Layer) error {
+func IsAuditLogReadable(layer talonpath.Layer) error {
 	f, err := os.Open(layer.ConfigAuditLogPath())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {

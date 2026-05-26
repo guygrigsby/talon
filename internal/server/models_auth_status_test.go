@@ -10,32 +10,34 @@ import (
 	"testing"
 	"time"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonconfig"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
-// newAuthStatusPaths builds a clean two-layer Paths rooted in t.TempDir()
-// so each test gets its own isolated overlay + openclaw layers.
-func newAuthStatusPaths(t *testing.T) openclaw.Paths {
+// newAuthStatusPaths builds a clean Paths rooted in t.TempDir().
+func newAuthStatusPaths(t *testing.T) talonpath.Paths {
 	t.Helper()
 	talonDir := t.TempDir()
-	openclawDir := t.TempDir()
-	return openclaw.Paths{
-		Talon:    openclaw.Layer{Dir: talonDir, Config: filepath.Join(talonDir, "openclaw.json")},
-		Openclaw: openclaw.Layer{Dir: openclawDir, Config: filepath.Join(openclawDir, "openclaw.json")},
+	return talonpath.Paths{
+		Talon: talonpath.Layer{Dir: talonDir, Config: filepath.Join(talonDir, "config.toml")},
 	}
 }
 
-func writeConfig(t *testing.T, layer openclaw.Layer, body string) {
+func writeConfig(t *testing.T, layer talonpath.Layer, body string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(layer.Config), 0o755); err != nil {
 		t.Fatalf("mkdir config: %v", err)
 	}
-	if err := os.WriteFile(layer.Config, []byte(body), 0o644); err != nil {
+	cfg, err := talonconfig.FromRuntimeJSON([]byte(body))
+	if err != nil {
+		t.Fatalf("convert config: %v", err)
+	}
+	if err := os.WriteFile(layer.Config, talonconfig.MarshalTOML(cfg, talonconfig.MarshalOptions{}), 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 }
 
-func writeAuthProfiles(t *testing.T, layer openclaw.Layer, agentID, body string) {
+func writeAuthProfiles(t *testing.T, layer talonpath.Layer, agentID, body string) {
 	t.Helper()
 	dir := filepath.Join(layer.AgentDir(agentID), "agent")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -46,7 +48,7 @@ func writeAuthProfiles(t *testing.T, layer openclaw.Layer, agentID, body string)
 	}
 }
 
-func callAuthStatus(t *testing.T, paths openclaw.Paths, params string) map[string]any {
+func callAuthStatus(t *testing.T, paths talonpath.Paths, params string) map[string]any {
 	t.Helper()
 	r := NewRegistry()
 	NewModelsAuthStatusHandler(paths).Register(r)
@@ -106,7 +108,7 @@ func TestModelsAuthStatus_EmptyInstall(t *testing.T) {
 // status="missing" so the UI's attention card flags it.
 func TestModelsAuthStatus_ConfiguredButUnauthed(t *testing.T) {
 	paths := newAuthStatusPaths(t)
-	writeConfig(t, paths.Talon, `{"models":{"providers":{"openai":{"models":[]}}}}`)
+	writeConfig(t, paths.Talon, `{"models":{"providers":{"openai":{"models":[{"id":"gpt-4o-mini"}]}}}}`)
 
 	got := callAuthStatus(t, paths, `{}`)
 	providers, _ := got["providers"].([]any)
@@ -133,8 +135,8 @@ func TestModelsAuthStatus_ConfiguredButUnauthed(t *testing.T) {
 // matching profile entry with type="api_key" and status="ok".
 func TestModelsAuthStatus_OKWhenKeyPresent(t *testing.T) {
 	paths := newAuthStatusPaths(t)
-	writeConfig(t, paths.Talon, `{"models":{"providers":{"openai":{}}}}`)
-	writeAuthProfiles(t, paths.Openclaw, "main", `{
+	writeConfig(t, paths.Talon, `{"models":{"providers":{"openai":{"models":[{"id":"gpt-4o-mini"}]}}}}`)
+	writeAuthProfiles(t, paths.Talon, "main", `{
 		"version": 1,
 		"profiles": {
 			"openai:default": {"type":"api_key","provider":"openai","key":"sk-test-12345"}
@@ -170,7 +172,7 @@ func TestModelsAuthStatus_OKWhenKeyPresent(t *testing.T) {
 // provider.status are "missing". Whitespace-only keys count as empty.
 func TestModelsAuthStatus_MissingWhenKeyEmpty(t *testing.T) {
 	paths := newAuthStatusPaths(t)
-	writeAuthProfiles(t, paths.Openclaw, "main", `{
+	writeAuthProfiles(t, paths.Talon, "main", `{
 		"version": 1,
 		"profiles": {
 			"openai:default": {"type":"api_key","provider":"openai","key":"   "}
@@ -200,7 +202,7 @@ func TestModelsAuthStatus_MissingWhenKeyEmpty(t *testing.T) {
 // dashboard's "did the user wire this up?" question.
 func TestModelsAuthStatus_SecretRefCountsAsOK(t *testing.T) {
 	paths := newAuthStatusPaths(t)
-	writeAuthProfiles(t, paths.Openclaw, "main", `{
+	writeAuthProfiles(t, paths.Talon, "main", `{
 		"version": 1,
 		"profiles": {
 			"openai:default": {"type":"api_key","provider":"openai","key":"op://Personal/openai/api-key"}
@@ -214,16 +216,9 @@ func TestModelsAuthStatus_SecretRefCountsAsOK(t *testing.T) {
 	}
 }
 
-// talon overlay wins over openclaw layer. A key in ~/.talon shadows
-// a different (or missing) key in ~/.openclaw.
-func TestModelsAuthStatus_TalonOverlayWinsOverOpenclaw(t *testing.T) {
+// Talon auth-profiles are read from the Talon state root.
+func TestModelsAuthStatus_TalonAuthProfiles(t *testing.T) {
 	paths := newAuthStatusPaths(t)
-	writeAuthProfiles(t, paths.Openclaw, "main", `{
-		"version": 1,
-		"profiles": {
-			"openai:default": {"type":"api_key","provider":"openai","key":""}
-		}
-	}`)
 	writeAuthProfiles(t, paths.Talon, "main", `{
 		"version": 1,
 		"profiles": {
@@ -243,8 +238,11 @@ func TestModelsAuthStatus_TalonOverlayWinsOverOpenclaw(t *testing.T) {
 // a provider that appears only in config still surfaces as missing.
 func TestModelsAuthStatus_UnionsConfigAndProfiles(t *testing.T) {
 	paths := newAuthStatusPaths(t)
-	writeConfig(t, paths.Talon, `{"models":{"providers":{"openai":{},"anthropic":{}}}}`)
-	writeAuthProfiles(t, paths.Openclaw, "main", `{
+	writeConfig(t, paths.Talon, `{"models":{"providers":{
+		"openai":{"models":[{"id":"gpt-4o-mini"}]},
+		"anthropic":{"models":[{"id":"claude-sonnet-4-6"}]}
+	}}}`)
+	writeAuthProfiles(t, paths.Talon, "main", `{
 		"version": 1,
 		"profiles": {
 			"openai:default":   {"type":"api_key","provider":"openai","key":"sk-1"},
@@ -265,7 +263,7 @@ func TestModelsAuthStatus_UnionsConfigAndProfiles(t *testing.T) {
 // non-default agent must not leak into "main"'s response.
 func TestModelsAuthStatus_AgentIDScoping(t *testing.T) {
 	paths := newAuthStatusPaths(t)
-	writeAuthProfiles(t, paths.Openclaw, "scratch", `{
+	writeAuthProfiles(t, paths.Talon, "scratch", `{
 		"version": 1,
 		"profiles": {
 			"openai:default": {"type":"api_key","provider":"openai","key":"sk-scratch"}
@@ -286,7 +284,11 @@ func TestModelsAuthStatus_AgentIDScoping(t *testing.T) {
 // provider filter narrows the response to a single entry.
 func TestModelsAuthStatus_ProviderFilter(t *testing.T) {
 	paths := newAuthStatusPaths(t)
-	writeConfig(t, paths.Talon, `{"models":{"providers":{"openai":{},"anthropic":{},"deepseek":{}}}}`)
+	writeConfig(t, paths.Talon, `{"models":{"providers":{
+		"openai":{"models":[{"id":"gpt-4o-mini"}]},
+		"anthropic":{"models":[{"id":"claude-sonnet-4-6"}]},
+		"deepseek":{"models":[{"id":"deepseek-reasoner"}]}
+	}}}`)
 
 	got := callAuthStatus(t, paths, `{"provider":"anthropic"}`)
 	names := providerNames(t, got)
@@ -295,8 +297,8 @@ func TestModelsAuthStatus_ProviderFilter(t *testing.T) {
 	}
 }
 
-// Tolerant param parsing: openclaw's UI sends {} or {refresh:true}
-// today; tests cover nil/null and a garbage-shape body for robustness.
+// Tolerant param parsing: tests cover nil/null, {refresh:true}, and a
+// garbage-shape body for robustness.
 func TestModelsAuthStatus_AcceptsVariedParams(t *testing.T) {
 	paths := newAuthStatusPaths(t)
 	r := NewRegistry()

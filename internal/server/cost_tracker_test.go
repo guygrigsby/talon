@@ -2,7 +2,6 @@ package server
 
 import (
 	"errors"
-	"os"
 	"strings"
 	"testing"
 
@@ -20,14 +19,11 @@ func TestCostTracker_NoCapAllowsAlways(t *testing.T) {
 }
 
 func TestCostTracker_AllowRefusesOverCap(t *testing.T) {
-	paths := readFixture(t, "{}")
-	if err := os.WriteFile(paths.Talon.Config, []byte(`{"agents":{"defaults":{"dailyUsdCap":1.00}}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	paths := readFixture(t, `{"agents":{"defaults":{"dailyUsdCap":1.00}}}`)
 	c := NewCostTracker(paths)
 
 	// Push past the cap with a model whose builtin price applies.
-	// 1M input @ $15 = $15 — well past $1.
+	// 1M input @ $5 = $5 — well past $1.
 	c.Record("main", "anthropic/claude-opus-4-7", provider.Usage{InputTokens: 1_000_000, OutputTokens: 0})
 
 	err := c.Allow("main")
@@ -41,16 +37,13 @@ func TestCostTracker_AllowRefusesOverCap(t *testing.T) {
 	if capErr.AgentID != "main" {
 		t.Errorf("AgentID = %q, want main", capErr.AgentID)
 	}
-	if !strings.Contains(err.Error(), "main") || !strings.Contains(err.Error(), "$15") {
+	if !strings.Contains(err.Error(), "main") || !strings.Contains(err.Error(), "$5") {
 		t.Errorf("error message should include agent + spent: %q", err.Error())
 	}
 }
 
 func TestCostTracker_OtherAgentNotAffected(t *testing.T) {
-	paths := readFixture(t, "{}")
-	if err := os.WriteFile(paths.Talon.Config, []byte(`{"agents":{"defaults":{"dailyUsdCap":1.00}}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	paths := readFixture(t, `{"agents":{"defaults":{"dailyUsdCap":1.00}}}`)
 	c := NewCostTracker(paths)
 	// main hits cap; research shouldn't.
 	c.Record("main", "anthropic/claude-opus-4-7", provider.Usage{InputTokens: 1_000_000})
@@ -63,15 +56,11 @@ func TestCostTracker_OtherAgentNotAffected(t *testing.T) {
 }
 
 func TestCostTracker_RecordHonorsConfigPriceOverride(t *testing.T) {
-	paths := readFixture(t, "{}")
 	// Override deepseek-chat at $100/1M in to trip the cap fast.
-	cfg := `{
+	paths := readFixture(t, `{
 		"agents":{"defaults":{"dailyUsdCap":1.00}},
 		"models":{"deepseek/deepseek-chat":{"priceUsdPer1M":{"in":100.0,"out":100.0}}}
-	}`
-	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	}`)
 	c := NewCostTracker(paths)
 	// 50K input + 50K output @ $100/1M each = $5 + $5 = $10
 	c.Record("main", "deepseek/deepseek-chat", provider.Usage{InputTokens: 50_000, OutputTokens: 50_000})
@@ -81,14 +70,10 @@ func TestCostTracker_RecordHonorsConfigPriceOverride(t *testing.T) {
 }
 
 func TestCostTracker_RecordHonorsDottedModelConfigPriceOverride(t *testing.T) {
-	paths := readFixture(t, "{}")
-	cfg := `{
+	paths := readFixture(t, `{
 		"agents":{"defaults":{"dailyUsdCap":1.00}},
 		"models":{"openai/gpt-5.4-mini":{"priceUsdPer1M":{"in":100.0,"out":100.0}}}
-	}`
-	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	}`)
 	c := NewCostTracker(paths)
 	c.Record("main", "openai/gpt-5.4-mini", provider.Usage{InputTokens: 50_000, OutputTokens: 50_000})
 	if err := c.Allow("main"); err == nil {
@@ -97,10 +82,7 @@ func TestCostTracker_RecordHonorsDottedModelConfigPriceOverride(t *testing.T) {
 }
 
 func TestCostTracker_UnknownModelIsZeroCost(t *testing.T) {
-	paths := readFixture(t, "{}")
-	if err := os.WriteFile(paths.Talon.Config, []byte(`{"agents":{"defaults":{"dailyUsdCap":1.00}}}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	paths := readFixture(t, `{"agents":{"defaults":{"dailyUsdCap":1.00}}}`)
 	c := NewCostTracker(paths)
 	// Unknown model with no config price = 0 cost = never trips cap.
 	for i := 0; i < 10; i++ {

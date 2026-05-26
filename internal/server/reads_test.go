@@ -8,33 +8,43 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
-	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
+	plugin "github.com/guygrigsby/talon/internal/plugin/host"
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
+	"github.com/guygrigsby/talon/internal/talonconfig"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
-// readFixture builds a Paths backed by a temp dir and writes the openclaw
-// layer's openclaw.json. The talon overlay starts empty.
-func readFixture(t *testing.T, openclawJSON string) openclaw.Paths {
+// readFixture builds a Paths backed by a temp Talon state dir.
+func readFixture(t *testing.T, runtimeJSON string) talonpath.Paths {
 	t.Helper()
 	dir := t.TempDir()
 	talonDir := filepath.Join(dir, "talon")
-	openclawDir := filepath.Join(dir, "openclaw")
 	if err := os.MkdirAll(talonDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(openclawDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	openclawCfg := filepath.Join(openclawDir, "openclaw.json")
-	if openclawJSON != "" {
-		if err := os.WriteFile(openclawCfg, []byte(openclawJSON), 0o600); err != nil {
+	cfgPath := filepath.Join(talonDir, "config.toml")
+	if runtimeJSON != "" {
+		cfg, err := talonconfig.FromRuntimeJSON([]byte(runtimeJSON))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(cfgPath, talonconfig.MarshalTOML(cfg, talonconfig.MarshalOptions{}), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	return openclaw.Paths{
-		Talon:    openclaw.Layer{Dir: talonDir, Config: filepath.Join(talonDir, "openclaw.json")},
-		Openclaw: openclaw.Layer{Dir: openclawDir, Config: openclawCfg},
+	return talonpath.Paths{
+		Talon: talonpath.Layer{Dir: talonDir, Config: cfgPath},
+	}
+}
+
+func writeSubagentFixture(t *testing.T, paths talonpath.Paths, name, body string) {
+	t.Helper()
+	dir := paths.Talon.SubagentsDir()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -79,7 +89,23 @@ const fixtureRealConfig = `{
 }`
 
 func TestAgentsList_ResolvesEachAgentModel(t *testing.T) {
-	h := NewReadHandler(readFixture(t, fixtureRealConfig))
+	paths := readFixture(t, fixtureRealConfig)
+	writeSubagentFixture(t, paths, "coding.md", `---
+name: coding
+description: Code-heavy tasks
+model: anthropic/claude-opus-4-7
+tools: [read, grep, edit]
+---
+Use for code-heavy tasks.
+`)
+	writeSubagentFixture(t, paths, "research.md", `---
+name: research
+description: Research and summaries
+model: anthropic/claude-sonnet-4-6
+---
+Use for research and summaries.
+`)
+	h := NewReadHandler(paths)
 	res, ferr := h.handleAgentsList(t.Context(), HandlerCtx{}, nil)
 	if ferr != nil {
 		t.Fatal(ferr)
@@ -112,21 +138,26 @@ func TestAgentsList_ResolvesEachAgentModel(t *testing.T) {
 			t.Errorf("%s: fallbacks len = %d, want 2", id, len(fb))
 		}
 	}
+	if byID["coding"]["kind"] != "subagent" || byID["coding"]["source"] != "subagent-file" {
+		t.Errorf("coding row did not report file-backed subagent: %+v", byID["coding"])
+	}
+	if got := byID["coding"]["tools"].([]string); len(got) != 3 || got[0] != "edit" || got[1] != "grep" || got[2] != "read" {
+		t.Errorf("coding tools = %+v", got)
+	}
 	// Envelope shape.
 	if env["defaultId"] != "main" || env["mainKey"] != "main" || env["scope"] != "per-sender" {
 		t.Errorf("envelope = %+v", env)
 	}
 }
 
-func TestAgentsList_DefaultIDFallsBackToFirstAgentWhenNoMain(t *testing.T) {
-	body := `{"agents":{"list":[{"id":"alpha"},{"id":"beta"}]}}`
-	h := NewReadHandler(readFixture(t, body))
+func TestAgentsList_DefaultIDIsMainFromNativeConfig(t *testing.T) {
+	h := NewReadHandler(readFixture(t, `{"agents":{"defaults":{"model":{"primary":"openai/gpt-4o-mini"}}}}`))
 	res, ferr := h.handleAgentsList(t.Context(), HandlerCtx{}, nil)
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
-	if res.(map[string]any)["defaultId"] != "alpha" {
-		t.Errorf("defaultId = %v, want first agent 'alpha'", res.(map[string]any)["defaultId"])
+	if res.(map[string]any)["defaultId"] != "main" {
+		t.Errorf("defaultId = %v, want main", res.(map[string]any)["defaultId"])
 	}
 }
 
@@ -194,8 +225,34 @@ func TestModelsList_AttachesDottedModelPriceOverride(t *testing.T) {
 		t.Fatalf("got %d models, want 1: %+v", len(models), models)
 	}
 	cost := models[0]["cost"].(map[string]any)
-	if cost["input"].(float64) != 9.0 || cost["output"].(float64) != 90.0 || cost["source"] != "priceUsdPer1M" {
+	if cost["input"].(float64) != 9.0 || cost["output"].(float64) != 90.0 || cost["source"] != "catalog" {
 		t.Errorf("cost override = %+v", cost)
+	}
+}
+
+func TestModelsList_AttachesBuiltinModelPrice(t *testing.T) {
+	h := NewReadHandler(readFixture(t, `{
+		"models": {
+			"providers": {
+				"openai": {
+					"models": [
+						{"id": "gpt-5.4-mini", "name": "GPT-5.4 mini"}
+					]
+				}
+			}
+		}
+	}`))
+	res, ferr := h.handleModelsList(t.Context(), HandlerCtx{}, nil)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	models := res.(map[string]any)["models"].([]map[string]any)
+	if len(models) != 1 {
+		t.Fatalf("got %d models, want 1: %+v", len(models), models)
+	}
+	cost := models[0]["cost"].(map[string]any)
+	if cost["input"].(float64) != 0.75 || cost["output"].(float64) != 4.50 || cost["cacheRead"].(float64) != 0.075 || cost["source"] != "builtin" {
+		t.Errorf("builtin cost = %+v", cost)
 	}
 }
 
@@ -220,7 +277,7 @@ func TestModelsList_IgnoresPluginManifestModels(t *testing.T) {
 	// in the picker — the picker is config-driven only. Discovery
 	// (ListProviderModels RPC) is also off this path by design.
 	h := NewReadHandler(readFixture(t, `{}`))
-	host := plugin.NewHost("")
+	host := plugin.NewHost()
 	if err := host.RegisterInstance(plugin.NewInstance(plugin.InstanceFields{
 		Name: "anthropic",
 		Manifest: &pb.Manifest{
@@ -353,7 +410,7 @@ func TestReadHandler_RegisterAddsAll(t *testing.T) {
 // --- agent.identity.get ----------------------------------------------------
 
 func TestParseIdentityMarkdown_RealFormat(t *testing.T) {
-	// Verbatim from openclaw's IDENTITY.md template + bootstrap.
+	// Representative IDENTITY.md content from the main agent workspace.
 	body := []byte(`# IDENTITY.md - Who Am I?
 
 _Fill this in during your first conversation. Make it yours._
@@ -557,8 +614,8 @@ func TestConfigGet_RedactsKnownSecretLeaves(t *testing.T) {
 }
 
 func TestConfigGet_HashChangesWhenContentChanges(t *testing.T) {
-	h1 := NewReadHandler(readFixture(t, `{"a":1}`))
-	h2 := NewReadHandler(readFixture(t, `{"a":2}`))
+	h1 := NewReadHandler(readFixture(t, `{"gateway":{"port":18789}}`))
+	h2 := NewReadHandler(readFixture(t, `{"gateway":{"port":18790}}`))
 	r1, _ := h1.handleConfigGet(t.Context(), HandlerCtx{}, nil)
 	r2, _ := h2.handleConfigGet(t.Context(), HandlerCtx{}, nil)
 	if r1.(map[string]any)["hash"] == r2.(map[string]any)["hash"] {
@@ -567,12 +624,16 @@ func TestConfigGet_HashChangesWhenContentChanges(t *testing.T) {
 }
 
 func TestConfigGet_ExistsReflectsTalonOverlay(t *testing.T) {
-	// readFixture writes the openclaw layer but never the talon overlay,
-	// so exists should be false until something writes ~/.talon/openclaw.json.
 	h := NewReadHandler(readFixture(t, `{"a":1}`))
 	res, _ := h.handleConfigGet(t.Context(), HandlerCtx{}, nil)
+	if !res.(map[string]any)["exists"].(bool) {
+		t.Errorf("exists should be true when config.toml is present")
+	}
+
+	h = NewReadHandler(readFixture(t, ""))
+	res, _ = h.handleConfigGet(t.Context(), HandlerCtx{}, nil)
 	if res.(map[string]any)["exists"].(bool) {
-		t.Errorf("exists should be false when talon overlay is absent")
+		t.Errorf("exists should be false when config.toml is absent")
 	}
 }
 
@@ -695,9 +756,9 @@ func TestSkillsStatus_NoParamsDefaultsToMainAgent(t *testing.T) {
 }
 
 func TestAgentIdentityGet_NoParamsDefaultsToMain(t *testing.T) {
-	// The openclaw web UI sometimes calls with {} (no sessionKey, no
-	// agentId). Returning BAD_REQUEST silently breaks the chat label
-	// because the UI swallows the error. Default to "main" instead.
+	// The UI may call with {} (no sessionKey, no agentId). Returning
+	// BAD_REQUEST silently breaks the chat label because the UI swallows
+	// the error. Default to "main" instead.
 	dir := t.TempDir()
 	wsDir := filepath.Join(dir, "ws")
 	if err := os.MkdirAll(wsDir, 0o700); err != nil {
@@ -757,16 +818,16 @@ func TestAgentIdentityGet_ExplicitAgentIDWinsOverSessionKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(wsDir, "IDENTITY.md"),
-		[]byte("- **Name:** Coder\n"), 0o600); err != nil {
+		[]byte("- **Name:** Clawdia\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	body := fmt.Sprintf(`{"agents":{"list":[{"id":"main"},{"id":"coding","workspace":%q}]}}`, wsDir)
+	body := fmt.Sprintf(`{"agents":{"list":[{"id":"main","workspace":%q}]}}`, wsDir)
 	h := NewReadHandler(readFixture(t, body))
-	res, ferr := h.handleAgentIdentityGet(t.Context(), HandlerCtx{}, []byte(`{"agentId":"coding","sessionKey":"agent:main:main"}`))
+	res, ferr := h.handleAgentIdentityGet(t.Context(), HandlerCtx{}, []byte(`{"agentId":"main","sessionKey":"agent:missing:missing"}`))
 	if ferr != nil {
 		t.Fatal(ferr)
 	}
-	if res.(map[string]any)["name"] != "Coder" {
-		t.Errorf("expected agentId=coding to win, got %+v", res)
+	if res.(map[string]any)["name"] != "Clawdia" {
+		t.Errorf("expected explicit agentId=main to win, got %+v", res)
 	}
 }

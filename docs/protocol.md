@@ -4,9 +4,9 @@ The protocol used between `internal/gateway/client.go` (talon's CLI client) and
 `internal/server/*` (talon's embedded gateway). Defined in
 `internal/server/protocol.go`. Protocol version: `3`.
 
-The wire shape originated as openclaw-compatible — same handshake, same frame
-types — and the framing is unchanged today. Pure-talon deployments don't need
-openclaw on either side.
+This document describes the legacy WebSocket frame protocol still used by
+some internal tests and compatibility paths. The current UI and CLI are moving
+to the Connect RPC surface.
 
 ## Frames
 
@@ -36,7 +36,7 @@ Error codes (`internal/server/protocol.go`):
 2. **Server emits** `event: connect.challenge` with `{nonce, ts}`. Client must wait for this before sending anything.
 3. **Client sends** `req` with `method: "connect"` and `ConnectParams`:
    - `minProtocol`/`maxProtocol` must include 3.
-   - `client.id`, `client.version`, `client.platform`, `client.mode` (talon currently sends `client.id = "openclaw-tui"` — legacy holdover from the original openclaw-compat era; planned to change to `"talon"`).
+   - `client.id`, `client.version`, `client.platform`, `client.mode`.
    - `role` (default `operator`), `scopes`.
    - Optional `auth.token` / `auth.password` / `auth.bootstrapToken` / `auth.deviceToken`.
 4. Server validates protocol, runs `AuthConfig.Authorize()`, and replies `res` with a `HelloOK` payload: `{type: "hello-ok", protocol, server, features.{methods,events}, snapshot, auth, policy}`.

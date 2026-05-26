@@ -6,7 +6,7 @@ import (
 	"os"
 )
 
-// authProfilesFile is the on-disk shape of openclaw's auth-profiles.json.
+// authProfilesFile is the on-disk shape of Talon's auth-profiles.json.
 // We only decode the fields we use; everything else is ignored.
 type authProfilesFile struct {
 	Version  int                       `json:"version"`
@@ -19,8 +19,8 @@ type authProfileRow struct {
 	Key      string `json:"key,omitempty"` // present for type=api_key
 }
 
-// LoadAPIKey extracts the OpenAI API key from an openclaw-style
-// auth-profiles.json. Sugar over LoadProfileKey with profileID
+// LoadAPIKey extracts the OpenAI API key from auth-profiles.json.
+// Sugar over LoadProfileKey with profileID
 // "openai:default" and expectedProvider "openai".
 func LoadAPIKey(path, profileID string) (string, error) {
 	return LoadProfileKey(path, profileID, "openai")

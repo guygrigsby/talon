@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
 func mkEvents(now time.Time, ages ...time.Duration) []gatewayEvent {
@@ -86,7 +86,7 @@ func TestRecentlyAlerted_FalseAfterCooldown(t *testing.T) {
 
 func TestAppendAndTailGatewayEvents(t *testing.T) {
 	dir := t.TempDir()
-	paths := openclaw.Paths{Talon: openclaw.Layer{Dir: dir}}
+	paths := talonpath.Paths{Talon: talonpath.Layer{Dir: dir}}
 	// Two events.
 	for _, kind := range []string{"start", "start"} {
 		if err := appendGatewayEvent(paths, gatewayEvent{
@@ -110,7 +110,7 @@ func TestAppendAndTailGatewayEvents(t *testing.T) {
 }
 
 func TestTailGatewayEvents_MissingFileReturnsError(t *testing.T) {
-	paths := openclaw.Paths{Talon: openclaw.Layer{Dir: t.TempDir()}}
+	paths := talonpath.Paths{Talon: talonpath.Layer{Dir: t.TempDir()}}
 	if _, err := tailGatewayEvents(paths, 10); err == nil {
 		t.Errorf("expected an error for missing events file (caller treats as 'no history')")
 	}

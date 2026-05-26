@@ -1,13 +1,9 @@
-// Package main — `talon agents bindings`. Read-only listing of
-// channel→agent routing entries from the merged config.
+// Package main implements `talon agents bindings`, a read-only listing of
+// channel-to-agent routing entries from the merged config.
 //
-// openclaw's `agents bindings` walks a richer route table (multiple
-// match shapes: channel id, account id, channel+account pairs).
-// talon today only writes `channels.<id>.agentId` (the configure
-// wizard sets this), so v0 of bindings just reflects that single
-// signal. As we grow more match shapes (account-scoped, hook-based)
-// we'll extend this — keeping the command shape stable so the
-// muscle-memory port from openclaw works.
+// Talon today writes `channels.<id>.agentId` for configured channels.
+// Additional match shapes can extend this command without changing its
+// top-level shape.
 
 package main
 

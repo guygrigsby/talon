@@ -13,7 +13,7 @@ import (
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/netutil"
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/guygrigsby/talon/internal/provider/openai"
 	"github.com/tidwall/gjson"
 )
@@ -155,7 +155,7 @@ func buildLMStudioDisplayName(m lmstudioModelEntry) string {
 
 // lookupLMStudioBaseURLForDiscovery returns the same base URL the
 // chat factory's lookupLMStudioBaseURL would use, but reads only the
-// merged config (no openclaw.Paths needed at the call site here).
+// merged config (no talonpath.Paths needed at the call site here).
 // Defaults match: http://localhost:1234/api/v0, with the
 // loopback-in-container rewrite applied.
 func lookupLMStudioBaseURLForDiscovery(merged []byte) string {
@@ -184,8 +184,8 @@ var httpClientForDiscovery = &http.Client{Transport: http.DefaultTransport}
 // default. Future option: a gateway-level
 // `models.providers.lmstudio.apiKey` config so the key isn't
 // pinned to one agent.
-func resolveLMStudioAuthKey(paths openclaw.Paths) string {
-	authPath := filepath.Join(paths.Openclaw.AgentDir("main"), "agent", "auth-profiles.json")
+func resolveLMStudioAuthKey(paths talonpath.Paths) string {
+	authPath := filepath.Join(paths.Talon.AgentDir("main"), "agent", "auth-profiles.json")
 	key, err := openai.LoadProfileKeyOptional(authPath, "lmstudio:default", "lmstudio")
 	if err != nil {
 		// Malformed profile — log nothing here; the chat factory will
@@ -197,7 +197,7 @@ func resolveLMStudioAuthKey(paths openclaw.Paths) string {
 
 // callDiscoverLMStudio is the seam handleModelsList uses, so tests
 // can stub the discovery without spinning up a real LM Studio.
-var callDiscoverLMStudio = func(ctx context.Context, paths openclaw.Paths, merged []byte) ([]map[string]any, error) {
+var callDiscoverLMStudio = func(ctx context.Context, paths talonpath.Paths, merged []byte) ([]map[string]any, error) {
 	return discoverLMStudioModels(ctx, merged, httpClientForDiscovery, resolveLMStudioAuthKey(paths))
 }
 

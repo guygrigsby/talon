@@ -98,7 +98,7 @@ export function modelKey(m: Pick<ModelEntry, 'provider' | 'id'>): string {
 }
 
 // setModelAlias writes the alias for one model into the talon
-// overlay under agents.defaults.models.<provider/id>.alias. An
+// overlay under agents.defaults.models["<provider/id>"].alias. An
 // empty alias deletes the entry's alias field (passing an empty
 // valueJson which the server interprets as delete).
 //
@@ -111,12 +111,22 @@ export async function setModelAlias(
 	modelID: string,
 	alias: string
 ): Promise<void> {
-	const path = `agents.defaults.models.${provider}/${modelID}.alias`;
+	const path = `agents.defaults.models[${JSON.stringify(`${provider}/${modelID}`)}].alias`;
 	const valueJson = alias.trim() === '' ? '' : JSON.stringify(alias.trim());
 	await getConfigClient().set(
 		create(ConfigSetRequestSchema, {
 			path,
 			valueJson,
+			merge: false
+		})
+	);
+}
+
+export async function setMainDefaultModel(modelID: string): Promise<void> {
+	await getConfigClient().set(
+		create(ConfigSetRequestSchema, {
+			path: 'agents.defaults.model.primary',
+			valueJson: JSON.stringify(modelID.trim()),
 			merge: false
 		})
 	);

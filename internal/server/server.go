@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
-	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
+	"github.com/guygrigsby/talon/internal/talonpath"
+	plugin "github.com/guygrigsby/talon/internal/plugin/host"
 	"github.com/guygrigsby/talon/web"
 )
 
@@ -33,7 +33,7 @@ type Config struct {
 	// Paths, when set, enables the read-only RPCs sourced from the
 	// merged config (agents.list, models.list, config.schema). Leaving
 	// it as the zero value disables those handlers.
-	Paths openclaw.Paths
+	Paths talonpath.Paths
 	// WorkspaceResolver, paired with ToolRunnerFor, enables tool calling
 	// in chat.send. Leaving either nil keeps chat in text-only mode.
 	WorkspaceResolver WorkspaceResolver

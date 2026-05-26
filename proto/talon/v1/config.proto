@@ -6,9 +6,8 @@ option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv
 
 import "talon/v1/common.proto";
 
-// ConfigService surfaces the merged talon config (~/.talon over
-// ~/.openclaw) and the cached config schema, plus write access
-// against the talon overlay.
+// ConfigService surfaces Talon's config and cached config schema, plus
+// write access against native config.
 service ConfigService {
   // Get returns the value at the requested dotted path, or the
   // whole merged config when path is empty.
@@ -16,9 +15,8 @@ service ConfigService {
   // Schema returns the cached config JSON schema (refreshed via
   // `talon config schema --refresh` on the CLI side).
   rpc Schema(ConfigSchemaRequest) returns (JSONPayload);
-  // Set writes value_json at path into the talon overlay. Empty
-  // value_json deletes the path. Always writes the overlay; never
-  // the openclaw layer (which is read-only).
+  // Set writes value_json at path into native config. Empty value_json
+  // deletes the path.
   rpc Set(ConfigSetRequest) returns (JSONPayload);
 }
 

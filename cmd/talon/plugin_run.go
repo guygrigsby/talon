@@ -19,7 +19,7 @@ import (
 
 // pluginConstructors is the dispatch table for 'talon plugin run <name>'.
 // Each entry's constructor is called to create the PluginServer; then
-// pluginrun.Serve handles the gRPC lifecycle.
+// native.Serve handles the gRPC lifecycle.
 var pluginConstructors = map[string]func() (pb.PluginServer, error){
 	"anthropic":     anthropicplug.New,
 	"openai-compat": openaicompat.New,

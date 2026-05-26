@@ -202,7 +202,7 @@
 			{:else if modelsError}
 				<p class="note err t-mono" role="status">{modelsError}</p>
 			{:else}
-				<p class="note t-mono">{modelsLoading ? 'Loading model details…' : 'No pricing configured.'}</p>
+				<p class="note t-mono">{modelsLoading ? 'Loading model details…' : 'No built-in pricing found.'}</p>
 			{/if}
 		{:else}
 			<p class="note t-mono">No active model.</p>

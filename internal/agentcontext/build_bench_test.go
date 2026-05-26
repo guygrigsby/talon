@@ -3,6 +3,7 @@ package agentcontext
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -91,21 +92,7 @@ func repeat(s string, n int) string {
 
 func pad(n int) string {
 	if n < 10 {
-		return "0" + itoa(n)
+		return "0" + strconv.Itoa(n)
 	}
-	return itoa(n)
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for n > 0 {
-		i--
-		buf[i] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[i:])
+	return strconv.Itoa(n)
 }

@@ -1,6 +1,5 @@
-// Package bluebubbles implements the BlueBubbles iMessage channel as a talon plugin library.
-// The subprocess entrypoint (apps/talon-bluebubbles-plugin/main.go) calls New()
-// and pluginrun.Serve() to wire it up.
+// Package bluebubbles implements the BlueBubbles iMessage channel as a Talon
+// plugin. The subprocess entrypoint is `talon plugin run bluebubbles`.
 package bluebubbles
 
 import (
@@ -25,7 +24,6 @@ import (
 
 // defaultWebhookPath is what the BlueBubbles admin UI gets pointed at
 // when the user doesn't override channels.bluebubbles.webhookPath.
-// Matches the openclaw JS plugin's CLI flag default.
 const defaultWebhookPath = "/webhook"
 
 // defaultSendTimeout caps a single /api/v1/message/text round-trip.
@@ -101,11 +99,9 @@ func (s *bluebubblesPlugin) runSend(ctx context.Context, req *pb.RunToolRequest)
 	return &pb.RunToolResponse{Output: fmt.Sprintf("sent to chat %s", args.ChatGUID)}, nil
 }
 
-// channelConfig mirrors the load-bearing subset of the JS plugin's
-// channels.bluebubbles.* schema (extensions/bluebubbles/openclaw.
-// plugin.json). V1 only reads what it uses today; everything else is
-// silently ignored. Adding a feature later means adding its config
-// key here.
+// channelConfig mirrors the load-bearing subset of the BlueBubbles channel
+// config. V1 only reads what it uses today; everything else is silently
+// ignored. Adding a feature later means adding its config key here.
 type channelConfig struct {
 	ServerURL      string   `json:"serverUrl"`
 	Password       string   `json:"password"`
@@ -454,10 +450,10 @@ func sendTimeout(cfg channelConfig) time.Duration {
 // in package-level vars at StartChannel time and read it back here.
 // Mirrors the telegram plugin's tokenForSendFromEnv pattern.
 var (
-	sendStateMu    sync.RWMutex
-	sendServer     string
-	sendPassword   string
-	sendTimeoutVal time.Duration
+	sendStateMu     sync.RWMutex
+	sendServer      string
+	sendPassword    string
+	sendTimeoutVal  time.Duration
 	defaultChatGUID string
 )
 

@@ -42,12 +42,10 @@ func (h *ManifestHolder) Get() *pb.Manifest {
 
 // NewCapabilityInterceptor returns a grpc.UnaryServerInterceptor that
 // gates a per-plugin broker connection against the plugin's current
-// manifest. Unlike the legacy interceptor (which extracts identity
-// from a cookie in metadata), the native broker channel is bound to a
-// specific plugin at AcceptAndServe time, so identity is captured by
-// closure rather than looked up. The manifest is read through holder
-// on each call so LoadPlugin's post-Initialize swap takes effect
-// without re-serving the gRPC server.
+// manifest. The native broker channel is bound to a specific plugin at
+// AcceptAndServe time, so identity is captured by closure. The manifest
+// is read through holder on each call so LoadPlugin's post-Initialize
+// swap takes effect without re-serving the gRPC server.
 //
 // Unknown methods (not in pkgutil.MethodCapability) fail with
 // Internal — that's a programming error, not a runtime failure.

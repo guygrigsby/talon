@@ -1,6 +1,5 @@
-// Package macnotify implements the macOS notification tool as a talon plugin library.
-// The subprocess entrypoint (apps/talon-mac-notify-plugin/main.go) calls New()
-// and pluginrun.Serve() to wire it up.
+// Package macnotify implements the macOS notification tool as a Talon plugin.
+// The subprocess entrypoint is `talon plugin run mac-notify`.
 package macnotify
 
 import (

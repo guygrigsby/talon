@@ -62,8 +62,7 @@ type AgentsServiceClient interface {
 	FilesList(context.Context, *connect.Request[v1.AgentFilesListRequest]) (*connect.Response[v1.JSONPayload], error)
 	// FilesGet returns the content of one per-agent file.
 	FilesGet(context.Context, *connect.Request[v1.AgentFilesGetRequest]) (*connect.Response[v1.JSONPayload], error)
-	// FilesSet writes the content of one per-agent file (talon
-	// overlay only; openclaw layer is read-only).
+	// FilesSet writes the content of one per-agent file.
 	FilesSet(context.Context, *connect.Request[v1.AgentFilesSetRequest]) (*connect.Response[v1.Empty], error)
 	// IdentityGet returns the agent's resolved identity (operator
 	// token + device pairing context for channel routing).
@@ -188,8 +187,7 @@ type AgentsServiceHandler interface {
 	FilesList(context.Context, *connect.Request[v1.AgentFilesListRequest]) (*connect.Response[v1.JSONPayload], error)
 	// FilesGet returns the content of one per-agent file.
 	FilesGet(context.Context, *connect.Request[v1.AgentFilesGetRequest]) (*connect.Response[v1.JSONPayload], error)
-	// FilesSet writes the content of one per-agent file (talon
-	// overlay only; openclaw layer is read-only).
+	// FilesSet writes the content of one per-agent file.
 	FilesSet(context.Context, *connect.Request[v1.AgentFilesSetRequest]) (*connect.Response[v1.Empty], error)
 	// IdentityGet returns the agent's resolved identity (operator
 	// token + device pairing context for channel routing).

@@ -1,12 +1,10 @@
 package tools
 
 // Bash-tool denylist. Defense-in-depth, NOT a sandbox — talon
-// already runs the bash tool inside a Docker container with bind
-// mounts for ~/.openclaw and ~/.talon, which is the real
-// confinement boundary. The denylist exists to refuse a small set
-// of obviously-catastrophic patterns before they reach exec, so
-// an out-of-control agent can't trivially nuke its own state
-// directories or the host's persistent volumes.
+// normally runs the bash tool in a constrained workspace. The denylist
+// exists to refuse a small set of obviously-catastrophic patterns before
+// they reach exec, so an out-of-control agent cannot trivially nuke its
+// own state directories or the host's persistent volumes.
 //
 // Patterns are conservative: they fire on the cases an attentive
 // human would catch in code review, not on every theoretically-

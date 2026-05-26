@@ -9,20 +9,18 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/guygrigsby/talon/internal/talonconfig"
 )
 
-// pluginDepsFixture builds a minimal vendored-extensions tree and a
+// pluginDepsFixture builds a minimal third-party plugin tree and a
 // matching merged-config that points the handler at it. Returns the
 // handler ready for direct .handle*() calls.
 func pluginDepsFixture(t *testing.T) (*PluginDepsHandler, string) {
 	t.Helper()
 	paths := readFixture(t, `{}`)
-	extRoot := filepath.Join(paths.Talon.Dir, "extensions")
+	extRoot := paths.Talon.PluginsDir()
 	if err := os.MkdirAll(extRoot, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	cfg := fmt.Sprintf(`{"plugins":{"bundled":{"path":%q}}}`, extRoot)
-	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return NewPluginDepsHandler(paths), extRoot
@@ -96,66 +94,35 @@ func TestPluginDepsStatus_ReportsPerExtension(t *testing.T) {
 }
 
 func TestPluginDepsStatus_EmptyWhenNoSources(t *testing.T) {
-	// Build a Paths where every layer in the lookup chain is empty:
-	// no talon overlay extensions dir, no openclaw layer at all,
-	// no /opt/extensions. The chain returns no items.
+	// Build a Paths where every optional plugin metadata source is empty.
 	paths := readFixture(t, `{}`)
-	paths.SkipOpenclaw = true
-	if err := os.WriteFile(paths.Talon.Config, []byte(`{}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("TALON_EXTENSIONS_PATH", "")
 
 	h := NewPluginDepsHandler(paths)
-	// Skip if the test box happens to have /opt/extensions populated
-	// (a real dev machine running talon's Docker image locally would).
-	if _, err := os.Stat("/opt/extensions"); err == nil {
-		t.Skip("test env has /opt/extensions populated")
-	}
 	res, ferr := h.handleStatus(t.Context(), HandlerCtx{}, nil)
 	if ferr != nil {
 		t.Fatalf("status: %+v", ferr)
 	}
 	items := res.(map[string]any)["items"].([]pluginDepsStatusItem)
-	// Built-in plugins always surface even when the openclaw lookup
-	// chain is empty — that's the point of the registry. Filter
-	// them out for this test, which is about chain emptiness.
-	openclawOnly := make([]pluginDepsStatusItem, 0)
+	// Built-in plugins always surface. Filter them out for this
+	// test, which is about optional metadata-source emptiness.
+	externalOnly := make([]pluginDepsStatusItem, 0)
 	for _, it := range items {
 		if it.Source != "builtin" {
-			openclawOnly = append(openclawOnly, it)
+			externalOnly = append(externalOnly, it)
 		}
 	}
-	if len(openclawOnly) != 0 {
-		t.Errorf("openclaw items should be empty when no chain sources have content: %+v", openclawOnly)
+	if len(externalOnly) != 0 {
+		t.Errorf("external items should be empty when no sources have content: %+v", externalOnly)
 	}
 }
 
-// TestPluginDepsStatus_LookupChainMergesSources verifies the chain
-// behavior: talon overlay wins over openclaw layer, both win over
-// the bundle.
-func TestPluginDepsStatus_LookupChainMergesSources(t *testing.T) {
+func TestPluginDepsStatus_ListsTalonPluginDir(t *testing.T) {
 	paths := readFixture(t, `{}`)
-	talonExt := filepath.Join(paths.Talon.Dir, "extensions")
-	openclawExt := filepath.Join(paths.Openclaw.Dir, "extensions")
-	bundleExt := filepath.Join(paths.Talon.Dir, "fake-bundle")
-	for _, d := range []string{talonExt, openclawExt, bundleExt} {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	cfg := fmt.Sprintf(`{"plugins":{"bundled":{"path":%q}}}`, bundleExt)
-	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
+	talonExt := paths.Talon.PluginsDir()
+	if err := os.MkdirAll(talonExt, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// "shared" exists in all three layers — talon wins.
 	writeExtension(t, talonExt, "shared", nil, false)
-	writeExtension(t, openclawExt, "shared", map[string]string{"a": "1"}, true)
-	writeExtension(t, bundleExt, "shared", map[string]string{"b": "1"}, true)
-	// "user-only" exists only at the openclaw layer.
-	writeExtension(t, openclawExt, "user-only", nil, false)
-	// "bundled-only" exists only at the bundle layer.
-	writeExtension(t, bundleExt, "bundled-only", nil, false)
 
 	h := NewPluginDepsHandler(paths)
 	res, ferr := h.handleStatus(t.Context(), HandlerCtx{}, nil)
@@ -169,12 +136,6 @@ func TestPluginDepsStatus_LookupChainMergesSources(t *testing.T) {
 	}
 	if bySource["shared"] != "talon" {
 		t.Errorf("shared should resolve to talon, got %q (full=%+v)", bySource["shared"], items)
-	}
-	if bySource["user-only"] != "openclaw" {
-		t.Errorf("user-only should resolve to openclaw, got %q", bySource["user-only"])
-	}
-	if bySource["bundled-only"] != "bundled" {
-		t.Errorf("bundled-only should resolve to bundled, got %q", bySource["bundled-only"])
 	}
 }
 
@@ -258,22 +219,13 @@ func TestPluginDepsInstall_NoPackageJSONIsNoOp(t *testing.T) {
 	}
 }
 
-// TestPluginDepsInstall_CopiesFromBundleBeforeInstall verifies the
-// promotion path: when an extension lives only in the read-only
-// bundle, install copies it into the talon overlay first so npm
-// install lands somewhere persistent.
-func TestPluginDepsInstall_CopiesFromBundleBeforeInstall(t *testing.T) {
+func TestPluginDepsInstall_UsesPluginsDir(t *testing.T) {
 	paths := readFixture(t, `{}`)
-	bundleExt := filepath.Join(paths.Talon.Dir, "fake-bundle")
-	talonExt := filepath.Join(paths.Talon.Dir, "extensions")
-	if err := os.MkdirAll(bundleExt, 0o700); err != nil {
+	talonExt := paths.Talon.PluginsDir()
+	if err := os.MkdirAll(talonExt, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	cfg := fmt.Sprintf(`{"plugins":{"bundled":{"path":%q}}}`, bundleExt)
-	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	writeExtension(t, bundleExt, "needs-deps", map[string]string{"left-pad": "^1.0.0"}, false)
+	writeExtension(t, talonExt, "needs-deps", map[string]string{"left-pad": "^1.0.0"}, false)
 
 	var npmDir string
 	h := NewPluginDepsHandler(paths)
@@ -293,13 +245,11 @@ func TestPluginDepsInstall_CopiesFromBundleBeforeInstall(t *testing.T) {
 	}
 	expectedDir := filepath.Join(talonExt, "needs-deps")
 	if npmDir != expectedDir {
-		t.Errorf("npm should run in talon overlay copy %q, got %q", expectedDir, npmDir)
+		t.Errorf("npm should run in plugin dir %q, got %q", expectedDir, npmDir)
 	}
 	if _, err := os.Stat(filepath.Join(expectedDir, "package.json")); err != nil {
 		t.Errorf("package.json should have been copied to talon overlay: %v", err)
 	}
-	// Source label on the post-install status should report "talon"
-	// since the live copy now lives there.
 	status := envelope["status"].(pluginDepsStatusItem)
 	if status.Source != "talon" {
 		t.Errorf("post-install source should be talon, got %q", status.Source)
@@ -307,26 +257,14 @@ func TestPluginDepsInstall_CopiesFromBundleBeforeInstall(t *testing.T) {
 }
 
 // TestPluginDepsUninstall_RemovesTalonOverlayCopy verifies the
-// uninstall path: when the extension lives in the talon overlay,
-// remove it; the lookup chain may resurface a bundled copy.
+// uninstall path: when the plugin lives in Talon's plugin dir, remove it.
 func TestPluginDepsUninstall_RemovesTalonOverlayCopy(t *testing.T) {
 	paths := readFixture(t, `{}`)
-	talonExt := filepath.Join(paths.Talon.Dir, "extensions")
-	bundleExt := filepath.Join(paths.Talon.Dir, "fake-bundle")
+	talonExt := paths.Talon.PluginsDir()
 	if err := os.MkdirAll(talonExt, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(bundleExt, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	cfg := fmt.Sprintf(`{"plugins":{"bundled":{"path":%q}}}`, bundleExt)
-	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// "anthropic" exists in BOTH talon overlay and bundle. After
-	// uninstall we expect to fall back to the bundle copy.
 	writeExtension(t, talonExt, "anthropic", map[string]string{"x": "1"}, true)
-	writeExtension(t, bundleExt, "anthropic", map[string]string{"x": "1"}, false)
 
 	h := NewPluginDepsHandler(paths)
 	res, ferr := h.handleUninstall(t.Context(), HandlerCtx{}, []byte(`{"name":"anthropic"}`))
@@ -337,28 +275,14 @@ func TestPluginDepsUninstall_RemovesTalonOverlayCopy(t *testing.T) {
 		t.Fatalf("ok flag missing: %+v", res)
 	}
 	if _, err := os.Stat(filepath.Join(talonExt, "anthropic")); !os.IsNotExist(err) {
-		t.Errorf("talon-overlay copy should be gone, stat=%v", err)
-	}
-	status := res.(map[string]any)["status"].(pluginDepsStatusItem)
-	if status.Source != "bundled" {
-		t.Errorf("post-uninstall source should resurface as bundled, got %q", status.Source)
+		t.Errorf("plugin dir copy should be gone, stat=%v", err)
 	}
 }
 
-func TestPluginDepsUninstall_RejectsNonTalonSource(t *testing.T) {
+func TestPluginDepsUninstall_BuiltinIsNoOp(t *testing.T) {
 	paths := readFixture(t, `{}`)
-	bundleExt := filepath.Join(paths.Talon.Dir, "fake-bundle")
-	if err := os.MkdirAll(bundleExt, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	cfg := fmt.Sprintf(`{"plugins":{"bundled":{"path":%q}}}`, bundleExt)
-	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	writeExtension(t, bundleExt, "anthropic", nil, false)
-
 	h := NewPluginDepsHandler(paths)
-	res, ferr := h.handleUninstall(t.Context(), HandlerCtx{}, []byte(`{"name":"anthropic"}`))
+	res, ferr := h.handleUninstall(t.Context(), HandlerCtx{}, []byte(`{"name":"telegram"}`))
 	if ferr != nil {
 		t.Fatalf("uninstall: %+v", ferr)
 	}
@@ -373,40 +297,27 @@ func TestPluginDepsUninstall_RejectsNonTalonSource(t *testing.T) {
 
 func TestPluginDepsStatus_FlagsInUseFromConfig(t *testing.T) {
 	paths := readFixture(t, `{}`)
-	talonExt := filepath.Join(paths.Talon.Dir, "extensions")
+	talonExt := paths.Talon.PluginsDir()
 	if err := os.MkdirAll(talonExt, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	// matrix is enabled directly; discord is configured as a
-	// channel (channels.discord exists) — both should report
-	// inUse=true via the two distinct signal paths the helper
-	// recognizes for npm extensions. telegram exists too, but as
-	// a builtin — its channels.<name> signal goes through a
-	// separate code path. (matrix used here instead of brave
-	// because brave is now also a builtin and would shadow the
-	// npm-extension we're trying to test.)
-	cfg := fmt.Sprintf(`{
+	// matrix is enabled directly. telegram exists too, but as a builtin:
+	// its channels.<name> signal goes through a separate code path.
+	// matrix is used here instead of brave because brave is also a builtin.
+	cfg := `{
 		"plugins": {
-			"bundled": {"path": %q},
 			"entries": {"matrix": {"enabled": true}}
 		},
-		"channels": {
-			"discord":  {"agentId": "main"},
-			"telegram": {"agentId": "main"}
-		}
-	}`, talonExt)
-	if err := os.WriteFile(paths.Talon.Config, []byte(cfg), 0o600); err != nil {
+		"channels": {"telegram": {"agentId": "main"}}
+	}`
+	native, err := talonconfig.FromRuntimeJSON([]byte(cfg))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(paths.Talon.Config, talonconfig.MarshalTOML(native, talonconfig.MarshalOptions{}), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	writeExtension(t, talonExt, "matrix", nil, false)
-	writeExtension(t, talonExt, "discord", map[string]string{"discord.js": "^14.0.0"}, true)
-	// discord needs an openclaw.channel.id in its package.json for
-	// the channels.* signal to match. Re-write its package.json
-	// (writeExtension's helper doesn't include the openclaw block).
-	pkgWithChannel := `{"name":"@openclaw/discord","openclaw":{"channel":{"id":"discord","label":"Discord"}},"dependencies":{"discord.js":"^14.0.0"}}`
-	if err := os.WriteFile(filepath.Join(talonExt, "discord", "package.json"), []byte(pkgWithChannel), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	// idle: an extension that isn't referenced anywhere.
 	writeExtension(t, talonExt, "idle", nil, false)
 
@@ -423,9 +334,6 @@ func TestPluginDepsStatus_FlagsInUseFromConfig(t *testing.T) {
 	if !byName["matrix"].InUse {
 		t.Errorf("matrix should be inUse via plugins.entries: %+v", byName["matrix"])
 	}
-	if !byName["discord"].InUse {
-		t.Errorf("discord should be inUse via channels.discord (npm path): %+v", byName["discord"])
-	}
 	// Builtin telegram has channels.telegram set but no package.json —
 	// the inUse helper recognizes builtin channel plugins by their
 	// kind+name pair (separate code path from the npm extension above).
@@ -435,10 +343,10 @@ func TestPluginDepsStatus_FlagsInUseFromConfig(t *testing.T) {
 	if byName["idle"].InUse {
 		t.Errorf("idle has no config references; should not be inUse")
 	}
-	// npm extensions live in the talon overlay → uninstallable.
+	// Third-party plugin directories live in Talon state and are uninstallable.
 	// Builtin telegram is a shipped binary (not in the overlay), so
 	// the row is intentionally NOT uninstallable.
-	for _, name := range []string{"matrix", "discord", "idle"} {
+	for _, name := range []string{"matrix", "idle"} {
 		if !byName[name].Uninstallable {
 			t.Errorf("%s should be uninstallable (it's in the talon overlay)", name)
 		}

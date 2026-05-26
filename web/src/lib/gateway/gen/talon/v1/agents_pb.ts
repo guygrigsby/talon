@@ -184,8 +184,7 @@ export const AgentsService: GenService<{
     output: typeof JSONPayloadSchema;
   },
   /**
-   * FilesSet writes the content of one per-agent file (talon
-   * overlay only; openclaw layer is read-only).
+   * FilesSet writes the content of one per-agent file.
    *
    * @generated from rpc talon.v1.AgentsService.FilesSet
    */
@@ -229,4 +228,3 @@ export const AgentsService: GenService<{
   },
 }> = /*@__PURE__*/
   serviceDesc(file_talon_v1_agents, 0);
-

@@ -10,7 +10,7 @@ import (
 	goplugin "github.com/hashicorp/go-plugin"
 	"google.golang.org/grpc"
 
-	"github.com/guygrigsby/talon/internal/plugin/legacy"
+	"github.com/guygrigsby/talon/internal/plugin/host"
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 	"github.com/guygrigsby/talon/internal/plugin/pkgutil"
 )
@@ -34,11 +34,11 @@ type LoadOptions struct {
 
 // Spawn launches name via go-plugin (AutoMTLS on), stands up a
 // per-plugin Host gRPC server on the broker, runs Initialize, and
-// returns a registered *legacy.Instance the caller publishes into
-// the shared legacy.Host registry.
+// returns a registered *host.Instance the caller publishes into
+// the shared host.Host registry.
 //
 // Returns the Instance even when the caller never calls
-// legacy.Host.RegisterInstance — the lifecycle watcher inside Spawn
+// host.Host.RegisterInstance — the lifecycle watcher inside Spawn
 // keeps polling client.Exited and invokes the caller-supplied
 // onExit hook when the subprocess goes away. Pass a nil onExit if
 // no cleanup is needed (rare).
@@ -48,7 +48,7 @@ func Spawn(
 	factory HostServerFactory,
 	opts LoadOptions,
 	onExit func(name string),
-) (*legacy.Instance, error) {
+) (*host.Instance, error) {
 	if len(opts.Cmd) == 0 {
 		return nil, fmt.Errorf("plugin %s: empty Cmd", name)
 	}
@@ -126,7 +126,7 @@ func Spawn(
 	}
 	holder.Set(manifest)
 
-	inst := legacy.NewInstance(legacy.InstanceFields{
+	inst := host.NewInstance(host.InstanceFields{
 		Name:     name,
 		Manifest: manifest,
 		Client:   pluginClient,

@@ -6,6 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/guygrigsby/talon/internal/subagents"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
 // SubagentRunner is the indirection that lets the subagent tool invoke
@@ -37,23 +40,66 @@ func withSubagentDepth(ctx context.Context, d int) context.Context {
 
 type subagentTool struct {
 	runner SubagentRunner
+	paths  talonpath.Paths
 }
 
 func (t *subagentTool) Name() string { return "subagent" }
 
 func (t *subagentTool) Description() string {
-	return "Delegate work to another agent. Use when a task is better handled by a specialized agent (e.g. coding for code-heavy tasks, research for summaries). The subagent runs its own multi-turn loop and returns its final reply as a string. Subagent recursion is depth-limited."
+	base := "Delegate work to a specialized subagent when its description matches the task. Pass the exact subagent id and a complete task prompt. The subagent runs its own loop and returns its final reply. Recursion is depth-limited."
+	defs := t.availableSubagents()
+	if len(defs) == 0 {
+		return base
+	}
+	var b strings.Builder
+	b.WriteString(base)
+	b.WriteString(" Available subagents: ")
+	for i, def := range defs {
+		if i > 0 {
+			b.WriteString("; ")
+		}
+		b.WriteString(def.ID)
+		if def.Description != "" {
+			b.WriteString(" - ")
+			b.WriteString(def.Description)
+		}
+		if i == 11 && len(defs) > 12 {
+			b.WriteString("; plus more from the agents list")
+			break
+		}
+	}
+	return b.String()
 }
 
 func (t *subagentTool) ParametersSchema() json.RawMessage {
-	return json.RawMessage(`{
+	agentID := map[string]any{
+		"type":        "string",
+		"description": "Target subagent id from the agents list.",
+	}
+	defs := t.availableSubagents()
+	if len(defs) > 0 {
+		enum := make([]string, 0, len(defs))
+		for _, def := range defs {
+			enum = append(enum, def.ID)
+		}
+		agentID["enum"] = enum
+	}
+	schema := map[string]any{
 		"type": "object",
-		"properties": {
-			"agentId": {"type": "string", "description": "Target agent id (e.g. 'coding', 'research', 'deepwork')."},
-			"prompt":  {"type": "string", "description": "The task or question to hand to the subagent. Be specific."}
+		"properties": map[string]any{
+			"agentId": agentID,
+			"prompt": map[string]any{
+				"type":        "string",
+				"description": "The complete task or question to hand to the subagent.",
+			},
 		},
-		"required": ["agentId", "prompt"]
-	}`)
+		"required": []string{"agentId", "prompt"},
+	}
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		return json.RawMessage(`{"type":"object"}`)
+	}
+	return raw
 }
 
 func (t *subagentTool) Run(ctx context.Context, input json.RawMessage) (string, error) {
@@ -75,4 +121,15 @@ func (t *subagentTool) Run(ctx context.Context, input json.RawMessage) (string, 
 		return "", errors.New("subagent: agentId and prompt are required")
 	}
 	return t.runner.RunInline(withSubagentDepth(ctx, depth+1), p.AgentID, p.Prompt)
+}
+
+func (t *subagentTool) availableSubagents() []subagents.Definition {
+	if t.paths.Talon.Dir == "" {
+		return nil
+	}
+	defs, err := subagents.LoadDir(t.paths.Talon.SubagentsDir())
+	if err != nil {
+		return nil
+	}
+	return defs
 }

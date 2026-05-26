@@ -12,10 +12,9 @@ same WebSocket protocol:
 2. **Embedded gateway server** (`talon gateway run`) — hosts the agent loop,
    tools, memory, channels (Telegram/etc.), and serves the web UI.
 
-talon was originally a fast drop-in backend for the openclaw TypeScript
-runtime. It's now standalone. Some legacy openclaw concepts persist in code
-paths (state-dir layering, `client.id`) and are tracked for migration; new
-work should not assume an openclaw upstream.
+talon is now standalone. The old compatibility runtime, extension tree, and
+multi-workspace subagent model have been removed; new work should follow the
+Talon-owned config and plugin surfaces described in ADRs.
 
 All architecture decisions are recorded with ADRs. Any new large change
 requires a new ADR in docs/adr
@@ -27,7 +26,7 @@ plumbing. The current source tree still contains legacy
 `internal/provider/*`, plugin shims (`internal/plugins/openaicompat`,
 `internal/plugins/anthropic`), and `internal/server/chat.go`'s inline loop —
 all of which mirror upstream primitives and are being deleted per
-`docs/migration-agentcore.md`. **Do not extend the legacy stack.**
+`docs/migration-agentcore.md`. **Do not extend the direct provider stack.**
 
 Default direction for any chat / provider / tool / memory work:
 
@@ -46,35 +45,23 @@ Full per-dep details, scope boundaries, and how they compose:
 `docs/dependencies.md`. Migration progress + remaining cleanup:
 `docs/migration-agentcore.md`.
 
-### Layered config model (load-bearing during migration)
+### Config and State Model
 
-talon's state lives in **two stacked directories** for now:
+Talon's state root is `~/.talon` by default. Override with
+`TALON_STATE_DIR`; override the config file with `TALON_CONFIG_PATH`.
 
-- `~/.openclaw` — legacy state from machines that previously ran openclaw.
-  **talon treats it as read-only.** Pure-talon installs don't need it.
-- `~/.talon` — talon's own state; the only place talon ever writes.
+- `~/.talon/config.toml` is the human-owned config file.
+- The main agent's Markdown context files (`IDENTITY.md`, `SOUL.md`,
+  `AGENTS.md`, `USER.md`) live directly in `~/.talon`.
+- File-backed subagents live in `~/.talon/subagents/*.md`.
+- Third-party gRPC plugin binaries live in `~/.talon/plugins`.
+- Logs, cache, backups, credentials, and generated state have dedicated
+  subdirectories under `~/.talon`.
 
-Reads **merge `~/.talon` over `~/.openclaw`** (talon priority for overlapping
-keys; id-keyed arrays like `agents.list` merge by id). Writes **always target
-the talon overlay** at `~/.talon/talon.json`. The `internal/openclaw/paths.go`
-module is the single source of truth for path resolution; honor
-`TALON_STATE_DIR` and `TALON_CONFIG_PATH`. (`OPENCLAW_STATE_DIR`/
-`OPENCLAW_CONFIG_PATH` env vars are honored only for migration-import flows.)
-
-Two consequences that bite if you forget them:
-
-- The protected-path guard in `Set` checks the **merged view**, not the
-  overlay alone — a write that would shadow legacy entries is refused
-  without `--merge` / `--replace`. `--replace` only bypasses the guard;
-  it cannot delete legacy-layer entries from the merged view (tracked as
-  talon-9ic, "tombstones").
-- `gateway.auth.mode` pruning only removes credentials from the talon
-  overlay. If the legacy layer still has a stale token/password, `Set`
-  returns it in `StaleOpenclawPaths` and the CLI emits a warning. The
-  merged view will keep the legacy value until the user clears it.
-
-The eventual end state is single-source-of-truth `~/.talon` only; the
-overlay is a migration artifact, not the architecture.
+The gateway still adapts native TOML into a JSON-shaped runtime view
+internally while callers are migrated to typed accessors. Do not add new
+long-lived config as dotted JSON paths unless an existing surface requires it;
+prefer typed native config fields and document larger changes with an ADR.
 
 ### Common commands
 

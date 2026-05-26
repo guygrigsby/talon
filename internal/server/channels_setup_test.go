@@ -5,10 +5,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"os"
 	"strings"
 	"testing"
 
+	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/telegram"
 	"github.com/tidwall/gjson"
 )
@@ -71,6 +71,10 @@ func newFakeTelegramServer(t *testing.T) *fakeTelegramServer {
 	t.Cleanup(srv.httpsrv.Close)
 	t.Cleanup(telegram.SetAPIBase(srv.httpsrv.URL))
 	return srv
+}
+
+func fakeSecretStore(_ context.Context, target, _ string) (string, error) {
+	return "keychain://" + target + "/talon", nil
 }
 
 func TestChannelsTelegramVerify_OK(t *testing.T) {
@@ -143,7 +147,9 @@ func TestChannelsTelegramCaptureSender_OK(t *testing.T) {
 func TestChannelsTelegramPersist_WritesConfigAndConfirms(t *testing.T) {
 	srv := newFakeTelegramServer(t)
 	paths := readFixture(t, "{}")
-	h := NewChannelsSetupHandler(paths).WithPluginCmd([]string{"/usr/bin/telegram-plugin-test"})
+	h := NewChannelsSetupHandler(paths).
+		WithPluginCmd([]string{"/usr/bin/telegram-plugin-test"}).
+		WithSecretStore(fakeSecretStore)
 
 	params := mustJSON(t, map[string]any{
 		"token":    "TKN",
@@ -163,13 +169,12 @@ func TestChannelsTelegramPersist_WritesConfigAndConfirms(t *testing.T) {
 		t.Errorf("happy path should not emit confirmWarning, got: %v", got["confirmWarning"])
 	}
 
-	// Verify the config landed in the talon overlay (the only layer
-	// talon writes to).
-	raw, err := os.ReadFile(paths.Talon.Config)
+	// Verify the config landed in the runtime view the gateway uses.
+	raw, err := config.MergedBytes(paths)
 	if err != nil {
-		t.Fatalf("read overlay config: %v", err)
+		t.Fatalf("read merged config: %v", err)
 	}
-	if got := gjson.GetBytes(raw, "channels.telegram.botToken").Str; got != "TKN" {
+	if got := gjson.GetBytes(raw, "channels.telegram.botToken").Str; got != "keychain://talon.channels.telegram.botToken/talon" {
 		t.Errorf("botToken not persisted: %q", got)
 	}
 	if got := gjson.GetBytes(raw, "channels.telegram.allowFrom.0").Str; got != "555" {
@@ -184,9 +189,6 @@ func TestChannelsTelegramPersist_WritesConfigAndConfirms(t *testing.T) {
 	if !gjson.GetBytes(raw, "plugins.entries.telegram.enabled").Bool() {
 		t.Errorf("plugins.entries.telegram.enabled should be true: %s", raw)
 	}
-	if got := gjson.GetBytes(raw, "plugins.entries.telegram.cmd.0").Str; got != "/usr/bin/telegram-plugin-test" {
-		t.Errorf("plugin cmd not persisted with override: %q", got)
-	}
 
 	// Confirmation DM was sent to the captured chat id.
 	if srv.lastSend == nil {
@@ -200,13 +202,13 @@ func TestChannelsTelegramPersist_WritesConfigAndConfirms(t *testing.T) {
 func TestChannelsTelegramPersist_DefaultsAgentToMain(t *testing.T) {
 	newFakeTelegramServer(t)
 	paths := readFixture(t, "{}")
-	h := NewChannelsSetupHandler(paths)
+	h := NewChannelsSetupHandler(paths).WithSecretStore(fakeSecretStore)
 
 	params := mustJSON(t, map[string]any{"token": "TKN", "senderId": 42})
 	if _, ferr := h.handlePersist(context.Background(), HandlerCtx{}, params); ferr != nil {
 		t.Fatalf("persist: %+v", ferr)
 	}
-	raw, _ := os.ReadFile(paths.Talon.Config)
+	raw, _ := config.MergedBytes(paths)
 	if got := gjson.GetBytes(raw, "channels.telegram.agentId").Str; got != "main" {
 		t.Errorf("agentId should default to main, got %q", got)
 	}
@@ -215,7 +217,7 @@ func TestChannelsTelegramPersist_DefaultsAgentToMain(t *testing.T) {
 func TestChannelsTelegramPersist_FallsBackChatIDToSender(t *testing.T) {
 	srv := newFakeTelegramServer(t)
 	paths := readFixture(t, "{}")
-	h := NewChannelsSetupHandler(paths)
+	h := NewChannelsSetupHandler(paths).WithSecretStore(fakeSecretStore)
 
 	// chatId omitted; senderId should be used as the confirmation
 	// target. (1:1 DMs have chat.id == from.id.)
@@ -232,7 +234,7 @@ func TestChannelsTelegramPersist_ConfirmationFailureNonFatal(t *testing.T) {
 	srv := newFakeTelegramServer(t)
 	srv.sendMessageError = http.StatusBadRequest
 	paths := readFixture(t, "{}")
-	h := NewChannelsSetupHandler(paths)
+	h := NewChannelsSetupHandler(paths).WithSecretStore(fakeSecretStore)
 
 	params := mustJSON(t, map[string]any{"token": "TKN", "senderId": 1})
 	res, ferr := h.handlePersist(context.Background(), HandlerCtx{}, params)
@@ -247,8 +249,8 @@ func TestChannelsTelegramPersist_ConfirmationFailureNonFatal(t *testing.T) {
 		t.Errorf("expected confirmWarning surfaced, got %v", got)
 	}
 	// Config still written despite the DM error.
-	raw, _ := os.ReadFile(paths.Talon.Config)
-	if got := gjson.GetBytes(raw, "channels.telegram.botToken").Str; got != "TKN" {
+	raw, _ := config.MergedBytes(paths)
+	if got := gjson.GetBytes(raw, "channels.telegram.botToken").Str; got != "keychain://talon.channels.telegram.botToken/talon" {
 		t.Errorf("config write should not be reverted by DM failure: %q", got)
 	}
 }
@@ -276,4 +278,3 @@ func TestChannelsTelegramPersist_RejectsMissingFields(t *testing.T) {
 		})
 	}
 }
-

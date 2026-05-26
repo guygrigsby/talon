@@ -12,10 +12,8 @@
 //   - True process isolation: plugins crash without taking the test
 //     harness down, and filesystem side effects stay inside the
 //     container.
-//   - Future-proofing: the openclaw Node.js compat shim (talon-o0h)
-//     ships as a separate runtime; the same Dockerfile.test will grow
-//     a Node toolchain layer when that lands, and the harness API
-//     stays unchanged.
+//   - Native plugin coverage: tests exercise the same subprocess
+//     boundary the production gateway uses.
 //
 // Tests that use this package run under -tags=e2e or by leaving the
 // build tag off and skipping when Docker isn't reachable. Either path
@@ -37,6 +35,8 @@ import (
 
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+
+	"github.com/guygrigsby/talon/internal/talonconfig"
 )
 
 // Gateway is one running talon-gateway container plus its log buffer.
@@ -57,14 +57,13 @@ type Gateway struct {
 // GatewayOpts is the per-test configuration. Two fields users typically
 // care about:
 //
-//	ConfigJSON: the openclaw.json bytes mounted as TALON_STATE_DIR's
-//	            config. Tests build this per-scenario (which plugins
-//	            are enabled, which agents, which channels).
+//	ConfigJSON: a runtime-shaped JSON fixture converted to config.toml
+//	            before mounting. Tests build this per-scenario.
 //
 //	ExtraCmd:   appended to the entrypoint's default CMD. Useful for
 //	            --token, --tailscale, etc. when a test needs them.
 type GatewayOpts struct {
-	// ConfigJSON is the bytes of openclaw.json. Required.
+	// ConfigJSON is a runtime-shaped JSON fixture. Required.
 	ConfigJSON []byte
 
 	// ExtraCmd appends extra args to the gateway run invocation.
@@ -159,6 +158,11 @@ func StartGateway(t *testing.T, opts GatewayOpts) *Gateway {
 	if opts.ConfigJSON == nil {
 		t.Fatal("StartGateway: opts.ConfigJSON is required")
 	}
+	cfg, err := talonconfig.FromRuntimeJSON(opts.ConfigJSON)
+	if err != nil {
+		t.Fatalf("StartGateway: convert fixture config: %v", err)
+	}
+	configTOML := talonconfig.MarshalTOML(cfg, talonconfig.MarshalOptions{})
 
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -186,13 +190,11 @@ func StartGateway(t *testing.T, opts GatewayOpts) *Gateway {
 			Cmd:          cmd,
 			Env: map[string]string{
 				"TALON_STATE_DIR": "/root/.talon",
-				// SkipOpenclaw is implicit — no /root/.openclaw exists
-				// in the image, so the merged view is talon-only.
 			},
 			Files: []testcontainers.ContainerFile{
 				{
-					Reader:            strings.NewReader(string(opts.ConfigJSON)),
-					ContainerFilePath: "/root/.talon/openclaw.json",
+					Reader:            strings.NewReader(string(configTOML)),
+					ContainerFilePath: "/root/.talon/config.toml",
 					FileMode:          0644,
 				},
 			},

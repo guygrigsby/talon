@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -56,10 +57,10 @@ type Update struct {
 }
 
 type Message struct {
-	MessageID int64 `json:"message_id"`
-	Date      int64 `json:"date"`
-	Chat      Chat  `json:"chat"`
-	From      *User `json:"from"`
+	MessageID int64  `json:"message_id"`
+	Date      int64  `json:"date"`
+	Chat      Chat   `json:"chat"`
+	From      *User  `json:"from"`
 	Text      string `json:"text"`
 }
 
@@ -90,11 +91,11 @@ func GetMe(ctx context.Context, token string) (*BotInfo, error) {
 	endpoint := fmt.Sprintf("%s/bot%s/getMe", APIBase, token)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, err
+		return nil, sanitizeBotAPIError(err)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, sanitizeBotAPIError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -181,11 +182,11 @@ func GetUpdates(ctx context.Context, token string, offset int64, timeoutSec int)
 	endpoint := fmt.Sprintf("%s/bot%s/getUpdates?%s", APIBase, token, q.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return nil, err
+		return nil, sanitizeBotAPIError(err)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, sanitizeBotAPIError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -225,11 +226,11 @@ func sendMessage(ctx context.Context, token string, chatID int64, text, parseMod
 	endpoint := fmt.Sprintf("%s/bot%s/sendMessage?%s", APIBase, token, q.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, nil)
 	if err != nil {
-		return err
+		return sanitizeBotAPIError(err)
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return err
+		return sanitizeBotAPIError(err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode/100 != 2 {
@@ -244,4 +245,48 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
+}
+
+type safeBotAPIError struct {
+	err error
+	msg string
+}
+
+func (e *safeBotAPIError) Error() string { return e.msg }
+func (e *safeBotAPIError) Unwrap() error { return e.err }
+
+func sanitizeBotAPIError(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &safeBotAPIError{
+		err: err,
+		msg: redactBotToken(err.Error()),
+	}
+}
+
+func redactBotToken(s string) string {
+	const marker = "/bot"
+	var out strings.Builder
+	for {
+		idx := strings.Index(s, marker)
+		if idx < 0 {
+			out.WriteString(s)
+			return out.String()
+		}
+		out.WriteString(s[:idx+len(marker)])
+		rest := s[idx+len(marker):]
+		if rest == "" {
+			return out.String()
+		}
+		end := strings.IndexAny(rest, `/?"& `)
+		if end < 0 {
+			out.WriteString("<redacted>")
+			return out.String()
+		}
+		if end > 0 {
+			out.WriteString("<redacted>")
+		}
+		s = rest[end:]
+	}
 }

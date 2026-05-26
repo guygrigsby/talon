@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/tidwall/gjson"
 	"golang.org/x/text/language"
@@ -49,7 +49,7 @@ type SchemaEnvelope struct {
 // LoadCachedSchema reads the cached schema for the talon layer, parses it
 // with jsonschema, and returns the compiled validator + the envelope
 // (carrying generatedAt for display).
-func LoadCachedSchema(p openclaw.Paths) (*jsonschema.Schema, *SchemaEnvelope, error) {
+func LoadCachedSchema(p talonpath.Paths) (*jsonschema.Schema, *SchemaEnvelope, error) {
 	path := p.Talon.SchemaCachePath()
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -92,7 +92,7 @@ func compileSchema(raw []byte) (*jsonschema.Schema, error) {
 // cache directory. raw must be a JSON object containing at least a "schema"
 // field; we store the whole envelope as-is so callers can preserve other
 // fields (e.g. generatedAt).
-func WriteSchemaCache(p openclaw.Paths, raw []byte) error {
+func WriteSchemaCache(p talonpath.Paths, raw []byte) error {
 	if !json.Valid(raw) {
 		return fmt.Errorf("schema response is not valid JSON")
 	}
@@ -123,7 +123,7 @@ func WriteSchemaCache(p openclaw.Paths, raw []byte) error {
 // ValidateMerged validates the merged config against the cached schema.
 // Returns ErrSchemaNotCached when no cache exists; the caller decides
 // whether to fall back to syntax-only validation.
-func ValidateMerged(p openclaw.Paths) (*ValidationResult, error) {
+func ValidateMerged(p talonpath.Paths) (*ValidationResult, error) {
 	merged, err := MergedBytes(p)
 	if err != nil {
 		return nil, err

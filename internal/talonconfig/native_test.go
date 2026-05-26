@@ -5,13 +5,14 @@ import (
 	"testing"
 )
 
-func TestFromLegacyJSON_MapsCoreConfig(t *testing.T) {
-	cfg, report, err := FromLegacyJSON([]byte(`{
+func TestFromOpenClawJSON_MapsCoreConfig(t *testing.T) {
+	cfg, report, err := FromOpenClawJSON([]byte(`{
 		"gateway": {"mode": "local", "bind": "loopback", "port": 18789, "auth": {"mode": "token", "token": "literal-token"}},
 		"agents": {
 			"defaults": {
 				"model": {"primary": "openai/gpt-5.4-mini", "fallbacks": ["anthropic/claude-opus-4-7"]},
 				"workspace": "/tmp/main",
+				"dailyUsdCap": 12.5,
 				"models": {"openai/gpt-5.4-mini": {"alias": "mini"}}
 			},
 			"list": [
@@ -19,9 +20,12 @@ func TestFromLegacyJSON_MapsCoreConfig(t *testing.T) {
 				{"id": "coding", "name": "Coding", "model": "deepseek/deepseek-chat", "workspace": "/tmp/should-not-copy"}
 			]
 		},
-		"models": {"providers": {"openai": {"api": "responses", "baseUrl": "https://api.openai.com/v1", "models": [
+		"models": {
+			"openai/gpt-5.4-mini": {"priceUsdPer1M": {"in": 0.25, "out": 2.0}},
+			"providers": {"openai": {"api": "responses", "baseUrl": "https://api.openai.com/v1", "models": [
 			{"id": "gpt-4o-mini", "name": "GPT-4o mini", "contextWindow": 128000, "maxTokens": 16384, "input": ["text"], "reasoning": false, "cost": {"input": 0.15, "output": 0.6}}
-		]}}},
+		]}}
+		},
 		"plugins": {"entries": {"openai-compat": {"enabled": true, "config": {"providers": {"openai": {"apiKey": "op://vault/openai/key"}}}}}},
 		"channels": {"telegram": {"enabled": true, "botToken": "123:secret", "allowFrom": ["42"], "groups": {"*": {"requireMention": true}}}},
 		"memory": {"enabled": true}
@@ -35,14 +39,15 @@ func TestFromLegacyJSON_MapsCoreConfig(t *testing.T) {
 	if cfg.Agent.Workspace != "/tmp/main-agent" {
 		t.Fatalf("main workspace = %q", cfg.Agent.Workspace)
 	}
-	if len(cfg.Subagents) != 1 || cfg.Subagents[0].ID != "coding" || cfg.Subagents[0].Model != "deepseek/deepseek-chat" {
-		t.Fatalf("subagents = %+v", cfg.Subagents)
-	}
-	if cfg.Subagents[0].Name != "Coding" {
-		t.Fatalf("subagent name = %q", cfg.Subagents[0].Name)
+	if cfg.Agent.DailyUSDCap != 12.5 {
+		t.Fatalf("daily cap = %v", cfg.Agent.DailyUSDCap)
 	}
 	if len(cfg.Models.Providers) != 1 || cfg.Models.Providers["openai"].APIKey != "op://vault/openai/key" {
 		t.Fatalf("providers = %+v", cfg.Models.Providers)
+	}
+	openaiModels := cfg.Models.Providers["openai"].Models
+	if len(openaiModels) != 2 {
+		t.Fatalf("openai models = %+v", openaiModels)
 	}
 	if !cfg.Telegram.Enabled || cfg.Telegram.BotToken == "" || len(cfg.Telegram.AllowFrom) != 1 {
 		t.Fatalf("telegram = %+v", cfg.Telegram)
@@ -52,11 +57,11 @@ func TestFromLegacyJSON_MapsCoreConfig(t *testing.T) {
 	}
 }
 
-func TestMarshalTOML_RedactsLiteralSecretsAndDropsSubagentWorkspace(t *testing.T) {
-	cfg, _, err := FromLegacyJSON([]byte(`{
+func TestMarshalTOML_RedactsLiteralSecretsAndDropsSubagentConfig(t *testing.T) {
+	cfg, _, err := FromOpenClawJSON([]byte(`{
 		"gateway": {"auth": {"mode": "token", "token": "literal-token"}},
 		"agents": {"defaults": {"model": {"primary": "openai/gpt-5.4-mini"}}, "list": [
-			{"id": "coding", "model": "deepseek/deepseek-chat", "workspace": "/tmp/legacy-workspace"}
+			{"id": "coding", "model": "deepseek/deepseek-chat", "workspace": "/tmp/old-workspace"}
 		]},
 		"plugins": {"entries": {
 			"brave": {"config": {"webSearch": {"apiKey": "literal-brave"}}},
@@ -69,32 +74,53 @@ func TestMarshalTOML_RedactsLiteralSecretsAndDropsSubagentWorkspace(t *testing.T
 	}
 	out := string(MarshalTOML(cfg, MarshalOptions{RedactSecrets: true}))
 	for _, want := range []string{
-		`auth_token_ref = "<redacted:literal>"`,
-		`bot_token_ref = "<redacted:literal>"`,
+		`# auth_token_ref omitted: plaintext secrets must be moved to 1Password or the OS keychain`,
+		`# bot_token_ref omitted: plaintext secrets must be moved to 1Password or the OS keychain`,
 		`api_key_ref = "op://vault/openai/key"`,
-		`web_search_api_key_ref = "<redacted:literal>"`,
-		`[[subagents]]`,
+		`# web_search_api_key_ref omitted: plaintext secrets must be moved to 1Password or the OS keychain`,
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("TOML missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "/tmp/legacy-workspace") {
-		t.Fatalf("subagent workspace leaked into native config:\n%s", out)
+	for _, bad := range []string{`literal-token`, `literal-brave`, `123:secret`} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("literal secret leaked into redacted TOML as %q:\n%s", bad, out)
+		}
+	}
+	for _, bad := range []string{`[[subagents]]`, "/tmp/old-workspace", "deepseek/deepseek-chat"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("old subagent config leaked into native TOML as %q:\n%s", bad, out)
+		}
 	}
 	parsed, err := ReadTOMLBytes([]byte(out))
 	if err != nil {
 		t.Fatalf("viper should parse generated TOML: %v\n%s", err, out)
 	}
-	if parsed.Gateway.AuthToken != "<redacted:literal>" {
+	if parsed.Gateway.AuthToken != "" {
 		t.Fatalf("parsed auth token = %q", parsed.Gateway.AuthToken)
 	}
-	if parsed.Telegram.BotToken != "<redacted:literal>" {
+	if parsed.Telegram.BotToken != "" {
 		t.Fatalf("parsed telegram token = %q", parsed.Telegram.BotToken)
 	}
 }
 
-func TestToLegacyJSON_UsesFallbackForRedactedSecretsAndDropsSubagentWorkspace(t *testing.T) {
+func TestFromOpenClawJSON_NormalizesOldWorkspaceRoot(t *testing.T) {
+	cfg, _, err := FromOpenClawJSON([]byte(`{
+		"agents": {
+			"defaults": {"workspace": "~/.talon/workspace"},
+			"list": [{"id": "main", "workspace": "/Users/example/.talon/workspace"}]
+		}
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.Workspace != "/Users/example/.talon" {
+		t.Fatalf("workspace = %q", cfg.Agent.Workspace)
+	}
+}
+
+func TestToRuntimeJSON_UsesFallbackForRedactedSecretsAndDropsSubagentConfig(t *testing.T) {
 	cfg, err := ReadTOMLBytes([]byte(`
 [gateway]
 mode = "local"
@@ -106,12 +132,6 @@ auth_token_ref = "<redacted:literal>"
 [agent]
 model = "openai/gpt-5.4-mini"
 workspace = "/tmp/main"
-tools_profile = "full"
-
-[[subagents]]
-id = "coding"
-name = "Coding"
-model = "anthropic/claude-opus-4-7"
 tools_profile = "full"
 
 [tools]
@@ -148,12 +168,11 @@ require_mention = true
 enabled = ["anthropic", "brave", "openai-compat"]
 deny = ["bonjour"]
 load_paths = ["/plugins"]
-legacy_openclaw_shim = true
 `))
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, err := ToLegacyJSON(cfg, []byte(`{
+	out, err := ToRuntimeJSON(cfg, []byte(`{
 		"gateway": {"auth": {"token": "gateway-secret"}},
 		"agents": {"list": [{"id": "coding", "workspace": "/tmp/should-not-survive"}]},
 		"plugins": {"entries": {
@@ -169,7 +188,7 @@ legacy_openclaw_shim = true
 	text := string(out)
 	for _, bad := range []string{redactedLiteral, "/tmp/should-not-survive"} {
 		if strings.Contains(text, bad) {
-			t.Fatalf("legacy output contains %q:\n%s", bad, text)
+			t.Fatalf("runtime output contains %q:\n%s", bad, text)
 		}
 	}
 	for _, want := range []string{
@@ -181,7 +200,7 @@ legacy_openclaw_shim = true
 		`"op://vault/anthropic/key"`,
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("legacy output missing %q:\n%s", want, text)
+			t.Fatalf("runtime output missing %q:\n%s", want, text)
 		}
 	}
 	if strings.Contains(text, `"workspace":"/tmp/should-not-survive"`) {

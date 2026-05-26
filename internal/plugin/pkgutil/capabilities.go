@@ -7,10 +7,8 @@ import (
 )
 
 // MethodCapability is the gRPC-method-name -> required-capability map
-// the Host-service interceptors gate against. Both the legacy and the
-// native plugin hosts read from this single source so a new Host RPC
-// is gated the same way regardless of which transport spawned the
-// calling plugin.
+// the Host-service interceptors gate against. Keep new Host RPCs here
+// so plugin callbacks all use one authorization contract.
 //
 // The map is intentionally closed: an unmapped method MUST be rejected
 // by the interceptor as a programming error rather than silently

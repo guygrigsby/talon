@@ -39,7 +39,7 @@ import (
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 	"github.com/guygrigsby/talon/internal/provider"
 	"github.com/guygrigsby/talon/internal/provider/openai"
@@ -122,13 +122,13 @@ type modelCacheEntry struct {
 // the auth-status RPC surfaces the missing key on the FE; the
 // plugin's job is just to register what's reachable today.
 func New() (pb.PluginServer, error) {
-	paths := openclaw.DefaultPaths()
+	paths := talonpath.DefaultPaths()
 	merged, err := config.MergedBytes(paths)
 	if err != nil {
 		return nil, fmt.Errorf("openai-compat: read merged config: %w", err)
 	}
 
-	authPath := filepath.Join(os.Getenv("HOME"), ".openclaw", "agents", "main", "agent", "auth-profiles.json")
+	authPath := filepath.Join(paths.Talon.AgentDir("main"), "agent", "auth-profiles.json")
 
 	providers := map[string]*providerEntry{}
 

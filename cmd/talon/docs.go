@@ -1,16 +1,6 @@
 package main
 
-// `talon docs` — minimal port of openclaw's docs-search command.
-//
-// openclaw shells out to `mcporter call <SEARCH_TOOL> ...` to hit a
-// hosted MCP search endpoint. That's a runtime dep we'd rather not
-// take on yet (talon-578, plus it's openclaw's gated server). The v0
-// version surfaces the docs URL and a clickable per-query search
-// link; if/when we want richer in-terminal results we can add the
-// MCP shell-out behind a flag.
-//
-// Output style mirrors the openclaw command's no-args branch so
-// muscle-memory ports cleanly between the two CLIs.
+// `talon docs` prints links into Talon's in-repo docs.
 
 import (
 	"fmt"
@@ -20,14 +10,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const docsBaseURL = "https://docs.openclaw.ai"
+const docsBaseURL = "https://github.com/guygrigsby/talon/tree/main/docs"
 
 func docsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "docs [query...]",
-		Short: "Open or search the OpenClaw docs",
-		Long: `Print a link to the OpenClaw docs site, or — when given a query —
-a search link with the query pre-filled.
+		Short: "Open or search the Talon docs",
+		Long: `Print a link to the Talon docs, or when given a query print a
+GitHub search link scoped to the docs directory.
 
   talon docs                  # show the docs URL
   talon docs gateway auth     # search link for "gateway auth"`,
@@ -39,7 +29,7 @@ a search link with the query pre-filled.
 				fmt.Fprintln(cmd.OutOrStdout(), "Search: talon docs \"your query\"")
 				return nil
 			}
-			searchURL := docsBaseURL + "/?q=" + url.QueryEscape(query)
+			searchURL := "https://github.com/guygrigsby/talon/search?q=" + url.QueryEscape(query) + "&type=code"
 			fmt.Fprintf(cmd.OutOrStdout(), "Search: %s\n", searchURL)
 			return nil
 		},

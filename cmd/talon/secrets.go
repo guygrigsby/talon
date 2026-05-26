@@ -1,22 +1,10 @@
 // Package main — `talon secrets` command surface.
 //
 // `talon secrets ls`       — audit which sensitive paths in your
-//                            merged config are LITERAL plaintext
-//                            vs. already moved to a reference
-//                            (op://, keychain://). The output is
-//                            the punch list for migration.
 //
-// Future subcommands (this commit ships ls only, migrate +
-// keychain-bootstrap follow):
-//   `talon secrets migrate <path>`        — move an on-disk secret
-//                                           into 1Password and
-//                                           replace it with op://...
-//   `talon secrets keychain-bootstrap`    — store the 1P service-
-//                                           account token in the
-//                                           macOS keychain so the
-//                                           op CLI can authenticate
-//                                           non-interactively.
-
+//	merged config are LITERAL plaintext
+//	vs. already moved to a secret-store
+//	reference (op://, keychain://).
 package main
 
 import (
@@ -35,11 +23,9 @@ import (
 func secretsCmd() *cobra.Command {
 	c := &cobra.Command{
 		Use:   "secrets",
-		Short: "Inspect and migrate on-disk secrets",
+		Short: "Inspect on-disk secret references",
 	}
 	c.AddCommand(secretsAuditCmd())
-	c.AddCommand(secretsMigrateCmd())
-	c.AddCommand(secretsKeychainBootstrapCmd())
 	c.AddCommand(secretsReloadCmd())
 	return c
 }
@@ -69,7 +55,6 @@ func secretsAuditCmd() *cobra.Command {
 				return fmt.Errorf("read merged config: %w", err)
 			}
 			entries := auditSecrets(merged)
-			entries = append(entries, auditFileSecrets(paths.Openclaw.Dir)...)
 			if flagJSON {
 				out, _ := json.MarshalIndent(entries, "", "  ")
 				fmt.Fprintln(cmd.OutOrStdout(), string(out))
@@ -94,9 +79,7 @@ func secretsAuditCmd() *cobra.Command {
 			}
 			if anyLiteral {
 				fmt.Fprintln(cmd.OutOrStdout(), "")
-				fmt.Fprintln(cmd.OutOrStdout(), "Plaintext secrets detected. To migrate to the macOS keychain:")
-				fmt.Fprintln(cmd.OutOrStdout(), "  talon secrets migrate            # show the plan")
-				fmt.Fprintln(cmd.OutOrStdout(), "  talon secrets migrate --apply    # do it")
+				fmt.Fprintln(cmd.OutOrStdout(), "Plaintext secrets detected. Move each value to 1Password or the OS keychain, then set the config path to an op:// or keychain:// reference.")
 				if check {
 					return fmt.Errorf("secrets audit: plaintext secrets found")
 				}

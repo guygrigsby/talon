@@ -13,33 +13,18 @@ import (
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
-	"github.com/guygrigsby/talon/internal/openclaw"
-	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
+	plugin "github.com/guygrigsby/talon/internal/plugin/host"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/tidwall/gjson"
 )
 
-// PluginDepsHandler serves the plugins.deps.* RPCs the UI uses to drive
-// runtime-dependency installation for bundled openclaw extensions.
-//
-// Lookup chain for extension code (highest priority first):
-//
-//  1. ~/.talon/extensions/<name>      — talon overlay (writable)
-//  2. ~/.openclaw/extensions/<name>   — openclaw layer (read-only,
-//                                        picks up user installs from
-//                                        a prior openclaw setup)
-//  3. /opt/extensions/<name>          — image-baked bundle (Docker)
-//
-// Install destination is always (1). If the source for a given
-// extension is (2) or (3), the install path copies it into the talon
-// overlay first, then npm install runs in the writable copy. This
-// gives drop-in compat with openclaw's user-install location AND
-// makes installs survive container rebuilds without a separate
-// volume mount (~/.talon is already a host bind in docker-run).
+// PluginDepsHandler serves the plugins.deps.* RPCs the UI uses to inspect
+// native Talon plugins and optional third-party plugin directories.
 type PluginDepsHandler struct {
-	paths openclaw.Paths
+	paths talonpath.Paths
 
 	// host, when non-nil, lets the handler report whether each
-	// extension is currently loaded by the gateway's plugin runtime.
+	// plugin is currently loaded by the gateway's plugin runtime.
 	// Set via WithHost from cmd/talon (same plugin.Host that owns
 	// every spawned subprocess plugin).
 	host *plugin.Host
@@ -64,7 +49,7 @@ func (h *PluginDepsHandler) WithHost(host *plugin.Host) *PluginDepsHandler {
 	return h
 }
 
-func NewPluginDepsHandler(paths openclaw.Paths) *PluginDepsHandler {
+func NewPluginDepsHandler(paths talonpath.Paths) *PluginDepsHandler {
 	h := &PluginDepsHandler{paths: paths, installTimeout: 5 * time.Minute}
 	h.npmCmd = func(ctx context.Context, dir string) *exec.Cmd {
 		c := exec.CommandContext(ctx, "npm", "install", "--omit=dev", "--no-audit", "--no-fund")
@@ -93,11 +78,9 @@ type pluginDepsUninstallParams struct {
 	Name string `json:"name"`
 }
 
-// handleUninstall removes the extension's talon-overlay copy. The
-// bundle (or openclaw layer) stays intact, so a subsequent install
-// or status call falls back through the lookup chain. We refuse to
-// touch anything outside the talon overlay — that's the only
-// writable layer in talon's contract.
+// handleUninstall removes a third-party plugin directory from Talon state.
+// Built-in plugins are part of the talon binary and are not uninstallable
+// through this RPC.
 func (h *PluginDepsHandler) handleUninstall(_ context.Context, _ HandlerCtx, params json.RawMessage) (any, *FrameError) {
 	var p pluginDepsUninstallParams
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -127,15 +110,14 @@ func (h *PluginDepsHandler) handleUninstall(_ context.Context, _ HandlerCtx, par
 	if err := os.RemoveAll(target); err != nil {
 		return nil, &FrameError{Code: ErrCodeInternal, Message: "plugins.deps.uninstall: " + err.Error()}
 	}
-	// After uninstall, the lookup chain may resurface a bundled or
-	// openclaw-layer copy; re-stat to report the post-uninstall
-	// state so the UI swaps the row in place.
+	// Re-stat to report the post-uninstall state so the UI swaps the row
+	// in place.
 	dir, label := h.locateExtension(p.Name)
 	if dir == "" {
 		return map[string]any{
 			"ok":   true,
 			"name": p.Name,
-			// No status block — the extension is gone from every layer.
+			// No status block: the plugin is gone.
 		}, nil
 	}
 	status := statusForExtension(dir, p.Name)
@@ -150,41 +132,20 @@ func (h *PluginDepsHandler) handleUninstall(_ context.Context, _ HandlerCtx, par
 	}, nil
 }
 
-// enrichInUse sets InUse=true when the merged config references this
-// extension through any of three signals:
-//   - plugins.entries.<name>.enabled: explicit per-name entry on
-//   - plugins.entries.*.bundled == name: indirect reference by entry
-//   - channels.<channelId> exists when the extension declares
-//     openclaw.channel.id == channelId: live channel binding
-//
-// Cheap to compute; the UI uses it to surface a "Required (in use)"
-// badge so uninstalling a live integration is at least flagged.
+// enrichInUse sets InUse=true when the merged config references this plugin.
+// Cheap to compute; the UI uses it to flag live integrations before removal.
 func enrichInUse(merged []byte, item *pluginDepsStatusItem) {
 	if v := gjson.GetBytes(merged, "plugins.entries."+item.Name+".enabled"); v.Bool() {
 		item.InUse = true
 		return
 	}
-	gjson.GetBytes(merged, "plugins.entries").ForEach(func(_, entry gjson.Result) bool {
-		if entry.Get("bundled").Str == item.Name && entry.Get("enabled").Bool() {
-			item.InUse = true
-			return false
-		}
-		return true
-	})
-	if item.InUse {
-		return
-	}
-	// Builtin channel plugins: name matches the channel id directly,
-	// no package.json to consult. Mirrors the openclaw-extension
-	// path below but skips the file read.
 	if item.Source == "builtin" && item.Kind == "channel" {
 		if v := gjson.GetBytes(merged, "channels."+item.Name); v.Exists() {
 			item.InUse = true
 		}
 		return
 	}
-	// Channel-binding signal: load the package.json's channel.id
-	// and check if it's keyed under channels.*.
+	// Channel-binding signal for third-party metadata.
 	if item.Path == "" {
 		return
 	}
@@ -192,7 +153,7 @@ func enrichInUse(merged []byte, item *pluginDepsStatusItem) {
 	if err != nil {
 		return
 	}
-	channelID := gjson.GetBytes(raw, "openclaw.channel.id").Str
+	channelID := gjson.GetBytes(raw, "talon.channel.id").Str
 	if channelID == "" {
 		return
 	}
@@ -201,10 +162,8 @@ func enrichInUse(merged []byte, item *pluginDepsStatusItem) {
 	}
 }
 
-// enrichUninstallable marks the row as uninstallable when its on-disk
-// path lives under the talon overlay (the only layer talon will
-// write to). Bundled/openclaw entries stay false; the UI omits the
-// uninstall button for those.
+// enrichUninstallable marks the row as uninstallable when its on-disk path
+// lives under Talon's plugin directory.
 func enrichUninstallable(talonRoot string, item *pluginDepsStatusItem) {
 	if talonRoot == "" || item.Path == "" {
 		return
@@ -235,11 +194,10 @@ type pluginDepsDetail struct {
 	PackageName  string            `json:"packageName,omitempty"`
 }
 
-// handleDetail returns the rich per-extension payload the UI's
-// drill-down panel wants: full dependency map (name → semver),
-// channel/provider blurb, docs link, and the underlying npm package
-// name. Status-shape fields are embedded so a detail call alone is
-// enough to render — the UI doesn't have to combine two responses.
+// handleDetail returns the rich per-plugin payload the UI's drill-down
+// panel wants: dependency map, channel/provider blurb, docs link, and
+// package name. Status-shape fields are embedded so a detail call alone
+// is enough to render.
 func (h *PluginDepsHandler) handleDetail(_ context.Context, _ HandlerCtx, params json.RawMessage) (any, *FrameError) {
 	var p pluginDepsDetailParams
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -252,16 +210,12 @@ func (h *PluginDepsHandler) handleDetail(_ context.Context, _ HandlerCtx, params
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.detail: invalid name"}
 	}
 
-	// Native plugins win over any same-named bundled extension.
-	// Without this check, plugins.deps.detail would fall through to
-	// the openclaw extension dir lookup and surface the WRONG
-	// metadata (npm package, channel blurb, full TS-side dep list)
-	// for a name the user thinks of as the native binary.
+	// Native plugins win over any same-named third-party directory.
 	for _, b := range builtinPlugins {
 		if b.EntryName == p.Name {
 			out := pluginDepsDetail{pluginDepsStatusItem: pluginDepsStatusItem{
 				Name:        b.EntryName,
-				Path:        b.BinaryPath,
+				Path:        b.Command,
 				Source:      "builtin",
 				Description: b.Description,
 				Version:     b.Version,
@@ -285,7 +239,7 @@ func (h *PluginDepsHandler) handleDetail(_ context.Context, _ HandlerCtx, params
 
 	dir, label := h.locateExtension(p.Name)
 	if dir == "" {
-		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.detail: extension not found: " + p.Name}
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.detail: plugin not found: " + p.Name}
 	}
 	out := pluginDepsDetail{pluginDepsStatusItem: statusForExtension(dir, p.Name)}
 	out.Source = label
@@ -311,13 +265,13 @@ func (h *PluginDepsHandler) handleDetail(_ context.Context, _ HandlerCtx, params
 		out.Dependencies = deps
 	}
 	// Channel-side metadata: blurb, docsPath, id (used by config).
-	if v := gjson.GetBytes(raw, "openclaw.channel.blurb"); v.Exists() && v.Str != "" {
+	if v := gjson.GetBytes(raw, "talon.channel.blurb"); v.Exists() && v.Str != "" {
 		out.Blurb = v.Str
 	}
-	if v := gjson.GetBytes(raw, "openclaw.channel.docsPath"); v.Exists() && v.Str != "" {
+	if v := gjson.GetBytes(raw, "talon.channel.docsPath"); v.Exists() && v.Str != "" {
 		out.DocsPath = v.Str
 	}
-	if v := gjson.GetBytes(raw, "openclaw.channel.id"); v.Exists() && v.Str != "" {
+	if v := gjson.GetBytes(raw, "talon.channel.id"); v.Exists() && v.Str != "" {
 		out.ChannelID = v.Str
 	}
 	return out, nil
@@ -328,58 +282,47 @@ func (h *PluginDepsHandler) handleDetail(_ context.Context, _ HandlerCtx, params
 type pluginDepsStatusItem struct {
 	Name string `json:"name"`
 	Path string `json:"path"`
-	// Source identifies which dir in the lookup chain this extension
-	// came from: "talon" / "openclaw" / "bundled". The UI surfaces
-	// it so users can see whether they're looking at their own
-	// installs or the shipped defaults.
+	// Source identifies where this plugin came from: "builtin" or
+	// "talon". The UI surfaces it so users can distinguish shipped
+	// plugins from third-party local entries.
 	Source string `json:"source"`
-	// Description / Version are the package.json fields openclaw uses
-	// in its bundle metadata. Populated whenever a package.json exists.
+	// Description / Version are populated from package metadata when a
+	// third-party plugin directory has it, or from builtin metadata.
 	Description string `json:"description,omitempty"`
 	Version     string `json:"version,omitempty"`
-	// Kind classifies the extension surface from the openclaw block:
-	// "channel" / "provider" / "plugin". Useful for filtering and
-	// for badges in the UI.
+	// Kind classifies the plugin surface: "channel", "provider", or
+	// "plugin". Useful for filtering and badges in the UI.
 	Kind string `json:"kind,omitempty"`
-	// Label is the user-facing display name for channel/provider
-	// extensions (openclaw.channel.label or openclaw.provider.label).
-	// Falls back to "" — UI shows Name in that case.
+	// Label is the user-facing display name. Falls back to "" so the UI
+	// shows Name in that case.
 	Label             string `json:"label,omitempty"`
 	HasPackageJSON    bool   `json:"hasPackageJson"`
 	DepCount          int    `json:"depCount"`
 	Installed         bool   `json:"installed"`
 	NodeModulesExists bool   `json:"nodeModulesExists"`
-	// InUse=true when the merged config references this extension —
-	// either via plugins.entries.<name>.enabled or as a configured
-	// channel keyed by openclaw.channel.id. The UI surfaces a
-	// "Required" / "In use" badge for these so users know
-	// uninstalling will break a live integration.
+	// InUse=true when the merged config references this plugin. The UI
+	// surfaces a badge so users know uninstalling will break a live
+	// integration.
 	InUse bool `json:"inUse"`
-	// Uninstallable=true when the extension exists in the talon
-	// overlay (the only writable layer); otherwise removing it would
-	// require touching ~/.openclaw or the image bundle, both of
-	// which talon refuses to write.
+	// Uninstallable=true when the plugin exists in Talon's writable
+	// plugin directory. Builtins are not uninstallable.
 	Uninstallable bool `json:"uninstallable"`
 	// Loaded=true when the gateway's plugin runtime currently has
-	// this extension as a live subprocess. UI surfaces it as a
+	// this plugin as a live subprocess. UI surfaces it as a
 	// "Loaded" badge so users can tell active integrations from
 	// merely-available ones.
 	Loaded bool   `json:"loaded"`
 	Error  string `json:"error,omitempty"`
 }
 
-// builtinPlugin describes a Go-implemented plugin shipped in the
-// talon binary tree (binary already on PATH after install). They
-// surface in the same plugins list as the openclaw-bundled
-// extensions — users don't need to care about implementation
-// language; the UI shows them as ordinary plugins.
+// builtinPlugin describes a Go-implemented plugin shipped in the talon
+// binary. The UI shows these as ordinary plugins.
 type builtinPlugin struct {
 	// EntryName is the canonical name used as the
 	// plugins.entries.<name> key when the user enables this plugin.
 	EntryName string
-	// BinaryPath is the spawn target — wired into the cmd array
-	// when the user enables the plugin.
-	BinaryPath string
+	// Command is the human-readable spawn target.
+	Command string
 	// Manifest fields surfaced in the listing without spawning the
 	// binary first. Once loaded, the live manifest takes over.
 	Description string
@@ -388,13 +331,12 @@ type builtinPlugin struct {
 	Label       string // user-facing display name
 }
 
-// builtinPlugins is the registry of bundled Go plugins. New entries
-// land here when their binary is added to the Dockerfile build.
+// builtinPlugins is the registry of bundled Go plugins.
 // Single source of truth for the /plugins UI's pre-spawn metadata.
 var builtinPlugins = []builtinPlugin{
 	{
 		EntryName:   "anthropic",
-		BinaryPath:  "/usr/local/bin/talon-anthropic-plugin",
+		Command:     "talon plugin run anthropic",
 		Description: "Anthropic Messages API provider (Claude)",
 		Version:     "0.1.0",
 		Kind:        "provider",
@@ -402,47 +344,47 @@ var builtinPlugins = []builtinPlugin{
 	},
 	{
 		EntryName:   "openai-compat",
-		BinaryPath:  "/usr/local/bin/talon-openai-compat-plugin",
-		Description: "OpenAI-compatible providers (multi-tenant): openai, deepseek, mistral, mlx, lmstudio, ollama, …",
+		Command:     "talon plugin run openai-compat",
+		Description: "OpenAI-compatible providers (multi-tenant): openai, deepseek, mistral, mlx, lmstudio, ollama",
 		Version:     "0.1.0",
 		Kind:        "provider",
 		Label:       "OpenAI-Compatible",
 	},
 	{
 		EntryName:   "telegram",
-		BinaryPath:  "/usr/local/bin/talon-telegram-plugin",
-		Description: "Telegram bot channel — long-poll + sendMessage",
+		Command:     "talon plugin run telegram",
+		Description: "Telegram bot channel: long-poll + sendMessage",
 		Version:     "0.1.0",
 		Kind:        "channel",
 		Label:       "Telegram",
 	},
 	{
 		EntryName:   "brave",
-		BinaryPath:  "/usr/local/bin/talon-brave-plugin",
-		Description: "Brave Search web_search tool (replaces openclaw extensions/brave)",
+		Command:     "talon plugin run brave",
+		Description: "Brave Search web_search tool",
 		Version:     "0.1.0",
 		Kind:        "plugin",
 		Label:       "Brave Search",
 	},
 	{
 		EntryName:   "whisper",
-		BinaryPath:  "/usr/local/bin/talon-whisper-plugin",
-		Description: "OpenAI Whisper transcription tool (replaces openclaw skills/openai-whisper-api)",
+		Command:     "talon plugin run whisper",
+		Description: "OpenAI Whisper transcription tool",
 		Version:     "0.1.0",
 		Kind:        "plugin",
 		Label:       "Whisper Transcription",
 	},
 	{
 		EntryName:   "bluebubbles",
-		BinaryPath:  "/usr/local/bin/talon-bluebubbles-plugin",
-		Description: "BlueBubbles iMessage channel — webhook in, REST out (replaces openclaw extensions/bluebubbles)",
+		Command:     "talon plugin run bluebubbles",
+		Description: "BlueBubbles iMessage channel: webhook in, REST out",
 		Version:     "0.1.0",
 		Kind:        "channel",
 		Label:       "BlueBubbles",
 	},
 	{
 		EntryName:   "mac-notify",
-		BinaryPath:  "/usr/local/bin/talon-mac-notify-plugin",
+		Command:     "talon plugin run mac-notify",
 		Description: "Local macOS Notification Center via osascript (mac_notify tool)",
 		Version:     "0.1.0",
 		Kind:        "plugin",
@@ -450,7 +392,7 @@ var builtinPlugins = []builtinPlugin{
 	},
 	{
 		EntryName:   "mac-open",
-		BinaryPath:  "/usr/local/bin/talon-mac-open-plugin",
+		Command:     "talon plugin run mac-open",
 		Description: "Launch macOS apps and open URLs/files in specific apps via the `open` command (mac_open tool)",
 		Version:     "0.1.0",
 		Kind:        "plugin",
@@ -504,9 +446,9 @@ func (h *PluginDepsHandler) handleStatus(_ context.Context, _ HandlerCtx, _ json
 	sources := h.extensionSources()
 	if len(sources) == 0 {
 		return map[string]any{
-			"items":      []pluginDepsStatusItem{},
-			"sources":    []map[string]string{},
-			"writeRoot":  h.talonExtensionsRoot(),
+			"items":     []pluginDepsStatusItem{},
+			"sources":   []map[string]string{},
+			"writeRoot": h.talonExtensionsRoot(),
 		}, nil
 	}
 
@@ -524,7 +466,7 @@ func (h *PluginDepsHandler) handleStatus(_ context.Context, _ HandlerCtx, _ json
 		seen[b.EntryName] = true
 		item := pluginDepsStatusItem{
 			Name:        b.EntryName,
-			Path:        b.BinaryPath,
+			Path:        b.Command,
 			Source:      "builtin",
 			Description: b.Description,
 			Version:     b.Version,
@@ -621,32 +563,26 @@ func statusForExtension(dir, name string) pluginDepsStatusItem {
 	out.HasPackageJSON = true
 	out.Description = gjson.GetBytes(raw, "description").Str
 	out.Version = gjson.GetBytes(raw, "version").Str
-	// Classify by the richest openclaw metadata available. channel
-	// wins over provider when both are present (rare in practice;
-	// channel is the load-bearing role).
-	if v := gjson.GetBytes(raw, "openclaw.channel.label"); v.Exists() && v.Str != "" {
+	// Classify by the richest Talon metadata available. Channel wins
+	// over provider when both are present.
+	if v := gjson.GetBytes(raw, "talon.channel.label"); v.Exists() && v.Str != "" {
 		out.Kind = "channel"
 		out.Label = v.Str
-	} else if v := gjson.GetBytes(raw, "openclaw.provider.label"); v.Exists() && v.Str != "" {
+	} else if v := gjson.GetBytes(raw, "talon.provider.label"); v.Exists() && v.Str != "" {
 		out.Kind = "provider"
 		out.Label = v.Str
-	} else if v := gjson.GetBytes(raw, "openclaw.channel"); v.Exists() {
-		// Some packages ship a stripped openclaw block where channel
-		// is just a bare label string ("Slack"). Detect that shape.
+	} else if v := gjson.GetBytes(raw, "talon.channel"); v.Exists() {
 		if v.Type == gjson.String && v.Str != "" {
 			out.Kind = "channel"
 			out.Label = v.Str
 		}
-	} else if v := gjson.GetBytes(raw, "openclaw.provider"); v.Exists() {
+	} else if v := gjson.GetBytes(raw, "talon.provider"); v.Exists() {
 		if v.Type == gjson.String && v.Str != "" {
 			out.Kind = "provider"
 			out.Label = v.Str
 		}
 	}
 	if out.Kind == "" {
-		// Default to "plugin" — generic role. Tracker still fires
-		// captured-but-ignored register* warnings via the shim, so
-		// "plugin" doesn't promise functionality, just packaging.
 		out.Kind = "plugin"
 	}
 	deps := gjson.GetBytes(raw, "dependencies")
@@ -689,7 +625,7 @@ func (h *PluginDepsHandler) handleInstall(_ context.Context, _ HandlerCtx, param
 	// talon overlay first.
 	srcDir, srcLabel := h.locateExtension(p.Name)
 	if srcDir == "" {
-		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.install: extension not found: " + p.Name}
+		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "plugins.deps.install: plugin not found: " + p.Name}
 	}
 	if _, err := os.Stat(filepath.Join(srcDir, "package.json")); err != nil {
 		return map[string]any{
@@ -753,31 +689,12 @@ func (h *PluginDepsHandler) loadedPluginNames() map[string]bool {
 	return out
 }
 
-// extensionSources returns the lookup chain talon walks to find
-// extension dirs. Order matters — the talon overlay wins, then the
-// openclaw layer (read-only, drop-in compat), then the image-baked
-// bundle. Absent dirs aren't filtered here; callers handle ENOENT.
+// extensionSources returns optional third-party plugin metadata directories.
+// Native builtin plugins are listed separately.
 func (h *PluginDepsHandler) extensionSources() []extensionSource {
 	out := []extensionSource{}
 	if root := h.talonExtensionsRoot(); root != "" {
 		out = append(out, extensionSource{root: root, label: "talon"})
-	}
-	if root := h.openclawExtensionsRoot(); root != "" {
-		out = append(out, extensionSource{root: root, label: "openclaw"})
-	}
-	if root := h.bundledExtensionsRoot(); root != "" {
-		// Avoid double-listing if a config explicitly pointed
-		// bundled.paths at one of the layered dirs.
-		duplicate := false
-		for _, s := range out {
-			if s.root == root {
-				duplicate = true
-				break
-			}
-		}
-		if !duplicate {
-			out = append(out, extensionSource{root: root, label: "bundled"})
-		}
 	}
 	return out
 }
@@ -795,60 +712,22 @@ func (h *PluginDepsHandler) locateExtension(name string) (dir, label string) {
 	return "", ""
 }
 
-// talonExtensionsRoot is the writable destination for installs.
-// Defaults to <Talon.Dir>/extensions; overridable via
-// plugins.bundled.writeRoot in config (rarely needed).
+// talonExtensionsRoot is the writable destination for third-party plugins.
+// Defaults to <Talon.Dir>/plugins; overridable via plugins.load_paths[0].
 func (h *PluginDepsHandler) talonExtensionsRoot() string {
 	if h.paths.Talon.Dir == "" {
 		return ""
 	}
 	merged, err := config.MergedBytes(h.paths)
 	if err == nil {
-		if v := gjson.GetBytes(merged, "plugins.bundled.writeRoot"); v.Exists() && v.Str != "" {
+		if v := gjson.GetBytes(merged, "plugins.load.paths.0"); v.Exists() && v.Str != "" {
 			return v.Str
 		}
 	}
-	return filepath.Join(h.paths.Talon.Dir, "extensions")
+	return h.paths.Talon.PluginsDir()
 }
 
-// openclawExtensionsRoot returns ~/.openclaw/extensions when present.
-// We don't WRITE there (that violates talon's read-only invariant on
-// the openclaw layer) but reading lets users with a prior openclaw
-// install see their custom extensions in talon's UI without copying.
-func (h *PluginDepsHandler) openclawExtensionsRoot() string {
-	if h.paths.Openclaw.Dir == "" || h.paths.SkipOpenclaw {
-		return ""
-	}
-	candidate := filepath.Join(h.paths.Openclaw.Dir, "extensions")
-	if _, err := os.Stat(candidate); err != nil {
-		return ""
-	}
-	return candidate
-}
-
-// bundledExtensionsRoot returns the image-baked default. Resolution:
-// plugins.bundled.path config first, TALON_EXTENSIONS_PATH env second,
-// /opt/extensions third (Docker convention).
-func (h *PluginDepsHandler) bundledExtensionsRoot() string {
-	merged, err := config.MergedBytes(h.paths)
-	if err == nil {
-		if v := gjson.GetBytes(merged, "plugins.bundled.path"); v.Exists() && v.Str != "" {
-			return v.Str
-		}
-	}
-	if v := os.Getenv("TALON_EXTENSIONS_PATH"); v != "" {
-		return v
-	}
-	if _, err := os.Stat("/opt/extensions"); err == nil {
-		return "/opt/extensions"
-	}
-	return ""
-}
-
-// copyDirectory clones src → dst recursively. We only invoke this
-// when promoting a read-only-source extension into the writable
-// overlay before npm install; sizes are tens of KB at most so this
-// doesn't need to be optimized for huge trees.
+// copyDirectory clones src into dst recursively.
 func copyDirectory(src, dst string) error {
 	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
@@ -862,9 +741,7 @@ func copyDirectory(src, dst string) error {
 		if info.IsDir() {
 			return os.MkdirAll(target, info.Mode().Perm())
 		}
-		// Skip symlinks and special files — extensions are plain JS
-		// trees in practice, and we don't want to surprise users with
-		// surprise FIFO copies.
+		// Skip symlinks and special files.
 		if info.Mode()&os.ModeType != 0 {
 			return nil
 		}

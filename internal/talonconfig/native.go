@@ -12,17 +12,15 @@ import (
 	"github.com/tidwall/gjson"
 )
 
-// NativeConfig is the proposed Talon-owned config shape. It is deliberately
-// not a one-for-one copy of the old OpenClaw JSON envelope.
+// NativeConfig is the Talon-owned config shape.
 type NativeConfig struct {
-	Gateway   GatewayConfig    `mapstructure:"gateway"`
-	Agent     ChatAgentConfig  `mapstructure:"agent"`
-	Subagents []SubagentConfig `mapstructure:"subagents"`
-	Memory    MemoryConfig     `mapstructure:"memory"`
-	Tools     ToolsConfig      `mapstructure:"tools"`
-	Models    ModelsConfig     `mapstructure:"models"`
-	Telegram  TelegramConfig   `mapstructure:"-"`
-	Plugins   PluginsConfig    `mapstructure:"plugins"`
+	Gateway  GatewayConfig   `mapstructure:"gateway"`
+	Agent    ChatAgentConfig `mapstructure:"agent"`
+	Memory   MemoryConfig    `mapstructure:"memory"`
+	Tools    ToolsConfig     `mapstructure:"tools"`
+	Models   ModelsConfig    `mapstructure:"models"`
+	Telegram TelegramConfig  `mapstructure:"-"`
+	Plugins  PluginsConfig   `mapstructure:"plugins"`
 }
 
 type GatewayConfig struct {
@@ -31,6 +29,7 @@ type GatewayConfig struct {
 	Port                   int64  `mapstructure:"port"`
 	AuthMode               string `mapstructure:"auth_mode"`
 	AuthToken              string `mapstructure:"auth_token_ref"`
+	AuthPassword           string `mapstructure:"auth_password_ref"`
 	TailscaleMode          string `mapstructure:"tailscale_mode"`
 	ControlUIRoot          string `mapstructure:"control_ui_root"`
 	ControlUIAllowInsecure *bool  `mapstructure:"control_ui_allow_insecure_auth"`
@@ -41,7 +40,9 @@ type ChatAgentConfig struct {
 	Fallbacks    []string     `mapstructure:"fallback_models"`
 	Workspace    string       `mapstructure:"workspace"`
 	ToolsProfile string       `mapstructure:"tools_profile"`
+	ToolsEnabled *bool        `mapstructure:"tools_enabled"`
 	ModelAliases []ModelAlias `mapstructure:"model_aliases"`
+	DailyUSDCap  float64      `mapstructure:"daily_usd_cap"`
 	MaxTurns     int64        `mapstructure:"max_turns"`
 	SystemPrompt string       `mapstructure:"system_prompt"`
 }
@@ -49,13 +50,6 @@ type ChatAgentConfig struct {
 type ModelAlias struct {
 	Model string `mapstructure:"model"`
 	Alias string `mapstructure:"alias"`
-}
-
-type SubagentConfig struct {
-	ID           string `mapstructure:"id"`
-	Name         string `mapstructure:"name"`
-	Model        string `mapstructure:"model"`
-	ToolsProfile string `mapstructure:"tools_profile"`
 }
 
 type MemoryConfig struct {
@@ -105,15 +99,15 @@ type TelegramConfig struct {
 	Enabled        bool     `mapstructure:"enabled"`
 	BotToken       string   `mapstructure:"bot_token_ref"`
 	AllowFrom      []string `mapstructure:"allow_from"`
+	DMPolicy       string   `mapstructure:"dm_policy"`
 	AgentID        string   `mapstructure:"agent_id"`
 	RequireMention *bool    `mapstructure:"require_mention"`
 }
 
 type PluginsConfig struct {
-	Enabled            []string `mapstructure:"enabled"`
-	Deny               []string `mapstructure:"deny"`
-	LoadPaths          []string `mapstructure:"load_paths"`
-	LegacyOpenClawShim bool     `mapstructure:"legacy_openclaw_shim"`
+	Enabled   []string `mapstructure:"enabled"`
+	Deny      []string `mapstructure:"deny"`
+	LoadPaths []string `mapstructure:"load_paths"`
 }
 
 type MigrationReport struct {
@@ -121,16 +115,25 @@ type MigrationReport struct {
 	StateCandidates    []string
 	DropCandidates     []string
 	SecretCounts       map[string]int
-	LegacyPluginShim   bool
 }
 
-// FromLegacyJSON converts the current JSON config envelope into the proposed
-// native shape. It keeps enough information to preserve working chat, tools,
-// memory, models, and Telegram while intentionally not preserving OpenClaw's
-// per-agent workspace/persona paradigm for subagents.
-func FromLegacyJSON(raw []byte) (NativeConfig, MigrationReport, error) {
+// FromOpenClawJSON converts an OpenClaw config JSON file into Talon's native
+// shape. This is intentionally a migration-only entry point; runtime config
+// reads use TOML.
+func FromOpenClawJSON(raw []byte) (NativeConfig, MigrationReport, error) {
+	return fromJSONConfig(raw, "OpenClaw config")
+}
+
+// FromRuntimeJSON converts Talon's current runtime JSON view into native
+// TOML structs. It exists while older handlers still consume the JSON view.
+func FromRuntimeJSON(raw []byte) (NativeConfig, error) {
+	cfg, _, err := fromJSONConfig(raw, "runtime config")
+	return cfg, err
+}
+
+func fromJSONConfig(raw []byte, sourceLabel string) (NativeConfig, MigrationReport, error) {
 	if !gjson.ValidBytes(raw) {
-		return NativeConfig{}, MigrationReport{}, fmt.Errorf("legacy config is not valid JSON")
+		return NativeConfig{}, MigrationReport{}, fmt.Errorf("%s is not valid JSON", sourceLabel)
 	}
 	var decoded map[string]any
 	if err := json.Unmarshal(raw, &decoded); err != nil {
@@ -138,14 +141,13 @@ func FromLegacyJSON(raw []byte) (NativeConfig, MigrationReport, error) {
 	}
 
 	var cfg NativeConfig
-	cfg.Gateway = gatewayFromLegacy(raw)
-	cfg.Agent = chatAgentFromLegacy(raw)
-	cfg.Subagents = subagentsFromLegacy(raw)
-	cfg.Memory = memoryFromLegacy(raw)
-	cfg.Tools = toolsFromLegacy(raw)
-	cfg.Models = modelsFromLegacy(raw)
-	cfg.Telegram = telegramFromLegacy(raw)
-	cfg.Plugins = pluginsFromLegacy(raw)
+	cfg.Gateway = gatewayFromJSON(raw)
+	cfg.Agent = chatAgentFromJSON(raw)
+	cfg.Memory = memoryFromJSON(raw)
+	cfg.Tools = toolsFromJSON(raw)
+	cfg.Models = modelsFromJSON(raw)
+	cfg.Telegram = telegramFromJSON(raw)
+	cfg.Plugins = pluginsFromJSON(raw)
 
 	report := MigrationReport{
 		SourceTopLevelKeys: sortedKeys(decoded),
@@ -158,24 +160,24 @@ func FromLegacyJSON(raw []byte) (NativeConfig, MigrationReport, error) {
 			"agents.defaults.embeddedHarness",
 		},
 		DropCandidates: []string{
-			"agents.list[].workspace for subagents only",
+			"agents.list entries other than main; move them to ~/.talon/subagents/*.md",
 			"agents.list[].agentDir",
-			"workspace*/.openclaw/workspace-state.json",
-			"~/.talon/openclaw.json.* backups after TOML cutover",
+			"pre-TOML workspace state files after TOML cutover",
+			"old JSON config backups after TOML cutover",
 		},
-		SecretCounts:     secretCounts(raw),
-		LegacyPluginShim: cfg.Plugins.LegacyOpenClawShim,
+		SecretCounts: secretCounts(raw),
 	}
 	return cfg, report, nil
 }
 
-func gatewayFromLegacy(raw []byte) GatewayConfig {
+func gatewayFromJSON(raw []byte) GatewayConfig {
 	g := GatewayConfig{
 		Mode:          stringOr(raw, "gateway.mode", "local"),
 		Bind:          stringOr(raw, "gateway.bind", "loopback"),
 		Port:          intOr(raw, "gateway.port", 18789),
 		AuthMode:      gjson.GetBytes(raw, "gateway.auth.mode").Str,
 		AuthToken:     gjson.GetBytes(raw, "gateway.auth.token").Str,
+		AuthPassword:  gjson.GetBytes(raw, "gateway.auth.password").Str,
 		TailscaleMode: gjson.GetBytes(raw, "gateway.tailscale.mode").Str,
 		ControlUIRoot: gjson.GetBytes(raw, "gateway.controlUi.root").Str,
 	}
@@ -186,11 +188,12 @@ func gatewayFromLegacy(raw []byte) GatewayConfig {
 	return g
 }
 
-func chatAgentFromLegacy(raw []byte) ChatAgentConfig {
+func chatAgentFromJSON(raw []byte) ChatAgentConfig {
 	a := ChatAgentConfig{
 		Model:        gjson.GetBytes(raw, "agents.defaults.model.primary").Str,
-		Workspace:    gjson.GetBytes(raw, "agents.defaults.workspace").Str,
+		Workspace:    normalizeMainWorkspace(gjson.GetBytes(raw, "agents.defaults.workspace").Str),
 		ToolsProfile: gjson.GetBytes(raw, "tools.profile").Str,
+		DailyUSDCap:  gjson.GetBytes(raw, "agents.defaults.dailyUsdCap").Float(),
 		MaxTurns:     gjson.GetBytes(raw, "agents.defaults.maxTurns").Int(),
 		SystemPrompt: gjson.GetBytes(raw, "agents.defaults.systemPrompt").Str,
 	}
@@ -208,10 +211,14 @@ func chatAgentFromLegacy(raw []byte) ChatAgentConfig {
 			a.Model = model
 		}
 		if workspace := main.Get("workspace").Str; workspace != "" {
-			a.Workspace = workspace
+			a.Workspace = normalizeMainWorkspace(workspace)
 		}
 		if profile := main.Get("tools.profile").Str; profile != "" {
 			a.ToolsProfile = profile
+		}
+		if v := main.Get("tools.enabled"); v.Exists() {
+			b := v.Bool()
+			a.ToolsEnabled = &b
 		}
 		if maxTurns := main.Get("maxTurns").Int(); maxTurns > 0 {
 			a.MaxTurns = maxTurns
@@ -223,26 +230,18 @@ func chatAgentFromLegacy(raw []byte) ChatAgentConfig {
 	return a
 }
 
-func subagentsFromLegacy(raw []byte) []SubagentConfig {
-	var out []SubagentConfig
-	gjson.GetBytes(raw, "agents.list").ForEach(func(_, a gjson.Result) bool {
-		id := a.Get("id").Str
-		if id == "" || id == "main" {
-			return true
-		}
-		out = append(out, SubagentConfig{
-			ID:           id,
-			Name:         a.Get("name").Str,
-			Model:        modelString(a.Get("model")),
-			ToolsProfile: a.Get("tools.profile").Str,
-		})
-		return true
-	})
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
-	return out
+func normalizeMainWorkspace(workspace string) string {
+	trimmed := strings.TrimRight(workspace, "/")
+	if trimmed == "~/.talon/workspace" {
+		return "~/.talon"
+	}
+	if strings.HasSuffix(trimmed, "/.talon/workspace") {
+		return strings.TrimSuffix(trimmed, "/workspace")
+	}
+	return workspace
 }
 
-func memoryFromLegacy(raw []byte) MemoryConfig {
+func memoryFromJSON(raw []byte) MemoryConfig {
 	return MemoryConfig{
 		Enabled: gjson.GetBytes(raw, "memory.enabled").Bool(),
 		Path:    gjson.GetBytes(raw, "memory.path").Str,
@@ -250,7 +249,7 @@ func memoryFromLegacy(raw []byte) MemoryConfig {
 	}
 }
 
-func toolsFromLegacy(raw []byte) ToolsConfig {
+func toolsFromJSON(raw []byte) ToolsConfig {
 	t := ToolsConfig{
 		Profile:           gjson.GetBytes(raw, "tools.profile").Str,
 		WebSearchProvider: gjson.GetBytes(raw, "tools.web.search.provider").Str,
@@ -263,7 +262,7 @@ func toolsFromLegacy(raw []byte) ToolsConfig {
 	return t
 }
 
-func modelsFromLegacy(raw []byte) ModelsConfig {
+func modelsFromJSON(raw []byte) ModelsConfig {
 	byID := map[string]*ModelProviderConfig{}
 	ensure := func(id string) *ModelProviderConfig {
 		if id == "" {
@@ -285,7 +284,7 @@ func modelsFromLegacy(raw []byte) ModelsConfig {
 		p.API = prov.Get("api").Str
 		p.BaseURL = prov.Get("baseUrl").Str
 		prov.Get("models").ForEach(func(_, m gjson.Result) bool {
-			p.Models = append(p.Models, modelFromLegacy(m))
+			p.Models = append(p.Models, modelFromJSON(m))
 			return true
 		})
 		return true
@@ -309,6 +308,23 @@ func modelsFromLegacy(raw []byte) ModelsConfig {
 			p.APIKey = key
 		}
 	}
+	gjson.GetBytes(raw, "models").ForEach(func(key, entry gjson.Result) bool {
+		if key.Str == "providers" {
+			return true
+		}
+		providerID, modelID, ok := strings.Cut(key.Str, "/")
+		if !ok || providerID == "" || modelID == "" {
+			return true
+		}
+		cost := costFromPriceOverride(entry.Get("priceUsdPer1M"))
+		if !cost.hasAny() {
+			return true
+		}
+		if p := ensure(providerID); p != nil {
+			applyCostOverride(p, modelID, cost)
+		}
+		return true
+	})
 
 	ids := make([]string, 0, len(byID))
 	for id := range byID {
@@ -324,7 +340,36 @@ func modelsFromLegacy(raw []byte) ModelsConfig {
 	return out
 }
 
-func modelFromLegacy(m gjson.Result) ModelConfig {
+func applyCostOverride(provider *ModelProviderConfig, modelID string, cost ModelCost) {
+	if provider == nil || modelID == "" || !cost.hasAny() {
+		return
+	}
+	for i := range provider.Models {
+		if provider.Models[i].ID != modelID {
+			continue
+		}
+		mergeModelCost(&provider.Models[i].Cost, cost)
+		return
+	}
+	provider.Models = append(provider.Models, ModelConfig{ID: modelID, Cost: cost})
+}
+
+func mergeModelCost(dst *ModelCost, src ModelCost) {
+	if src.Input != nil {
+		dst.Input = src.Input
+	}
+	if src.Output != nil {
+		dst.Output = src.Output
+	}
+	if src.CacheRead != nil {
+		dst.CacheRead = src.CacheRead
+	}
+	if src.CacheWrite != nil {
+		dst.CacheWrite = src.CacheWrite
+	}
+}
+
+func modelFromJSON(m gjson.Result) ModelConfig {
 	out := ModelConfig{
 		ID:            m.Get("id").Str,
 		Name:          m.Get("name").Str,
@@ -338,12 +383,36 @@ func modelFromLegacy(m gjson.Result) ModelConfig {
 		out.Reasoning = &b
 	}
 	if cost := m.Get("cost"); cost.Exists() {
-		out.Cost = costFromLegacy(cost)
+		out.Cost = costFromJSON(cost)
 	}
 	return out
 }
 
-func costFromLegacy(cost gjson.Result) ModelCost {
+func costFromPriceOverride(price gjson.Result) ModelCost {
+	var out ModelCost
+	if !price.Exists() {
+		return out
+	}
+	if v := price.Get("in"); v.Exists() {
+		f := v.Float()
+		out.Input = &f
+	}
+	if v := price.Get("out"); v.Exists() {
+		f := v.Float()
+		out.Output = &f
+	}
+	if v := price.Get("cacheRead"); v.Exists() {
+		f := v.Float()
+		out.CacheRead = &f
+	}
+	if v := price.Get("cacheWrite"); v.Exists() {
+		f := v.Float()
+		out.CacheWrite = &f
+	}
+	return out
+}
+
+func costFromJSON(cost gjson.Result) ModelCost {
 	var out ModelCost
 	if v := cost.Get("input"); v.Exists() {
 		f := v.Float()
@@ -364,11 +433,12 @@ func costFromLegacy(cost gjson.Result) ModelCost {
 	return out
 }
 
-func telegramFromLegacy(raw []byte) TelegramConfig {
+func telegramFromJSON(raw []byte) TelegramConfig {
 	t := TelegramConfig{
 		Enabled:   gjson.GetBytes(raw, "channels.telegram.enabled").Bool(),
 		BotToken:  gjson.GetBytes(raw, "channels.telegram.botToken").Str,
 		AllowFrom: stringArray(gjson.GetBytes(raw, "channels.telegram.allowFrom")),
+		DMPolicy:  gjson.GetBytes(raw, "channels.telegram.dmPolicy").Str,
 		AgentID:   gjson.GetBytes(raw, "channels.telegram.agentId").Str,
 	}
 	if v := gjson.GetBytes(raw, "channels.telegram.groups.*.requireMention"); v.Exists() {
@@ -378,7 +448,7 @@ func telegramFromLegacy(raw []byte) TelegramConfig {
 	return t
 }
 
-func pluginsFromLegacy(raw []byte) PluginsConfig {
+func pluginsFromJSON(raw []byte) PluginsConfig {
 	var p PluginsConfig
 	gjson.GetBytes(raw, "plugins.entries").ForEach(func(name, entry gjson.Result) bool {
 		if entry.Get("enabled").Bool() {
@@ -388,7 +458,6 @@ func pluginsFromLegacy(raw []byte) PluginsConfig {
 	})
 	p.Deny = stringArray(gjson.GetBytes(raw, "plugins.deny"))
 	p.LoadPaths = stringArray(gjson.GetBytes(raw, "plugins.load.paths"))
-	p.LegacyOpenClawShim = len(p.LoadPaths) > 0 || gjson.GetBytes(raw, "plugins.entries.openclaw-shim").Exists()
 	sort.Strings(p.Enabled)
 	sort.Strings(p.Deny)
 	sort.Strings(p.LoadPaths)
@@ -513,36 +582,39 @@ type MarshalOptions struct {
 
 const redactedLiteral = "<redacted:literal>"
 
-// ToLegacyJSON adapts native TOML config back into the legacy JSON envelope
-// used by the rest of Talon today. fallbackLegacy is treated as compatibility
-// ballast: unmigrated sections are preserved, and redacted native literals are
-// resolved from the old JSON so an appended migration preview remains usable.
-func ToLegacyJSON(cfg NativeConfig, fallbackLegacy []byte) ([]byte, error) {
+// ToRuntimeJSON adapts native TOML config into the JSON view consumed by the
+// gateway handlers. fallbackRuntime preserves fields that do not yet have
+// native TOML structs, and lets redacted native literals resolve from the
+// previous runtime view during config edits.
+func ToRuntimeJSON(cfg NativeConfig, fallbackRuntime []byte) ([]byte, error) {
 	root := map[string]any{}
-	if len(bytes.TrimSpace(fallbackLegacy)) > 0 {
-		if err := json.Unmarshal(fallbackLegacy, &root); err != nil {
-			return nil, fmt.Errorf("parse fallback legacy config: %w", err)
+	if len(bytes.TrimSpace(fallbackRuntime)) > 0 {
+		if err := json.Unmarshal(fallbackRuntime, &root); err != nil {
+			return nil, fmt.Errorf("parse fallback runtime config: %w", err)
 		}
 	}
 
-	applyGatewayLegacy(root, cfg, fallbackLegacy)
-	applyAgentsLegacy(root, cfg)
-	applyMemoryLegacy(root, cfg)
-	applyToolsLegacy(root, cfg, fallbackLegacy)
-	applyModelsLegacy(root, cfg, fallbackLegacy)
-	applyTelegramLegacy(root, cfg, fallbackLegacy)
-	applyPluginsLegacy(root, cfg)
+	applyGatewayRuntime(root, cfg, fallbackRuntime)
+	applyAgentsRuntime(root, cfg)
+	applyMemoryRuntime(root, cfg)
+	applyToolsRuntime(root, cfg, fallbackRuntime)
+	applyModelsRuntime(root, cfg, fallbackRuntime)
+	applyTelegramRuntime(root, cfg, fallbackRuntime)
+	applyPluginsRuntime(root, cfg)
 
 	return json.Marshal(root)
 }
 
-func applyGatewayLegacy(root map[string]any, cfg NativeConfig, fallback []byte) {
+func applyGatewayRuntime(root map[string]any, cfg NativeConfig, fallback []byte) {
 	setString(root, cfg.Gateway.Mode, "gateway", "mode")
 	setString(root, cfg.Gateway.Bind, "gateway", "bind")
 	setInt(root, cfg.Gateway.Port, "gateway", "port")
 	setString(root, cfg.Gateway.AuthMode, "gateway", "auth", "mode")
 	if token := usableSecret(cfg.Gateway.AuthToken, fallbackString(fallback, "gateway.auth.token")); token != "" {
 		setPath(root, token, "gateway", "auth", "token")
+	}
+	if password := usableSecret(cfg.Gateway.AuthPassword, fallbackString(fallback, "gateway.auth.password")); password != "" {
+		setPath(root, password, "gateway", "auth", "password")
 	}
 	setString(root, cfg.Gateway.TailscaleMode, "gateway", "tailscale", "mode")
 	setString(root, cfg.Gateway.ControlUIRoot, "gateway", "controlUi", "root")
@@ -551,11 +623,12 @@ func applyGatewayLegacy(root map[string]any, cfg NativeConfig, fallback []byte) 
 	}
 }
 
-func applyAgentsLegacy(root map[string]any, cfg NativeConfig) {
+func applyAgentsRuntime(root map[string]any, cfg NativeConfig) {
 	setString(root, cfg.Agent.Model, "agents", "defaults", "model", "primary")
 	setStrings(root, cfg.Agent.Fallbacks, "agents", "defaults", "model", "fallbacks")
 	setString(root, cfg.Agent.Workspace, "agents", "defaults", "workspace")
 	setString(root, cfg.Agent.ToolsProfile, "agents", "defaults", "tools", "profile")
+	setFloat(root, cfg.Agent.DailyUSDCap, "agents", "defaults", "dailyUsdCap")
 	setInt(root, cfg.Agent.MaxTurns, "agents", "defaults", "maxTurns")
 	setString(root, cfg.Agent.SystemPrompt, "agents", "defaults", "systemPrompt")
 
@@ -572,7 +645,7 @@ func applyAgentsLegacy(root map[string]any, cfg NativeConfig) {
 		}
 	}
 
-	agents := make([]any, 0, 1+len(cfg.Subagents))
+	agents := make([]any, 0, 1)
 	main := map[string]any{"id": "main"}
 	if cfg.Agent.Model != "" {
 		main["model"] = cfg.Agent.Model
@@ -583,6 +656,14 @@ func applyAgentsLegacy(root map[string]any, cfg NativeConfig) {
 	if cfg.Agent.ToolsProfile != "" {
 		main["tools"] = map[string]any{"profile": cfg.Agent.ToolsProfile}
 	}
+	if cfg.Agent.ToolsEnabled != nil {
+		tools, _ := main["tools"].(map[string]any)
+		if tools == nil {
+			tools = map[string]any{}
+		}
+		tools["enabled"] = *cfg.Agent.ToolsEnabled
+		main["tools"] = tools
+	}
 	if cfg.Agent.MaxTurns > 0 {
 		main["maxTurns"] = cfg.Agent.MaxTurns
 	}
@@ -590,32 +671,16 @@ func applyAgentsLegacy(root map[string]any, cfg NativeConfig) {
 		main["systemPrompt"] = cfg.Agent.SystemPrompt
 	}
 	agents = append(agents, main)
-	for _, sub := range cfg.Subagents {
-		if sub.ID == "" {
-			continue
-		}
-		entry := map[string]any{"id": sub.ID}
-		if sub.Name != "" {
-			entry["name"] = sub.Name
-		}
-		if sub.Model != "" {
-			entry["model"] = sub.Model
-		}
-		if sub.ToolsProfile != "" {
-			entry["tools"] = map[string]any{"profile": sub.ToolsProfile}
-		}
-		agents = append(agents, entry)
-	}
 	setPath(root, agents, "agents", "list")
 }
 
-func applyMemoryLegacy(root map[string]any, cfg NativeConfig) {
+func applyMemoryRuntime(root map[string]any, cfg NativeConfig) {
 	setPath(root, cfg.Memory.Enabled, "memory", "enabled")
 	setString(root, cfg.Memory.Path, "memory", "path")
 	setString(root, cfg.Memory.Model, "memory", "model")
 }
 
-func applyToolsLegacy(root map[string]any, cfg NativeConfig, fallback []byte) {
+func applyToolsRuntime(root map[string]any, cfg NativeConfig, fallback []byte) {
 	setString(root, cfg.Tools.Profile, "tools", "profile")
 	if cfg.Tools.WebSearchEnabled != nil {
 		setPath(root, *cfg.Tools.WebSearchEnabled, "tools", "web", "search", "enabled")
@@ -626,7 +691,7 @@ func applyToolsLegacy(root map[string]any, cfg NativeConfig, fallback []byte) {
 	}
 }
 
-func applyModelsLegacy(root map[string]any, cfg NativeConfig, fallback []byte) {
+func applyModelsRuntime(root map[string]any, cfg NativeConfig, fallback []byte) {
 	providers := map[string]any{}
 	providerIDs := make([]string, 0, len(cfg.Models.Providers))
 	for id := range cfg.Models.Providers {
@@ -645,7 +710,7 @@ func applyModelsLegacy(root map[string]any, cfg NativeConfig, fallback []byte) {
 		if len(provider.Models) > 0 {
 			models := make([]any, 0, len(provider.Models))
 			for _, model := range provider.Models {
-				models = append(models, modelToLegacy(model))
+				models = append(models, modelToRuntime(model))
 			}
 			entry["models"] = models
 		}
@@ -668,19 +733,20 @@ func applyModelsLegacy(root map[string]any, cfg NativeConfig, fallback []byte) {
 	setPath(root, providers, "models", "providers")
 }
 
-func applyTelegramLegacy(root map[string]any, cfg NativeConfig, fallback []byte) {
+func applyTelegramRuntime(root map[string]any, cfg NativeConfig, fallback []byte) {
 	setPath(root, cfg.Telegram.Enabled, "channels", "telegram", "enabled")
 	if token := usableSecret(cfg.Telegram.BotToken, fallbackString(fallback, "channels.telegram.botToken")); token != "" {
 		setPath(root, token, "channels", "telegram", "botToken")
 	}
 	setStrings(root, cfg.Telegram.AllowFrom, "channels", "telegram", "allowFrom")
+	setString(root, cfg.Telegram.DMPolicy, "channels", "telegram", "dmPolicy")
 	setString(root, cfg.Telegram.AgentID, "channels", "telegram", "agentId")
 	if cfg.Telegram.RequireMention != nil {
 		setPath(root, *cfg.Telegram.RequireMention, "channels", "telegram", "groups", "*", "requireMention")
 	}
 }
 
-func applyPluginsLegacy(root map[string]any, cfg NativeConfig) {
+func applyPluginsRuntime(root map[string]any, cfg NativeConfig) {
 	for _, name := range cfg.Plugins.Enabled {
 		if name == "" {
 			continue
@@ -695,7 +761,7 @@ func applyPluginsLegacy(root map[string]any, cfg NativeConfig) {
 	}
 }
 
-func modelToLegacy(model ModelConfig) map[string]any {
+func modelToRuntime(model ModelConfig) map[string]any {
 	out := map[string]any{}
 	if model.ID != "" {
 		out["id"] = model.ID
@@ -773,6 +839,13 @@ func setStrings(root map[string]any, values []string, path ...string) {
 }
 
 func setInt(root map[string]any, value int64, path ...string) {
+	if value == 0 {
+		return
+	}
+	setPath(root, value, path...)
+}
+
+func setFloat(root map[string]any, value float64, path ...string) {
 	if value == 0 {
 		return
 	}
@@ -865,8 +938,8 @@ func MarshalTOML(cfg NativeConfig, opts MarshalOptions) []byte {
 	var b strings.Builder
 	w := tomlWriter{b: &b, opts: opts}
 	w.comment("Generated preview from legacy talon JSON. Review before writing ~/.talon/config.toml.")
-	w.comment("Legacy JSON may still supply redacted or not-yet-migrated values during cutover.")
-	w.comment("The main chat agent keeps its workspace Markdown files; subagents migrate as task/model profiles.")
+	w.comment("Plaintext secrets are omitted; move them to 1Password or the OS keychain and store refs here.")
+	w.comment("The main chat agent keeps its workspace Markdown files; subagents live in ~/.talon/subagents/*.md.")
 	w.blank()
 	w.section("gateway")
 	w.kvString("mode", cfg.Gateway.Mode, false)
@@ -874,6 +947,7 @@ func MarshalTOML(cfg NativeConfig, opts MarshalOptions) []byte {
 	w.kvInt("port", cfg.Gateway.Port)
 	w.kvString("auth_mode", cfg.Gateway.AuthMode, false)
 	w.kvString("auth_token_ref", cfg.Gateway.AuthToken, true)
+	w.kvString("auth_password_ref", cfg.Gateway.AuthPassword, true)
 	w.kvString("tailscale_mode", cfg.Gateway.TailscaleMode, false)
 	w.kvString("control_ui_root", cfg.Gateway.ControlUIRoot, false)
 	if cfg.Gateway.ControlUIAllowInsecure != nil {
@@ -886,6 +960,10 @@ func MarshalTOML(cfg NativeConfig, opts MarshalOptions) []byte {
 	w.kvStrings("fallback_models", cfg.Agent.Fallbacks)
 	w.kvString("workspace", cfg.Agent.Workspace, false)
 	w.kvString("tools_profile", cfg.Agent.ToolsProfile, false)
+	if cfg.Agent.ToolsEnabled != nil {
+		w.kvBool("tools_enabled", *cfg.Agent.ToolsEnabled)
+	}
+	w.kvFloat("daily_usd_cap", cfg.Agent.DailyUSDCap)
 	w.kvInt("max_turns", cfg.Agent.MaxTurns)
 	w.kvString("system_prompt", cfg.Agent.SystemPrompt, false)
 	for _, alias := range cfg.Agent.ModelAliases {
@@ -893,15 +971,6 @@ func MarshalTOML(cfg NativeConfig, opts MarshalOptions) []byte {
 		w.arraySection("agent.model_aliases")
 		w.kvString("model", alias.Model, false)
 		w.kvString("alias", alias.Alias, false)
-	}
-
-	for _, sub := range cfg.Subagents {
-		w.blank()
-		w.arraySection("subagents")
-		w.kvString("id", sub.ID, false)
-		w.kvString("name", sub.Name, false)
-		w.kvString("model", sub.Model, false)
-		w.kvString("tools_profile", sub.ToolsProfile, false)
 	}
 
 	w.blank()
@@ -954,6 +1023,7 @@ func MarshalTOML(cfg NativeConfig, opts MarshalOptions) []byte {
 	w.kvBool("enabled", cfg.Telegram.Enabled)
 	w.kvString("bot_token_ref", cfg.Telegram.BotToken, true)
 	w.kvStrings("allow_from", cfg.Telegram.AllowFrom)
+	w.kvString("dm_policy", cfg.Telegram.DMPolicy, false)
 	w.kvString("agent_id", cfg.Telegram.AgentID, false)
 	if cfg.Telegram.RequireMention != nil {
 		w.kvBool("require_mention", *cfg.Telegram.RequireMention)
@@ -964,7 +1034,6 @@ func MarshalTOML(cfg NativeConfig, opts MarshalOptions) []byte {
 	w.kvStrings("enabled", cfg.Plugins.Enabled)
 	w.kvStrings("deny", cfg.Plugins.Deny)
 	w.kvStrings("load_paths", cfg.Plugins.LoadPaths)
-	w.kvBool("legacy_openclaw_shim", cfg.Plugins.LegacyOpenClawShim)
 	return []byte(b.String())
 }
 
@@ -986,7 +1055,8 @@ func (w tomlWriter) kvString(key, value string, secret bool) {
 		return
 	}
 	if secret && w.opts.RedactSecrets && secretKind(value) == "literal" {
-		value = "<redacted:literal>"
+		w.comment(fmt.Sprintf("%s omitted: plaintext secrets must be moved to 1Password or the OS keychain", key))
+		return
 	}
 	fmt.Fprintf(w.b, "%s = %s\n", key, strconv.Quote(value))
 }
@@ -1008,6 +1078,12 @@ func (w tomlWriter) kvInt(key string, value int64) {
 		return
 	}
 	fmt.Fprintf(w.b, "%s = %d\n", key, value)
+}
+func (w tomlWriter) kvFloat(key string, value float64) {
+	if value == 0 {
+		return
+	}
+	fmt.Fprintf(w.b, "%s = %s\n", key, formatFloat(value))
 }
 func (c ModelCost) hasAny() bool {
 	return c.Input != nil || c.Output != nil || c.CacheRead != nil || c.CacheWrite != nil

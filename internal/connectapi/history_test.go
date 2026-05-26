@@ -2,10 +2,9 @@ package connectapi
 
 import "testing"
 
-// History translation tests stand on the openclaw-shaped row
-// fixtures the WS chat.history handler produces today. Covers the
-// three real role variants plus the pure-tool-use shortcut and
-// the unknown-role drop. Pure Go — no server boot.
+// History translation tests stand on the row fixtures the chat.history
+// handler produces today. Covers the real role variants plus the
+// pure-tool-use shortcut and the unknown-role drop.
 
 func TestHistoryRowToProto_UserRow(t *testing.T) {
 	row := chatHistoryRow{
@@ -153,4 +152,3 @@ func TestFirstText(t *testing.T) {
 		t.Errorf("got %q, want %q", got, "match")
 	}
 }
-

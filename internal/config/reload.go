@@ -14,9 +14,8 @@ const (
 	// action needed beyond the file write.
 	ReloadNextRPC ReloadClass = iota
 	// ReloadHUP: the gateway picks this up on SIGHUP. Reserved — no
-	// paths are classified here yet because openclaw upstream and
-	// talon's embedded gateway both need explicit SIGHUP handlers
-	// (Phase 2 of talon-5zx).
+	// paths are classified here yet because the embedded gateway still
+	// needs explicit SIGHUP handlers.
 	ReloadHUP
 	// ReloadRestart: the value is consumed at gateway startup
 	// (listener bind, plugin loader, etc.) and requires a full

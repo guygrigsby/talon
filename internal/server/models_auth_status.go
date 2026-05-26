@@ -5,8 +5,7 @@ package server
 // Scope: talon today only supports api_key auth profiles (openai,
 // deepseek, lmstudio, plus any plugin providers that read keys from
 // disk). OAuth/bearer-token providers with refresh state and time-
-// bounded credentials are an openclaw-runtime feature talon doesn't
-// have yet (talon-aws), so this handler does not emit `expiry`
+// bounded credentials are not implemented yet, so this handler does not emit `expiry`
 // objects, and every profile we surface has type="api_key".
 //
 // The UI's isMonitoredAuthProvider filter only flags providers as
@@ -27,7 +26,7 @@ import (
 	"time"
 
 	"github.com/guygrigsby/talon/internal/config"
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/tidwall/gjson"
 )
 
@@ -36,10 +35,10 @@ import (
 // (credential presence). No external network calls — everything is
 // derived from on-disk state.
 type ModelsAuthStatusHandler struct {
-	paths openclaw.Paths
+	paths talonpath.Paths
 }
 
-func NewModelsAuthStatusHandler(paths openclaw.Paths) *ModelsAuthStatusHandler {
+func NewModelsAuthStatusHandler(paths talonpath.Paths) *ModelsAuthStatusHandler {
 	return &ModelsAuthStatusHandler{paths: paths}
 }
 
@@ -49,17 +48,16 @@ func (h *ModelsAuthStatusHandler) Register(r *Registry) {
 
 // authStatusParams is the optional input. agentId picks which
 // agent's auth-profiles.json to inspect; provider narrows the
-// response. refresh is accepted for openclaw parity (we don't cache
-// today, so it's a no-op).
+// response. refresh is accepted but is a no-op because we do not cache today.
 type authStatusParams struct {
 	AgentID  string `json:"agentId,omitempty"`
 	Provider string `json:"provider,omitempty"`
 	Refresh  bool   `json:"refresh,omitempty"`
 }
 
-// authProfilesFile mirrors the on-disk shape openclaw writes and
-// talon's openai/deepseek providers read. Only the fields we use
-// here are decoded — extras are ignored for forward-compat.
+// authProfilesFile mirrors the on-disk shape Talon's providers read.
+// Only the fields we use here are decoded; extras are ignored for
+// forward-compat.
 type authProfilesFile struct {
 	Profiles map[string]authProfilesRow `json:"profiles"`
 }
@@ -73,8 +71,7 @@ type authProfilesRow struct {
 func (h *ModelsAuthStatusHandler) handleAuthStatus(_ context.Context, _ HandlerCtx, raw json.RawMessage) (any, *FrameError) {
 	var p authStatusParams
 	if len(raw) > 0 && string(raw) != "null" {
-		// Tolerate malformed params — openclaw's UI sends well-formed
-		// objects, but treat junk the same as {} rather than 400.
+		// Tolerate malformed params; treat junk the same as {} rather than 400.
 		_ = json.Unmarshal(raw, &p)
 	}
 	agentID := p.AgentID
@@ -103,14 +100,12 @@ func (h *ModelsAuthStatusHandler) handleAuthStatus(_ context.Context, _ HandlerC
 	}, nil
 }
 
-// readAuthProfiles loads the agent's auth-profiles.json using the
-// standard talon layering: talon overlay wins, openclaw fallback
-// otherwise. Missing file is not an error — a fresh install has no
-// profiles and every provider falls through to "missing".
+// readAuthProfiles loads the agent's auth-profiles.json from Talon state.
+// Missing file is not an error — a fresh install has no profiles and every
+// provider falls through to "missing".
 func (h *ModelsAuthStatusHandler) readAuthProfiles(agentID string) (map[string]authProfilesRow, *FrameError) {
 	candidates := []string{
 		filepath.Join(h.paths.Talon.AgentDir(agentID), "agent", "auth-profiles.json"),
-		filepath.Join(h.paths.Openclaw.AgentDir(agentID), "agent", "auth-profiles.json"),
 	}
 	for _, path := range candidates {
 		buf, err := os.ReadFile(path)
@@ -272,10 +267,9 @@ func buildProviderEntry(name string, allProfiles map[string]authProfilesRow) map
 	}
 }
 
-// displayNameForProvider returns a human-friendly label. openclaw
-// keeps a PROVIDER_LABELS map for the oauth/usage-tracked providers
-// it monitors; talon's auth surface is api-key-only today so we
-// just title-case unknowns and override a few common cases inline.
+// displayNameForProvider returns a human-friendly label. Talon's auth
+// surface is api-key-only today, so we title-case unknowns and override a
+// few common cases inline.
 func displayNameForProvider(name string) string {
 	switch name {
 	case "openai":

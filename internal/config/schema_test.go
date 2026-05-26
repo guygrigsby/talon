@@ -7,8 +7,7 @@ import (
 	"testing"
 )
 
-// minimalSchemaEnvelope is a small but realistic envelope shape we use as a
-// stand-in for the real openclaw schema RPC response. It exercises:
+// minimalSchemaEnvelope is a small but realistic envelope shape. It exercises:
 // additionalProperties:false, type checking, nested objects, and required.
 const minimalSchemaEnvelope = `{
   "generatedAt": "2026-04-27T12:00:00Z",
@@ -22,6 +21,7 @@ const minimalSchemaEnvelope = `{
         "additionalProperties": false,
         "properties": {
           "port": {"type": "integer", "minimum": 1, "maximum": 65535},
+          "mode": {"type": "string"},
           "bind": {"type": "string", "enum": ["loopback","lan","tailnet","auto","custom"]},
           "auth": {
             "type": "object",
@@ -69,9 +69,9 @@ func TestWriteSchemaCache_RejectsInvalidShape(t *testing.T) {
 	p := fixture(t, "", "")
 	cases := []string{
 		`not json`,
-		`{}`,                               // missing .schema
-		`{"generatedAt":"x","schema":42}`,  // schema not an object
-		`{"generatedAt":"x","schema":""}`,  // empty schema string
+		`{}`,                              // missing .schema
+		`{"generatedAt":"x","schema":42}`, // schema not an object
+		`{"generatedAt":"x","schema":""}`, // empty schema string
 	}
 	for _, c := range cases {
 		if err := WriteSchemaCache(p, []byte(c)); err == nil {
@@ -120,9 +120,9 @@ func TestValidateMerged_RejectsBadEnum(t *testing.T) {
 }
 
 func TestValidateMerged_RejectsAdditionalProperties(t *testing.T) {
-	// gateway.auth has additionalProperties:false; an unknown sibling
-	// should be rejected.
-	p := fixture(t, "", `{"gateway":{"auth":{"mode":"token","unknownField":"x"}}}`)
+	// gateway.auth has additionalProperties:false in this cached schema.
+	// Use a real native-preserved field that the schema intentionally omits.
+	p := fixture(t, "", `{"gateway":{"auth":{"mode":"password","password":"x"}}}`)
 	if err := WriteSchemaCache(p, []byte(minimalSchemaEnvelope)); err != nil {
 		t.Fatal(err)
 	}
@@ -136,8 +136,8 @@ func TestValidateMerged_RejectsAdditionalProperties(t *testing.T) {
 }
 
 func TestValidateMerged_AcceptsMergedFromBothLayers(t *testing.T) {
-	// Schema validates the *merged* view; an invalid talon overlay
-	// override must be caught even when openclaw alone would be valid.
+	// Schema validates the merged view; an invalid override must be caught
+	// even when the base would be valid.
 	p := fixture(t,
 		`{"gateway":{"port":18789}}`,
 		`{"gateway":{"port":99999999}}`, // out of range per schema (max 65535)
@@ -163,8 +163,8 @@ func TestValidateMerged_NoCacheReturnsErrSchemaNotCached(t *testing.T) {
 }
 
 func TestValidateMerged_DanglingRefReturnsCompileFailedError(t *testing.T) {
-	// Mirrors a real openclaw schema bug: $ref to a $defs block that is
-	// not present at the document root.
+	// A $ref to a $defs block that is not present at the document root
+	// should surface as a compile failure.
 	const danglingRefSchema = `{
   "generatedAt": "2026-04-27T12:00:00Z",
   "schema": {

@@ -20,8 +20,7 @@ service AgentsService {
   rpc FilesList(AgentFilesListRequest) returns (JSONPayload);
   // FilesGet returns the content of one per-agent file.
   rpc FilesGet(AgentFilesGetRequest) returns (JSONPayload);
-  // FilesSet writes the content of one per-agent file (talon
-  // overlay only; openclaw layer is read-only).
+  // FilesSet writes the content of one per-agent file.
   rpc FilesSet(AgentFilesSetRequest) returns (Empty);
   // IdentityGet returns the agent's resolved identity (operator
   // token + device pairing context for channel routing).

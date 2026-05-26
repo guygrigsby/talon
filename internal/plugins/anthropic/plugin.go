@@ -1,15 +1,14 @@
-// Package anthropic exposes the Anthropic Messages API as a talon
-// plugin. The subprocess entrypoint (cmd/talon's `plugin run anthropic`)
-// calls New() and pluginrun.Serve() to wire it up.
+// Package anthropic exposes the Anthropic Messages API as a Talon plugin.
+// The subprocess entrypoint is `talon plugin run anthropic`.
 //
 // Auth resolution order:
 //
 //  1. ANTHROPIC_API_KEY env var (set by host translation from
 //     plugins.entries.anthropic.config.apiKey, or by the user in
 //     their shell).
-//  2. openclaw-style auth-profiles.json at
-//     ~/.openclaw/agents/main/agent/auth-profiles.json, profile id
-//     "anthropic:default" (mirrors the deepseek plugin's loader).
+//  2. Talon auth-profiles.json at
+//     ~/.talon/agents/main/agent/auth-profiles.json, profile id
+//     "anthropic:default".
 //
 // Empty key after both attempts surfaces as a clear init-time error
 // so the gateway logs make the missing-config state obvious instead
@@ -290,7 +289,7 @@ func adaptDelta(d provider.Delta) *pb.Delta {
 //     resolved via the secrets resolver — matches the host-side
 //     buildPluginEnv translation of plugins.entries.anthropic.
 //     config.apiKey)
-//  3. openclaw auth-profiles.json profile "anthropic:default"
+//  3. Talon auth-profiles.json profile "anthropic:default"
 //
 // Empty + nil err means none of the three sources had a key.
 func loadAPIKey() (string, error) {
@@ -312,7 +311,7 @@ func loadAPIKey() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("home dir: %w", err)
 	}
-	authPath := filepath.Join(home, ".openclaw", "agents", "main", "agent", "auth-profiles.json")
+	authPath := filepath.Join(home, ".talon", "agents", "main", "agent", "auth-profiles.json")
 	// LoadProfileKey errors when the file is missing; the env paths
 	// already covered "no profile + env-only" so callers expect a
 	// profile here. If the file truly isn't there we still want a

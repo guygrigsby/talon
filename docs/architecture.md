@@ -9,7 +9,7 @@ see `protocol.md`.
 Cobra-based. `main.go` wires the root command and the helpers every subcommand
 uses:
 
-- `dial()` / `dialWith(urlOverride, tokenOverride)` — load `~/.talon/talon.json` (or `$TALON_CONFIG_PATH`; falls back to `~/.openclaw/openclaw.json` if present from a prior install), open a websocket to the gateway, perform the handshake, return a `*gateway.Client`.
+- `dial()` / `dialWith(urlOverride, tokenOverride)` — load `~/.talon/config.toml` (or `$TALON_CONFIG_PATH`), connect to the gateway, perform auth, and return a gateway client.
 - `runRPC(method, params)` — one-shot RPC with a 10s timeout (dial → request → close). Most commands are thin wrappers around this.
 - `emit(payload)` — pretty-prints JSON. **Note:** the `|| true` in `emit()` makes it pretty-print regardless of the `--json` global flag. This is a known gap (see `PARITY.md` "Output format gap"). Don't write new commands that depend on `--json` being honored until that's fixed.
 
@@ -33,19 +33,17 @@ Subcommand files:
 - `auth.go` — modes `none` and `token` are wired (constant-time compare via `subtle.ConstantTimeCompare`). `password` and `trusted-proxy` return `INTERNAL` errors today.
 - `registry.go` — method dispatch table. To add a server-side method, call `r.Register(name, handler)` in `registerDefaults()`. Default handlers today: `health` only.
 
-## Config (`internal/config/` + `internal/openclaw/`)
+## Config (`internal/config/` + `internal/talonconfig/` + `internal/talonpath/`)
 
-talon's config layer is a two-layer overlay during the migration era: the
-talon overlay at `~/.talon/talon.json` plus an optional read-only legacy
-layer at `~/.openclaw/openclaw.json` for machines that previously ran
-openclaw. See CLAUDE.md "Layered config model" for the high-level rule;
-this section is the implementation map.
+Talon's human config is `~/.talon/config.toml`. The runtime still adapts the
+native TOML model into a JSON-shaped runtime view while older handlers are
+moved to typed accessors.
 
-- `internal/openclaw/paths.go` — `Paths{Talon, Openclaw}` plus per-layer accessors (`ConfigBackupPath(n)`, `LastGoodPath()`, `LogsDir()`, `ConfigAuditLogPath()`, `CredentialsDir()`, `IdentityDir()`, `LocksDir()`, `AgentDir(id)`). Honors `TALON_STATE_DIR`, `OPENCLAW_STATE_DIR`, `TALON_CONFIG_PATH`, `OPENCLAW_CONFIG_PATH` (the openclaw env vars are honored for migration import; pure-talon installs use only the talon ones).
-- `internal/config/config.go` — typed `Config` plus `MergedBytes(p)` (deep-merge talon over legacy, id-keyed array merge for `agents.list`-style arrays) and `Load(p)` (typed Config from the merged bytes). Default gateway port `18789`.
-- `internal/config/merge.go` — `mergeJSON(base, overlay)` and `mergeValues` for the read-side merge. Treats both layers as `map[string]any` for the merge then re-marshals; the merge result is *not* what gets written back to disk.
-- `internal/config/edit.go` — `Get(p, segments)` reads merged; `Set(p, segments, value, opts)` and `Unset(p, segments)` only write to `p.Talon.Config`. The protected-path guard checks the merged view. `Unset` returns `ErrNotInOverlay` when the requested path exists only in the legacy layer.
-- `internal/config/backup.go` — `writeOverlay()` does (1) rotate `~/.talon/talon.json.bak{.1..4}` (5-deep ring), (2) atomic temp-file rename, (3) refresh the unnumbered `.bak`, (4) append a JSONL `AuditRecord` to `~/.talon/logs/config-audit.jsonl` with sha256 hashes before/after, gateway-mode-change, pid/ppid/argv. `Validate()` refreshes `~/.talon/talon.json.last-good` on success.
+- `internal/talonpath/paths.go` — state/config path resolution for `~/.talon`, including `config.toml`, backups, logs, credentials, agent auth profiles, `subagents/`, and `plugins/`. Honors `TALON_STATE_DIR` and `TALON_CONFIG_PATH`.
+- `internal/talonconfig/native.go` — Viper-backed native TOML structs, legacy JSON migration, TOML marshal, and runtime JSON adapter.
+- `internal/config/config.go` — `MergedBytes(p)` adapts native TOML to the JSON-shaped gateway view and caches by config file stat metadata. `Load(p)` returns the small typed config used by CLI dialing.
+- `internal/config/edit.go` — `Get(p, segments)`, `Set(p, segments, value, opts)`, and `Unset(p, segments)` write native TOML through the runtime adapter while path-specific callers migrate.
+- `internal/config/backup.go` — config writes rotate `~/.talon/config.toml.bak{.1..4}`, append a JSONL `AuditRecord` to `~/.talon/logs/config-audit.jsonl`, and refresh the last-good sidecar on successful validation.
 - `internal/config/path.go` — dot-path parser + sjson escaping.
 
 **Don't replace the dot-path edit pipeline with full unmarshal/remarshal.**
@@ -53,28 +51,21 @@ The config schema is much larger than talon's typed `Config` struct knows
 about. Round-tripping through the typed struct would silently drop or
 reorder unknown keys.
 
-**Don't write to `~/.openclaw/`.** The legacy layer is read-only. Anything
-that needs persistent state goes under `~/.talon/`.
-
 ## Gateway client (`internal/gateway/client.go`)
 
-Thin WebSocket client. Pairs with the embedded server's framing. Key bits:
+Connect-based client. Key bits:
 
-- `Connect()` waits for the server's `connect.challenge` event, then sends a `connect` request. The `client.id` is currently hardcoded to `"openclaw-tui"` — a leftover from when talon was a drop-in client for openclaw gateways. Will change to `"talon"` once standalone migration is complete (tracked in `docs/migration-agentcore.md` Phase 5).
-- `Request()` correlates by frame ID via a `pending map[string]chan *Frame`. The read loop dispatches `res` frames into pending channels and `event` frames to `OnEvent`.
-- The client requests broad scopes by default (`operator.admin`, `read`, `write`, `approvals`, `pairing`). Per-command scope reduction isn't wired today.
+- `Request()` sends a unary RPC through `talon.v1.RpcService/Dispatch`.
+- Auth token resolution comes from native config via `config.Load`.
 
 For the wire format and handshake sequence, see `protocol.md`.
 
 ## Plugin layer (`internal/plugin/`)
 
-talon spawns plugins as subprocesses over a gRPC wire defined in `internal/plugin/pb/plugin.proto` (Plugin service host→plugin, Host service plugin→host, capability-gated). Two transports coexist:
+talon spawns plugins as subprocesses over a gRPC wire defined in `internal/plugin/pb/plugin.proto` (Plugin service host to plugin, Host service plugin to host, capability-gated).
 
-- **Native (`internal/plugin/native/`)** — hashicorp/go-plugin with AutoMTLS for first-party Go plugins shipped inside `bin/talon`. `talon plugin run <name>` is the dispatch entry point; the gateway's `BuiltinPluginCmd` returns `[<talon-bin>, plugin, run, <name>]` so one binary covers everything. Plugin→host callbacks ride a `GRPCBroker` channel over the existing gRPC connection (no separate listener), gated by `native.NewCapabilityInterceptor` against a per-plugin `ManifestHolder` that swaps in the real manifest after `Initialize` returns.
-- **Legacy (`internal/plugin/legacy/`)** — the bespoke spawn/handshake/host code originally used by openclaw's Node shim for bundled JS extensions. No JS extensions ship with talon today; the path is kept as a third-party-plugin escape hatch for plugins declared with explicit `cmd` in config. Plugins authenticate via an env-supplied cookie and dial a separate loopback gRPC listener for Host callbacks.
+- **Native (`internal/plugin/native/`)** — hashicorp/go-plugin with AutoMTLS for first-party Go plugins shipped inside `bin/talon`. `talon plugin run <name>` is the dispatch entry point; the gateway's `BuiltinPluginCmd` returns `[<talon-bin>, plugin, run, <name>]` so one binary covers everything. Plugin to host callbacks ride a `GRPCBroker` channel over the existing gRPC connection, gated by `native.NewCapabilityInterceptor` against a per-plugin `ManifestHolder` that swaps in the real manifest after `Initialize` returns.
 
-`internal/plugin/pkgutil/` is the only place that holds the `MethodCapability` map and the cmd-resolution fallback (`ResolvePluginCmd` — try the configured path, then sibling-of-talon, then `$PATH`). Both transports read from it so capability gating can't drift.
-
-`gateway_chat.go:parsePluginSpecs` tags each spec with `kind`: explicit `cmd:` or `bundled:` → `kindLegacy`; first-party builtin fallback → `kindNative`. `loadConfiguredPlugins` dispatches accordingly; both paths register their `*legacy.Instance` into the shared `legacy.Host` registry so all downstream consumers (`agentProviderFactory`, `channel` dispatch, tool runner) see a single namespace.
+`internal/plugin/pkgutil/` is the only place that holds the `MethodCapability` map and the cmd-resolution fallback (`ResolvePluginCmd` — try the configured path, then sibling-of-talon, then `$PATH`) so capability gating can't drift.
 
 If you add a new bundled plugin: add it to `internal/server/plugin_deps.go:builtinPlugins`, add a constructor entry to `cmd/talon/plugin_run.go:pluginConstructors`, and implement `pb.PluginServer` under `internal/plugins/<name>/`. No standalone binary needed.

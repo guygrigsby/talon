@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-// ParsePath splits a config path into segments, mirroring openclaw's parser.
+// ParsePath splits a config path into segments.
 // Supported syntax:
 //
 //	a.b.c           -> ["a","b","c"]
@@ -17,8 +17,7 @@ import (
 //
 // Bare segments inside brackets are accepted as-is (so [0] and [foo] both
 // work). Quoted bracket segments must be JSON-string-quoted ("..."); single
-// quotes are not supported (openclaw uses JSON5 here, talon doesn't pull a
-// JSON5 dep).
+// quotes are not supported; Talon accepts JSON-string quoted segments only.
 func ParsePath(raw string) ([]string, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -93,8 +92,7 @@ func parseBracketSegment(inside string) (string, error) {
 	return inside, nil
 }
 
-// blockedObjectKeys defends against prototype-pollution-style keys. Mirrors
-// openclaw's isBlockedObjectKey.
+// blockedObjectKeys defends against prototype-pollution-style keys.
 var blockedObjectKeys = map[string]struct{}{
 	"__proto__":   {},
 	"prototype":   {},

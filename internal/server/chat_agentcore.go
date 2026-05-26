@@ -3,11 +3,11 @@
 //
 // Routing is automatic per-provider, no user-facing config flag:
 //
-//   - anthropic → legacy chat loop. agentcore+LiteLLM currently
+//   - anthropic → direct provider loop. agentcore+LiteLLM currently
 //     400s on anthropic (top_p / temperature conflict, upstream
-//     blocker). Legacy keeps working via the anthropic plugin
+//     blocker). The provider plugin path keeps working
 //     until the upstream patch lands.
-//   - openai → legacy chat loop. The legacy OpenAI-compatible
+//   - openai → direct provider loop. The OpenAI-compatible
 //     provider is the known-good path for both Responses-era GPT-5
 //     models and chat-completions models such as gpt-4o-mini.
 //   - everything else → agentcore. deepseek, mistral, mlx,
@@ -26,7 +26,7 @@ import (
 )
 
 // resolveModelForRouting picks the model the chat-send will use,
-// honoring the same per-session override the legacy path does so
+// honoring the same per-session override the direct provider path does so
 // routing matches what handleSend would actually call. Returns
 // the full "<provider>/<model>" string.
 func (h *ChatHandler) resolveModelForRouting(agentID, sessionKey string) (modelStringer, error) {
@@ -63,21 +63,21 @@ func (m providerModelID) Provider() string {
 }
 
 // shouldUseAgentcoreFor reports whether the named provider routes
-// through the agentcore path. OpenAI stays on the legacy provider
+// through the agentcore path. OpenAI stays on the direct provider
 // path for now: GPT-5 requires Responses API support, and the live
 // gpt-4o-mini path has shown assistant turns disappearing under
-// agentcore while the legacy plugin path continues to respond.
+// agentcore while the provider plugin path continues to respond.
 //
 // Always false when the agentcore runner wasn't wired — that
 // keeps fresh dev builds (without the cmd/talon hookup) on the
-// legacy path.
+// direct provider path.
 func (h *ChatHandler) shouldUseAgentcoreFor(modelID string) bool {
 	if h.agentcoreRun == nil {
 		return false
 	}
 	providerName := providerModelID(modelID).Provider()
 
-	// Anthropic stays on legacy until upstream LiteLLM ships the
+	// Anthropic stays on the direct provider path until upstream LiteLLM ships the
 	// top_p / temperature conflict fix. See
 	// docs/migration-agentcore.md Phase 4 status.
 	if providerName == "anthropic" {

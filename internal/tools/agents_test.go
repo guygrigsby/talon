@@ -6,50 +6,52 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonconfig"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
-func TestAgentsTool_MergesTalonOverlayOverOpenclaw(t *testing.T) {
-	stateDir := t.TempDir()
-	openclawDir := filepath.Join(stateDir, ".openclaw")
-	talonDir := filepath.Join(stateDir, ".talon")
-	for _, d := range []string{openclawDir, talonDir} {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			t.Fatal(err)
-		}
+func writeAgentsFixture(t *testing.T, runtimeJSON string) talonpath.Paths {
+	t.Helper()
+	dir := t.TempDir()
+	cfg, err := talonconfig.FromRuntimeJSON([]byte(runtimeJSON))
+	if err != nil {
+		t.Fatal(err)
 	}
-	// openclaw layer: main + coding (no chat).
-	openclawCfg := `{
+	cfgPath := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(cfgPath, talonconfig.MarshalTOML(cfg, talonconfig.MarshalOptions{}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return talonpath.Paths{Talon: talonpath.Layer{Dir: dir, Config: cfgPath}}
+}
+
+func TestAgentsTool_ListsConfiguredAgents(t *testing.T) {
+	paths := writeAgentsFixture(t, `{
 		"agents": {
 			"defaults": {"model": {"primary": "openai/gpt-5.4-mini"}},
 			"list": [
-				{"id":"main","name":"main","model":{"primary":"openai/gpt-5.4-mini"}},
-				{"id":"coding","name":"coding","model":{"primary":"anthropic/claude-opus-4-7"},"workspace":"/tmp/ws-coding"}
+				{"id":"main","name":"main","model":{"primary":"openai/gpt-5.4-mini"}}
 			]
 		}
-	}`
-	talonCfg := `{
-		"agents": {
-			"list": [
-				{"id":"chat","model":"lmstudio/dolphin","workspace":"/tmp/ws-chat"}
-			]
-		}
-	}`
-	if err := os.WriteFile(filepath.Join(openclawDir, "openclaw.json"), []byte(openclawCfg), 0o600); err != nil {
+	}`)
+	if err := os.MkdirAll(paths.Talon.SubagentsDir(), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(talonDir, "openclaw.json"), []byte(talonCfg), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(paths.Talon.SubagentsDir(), "coding.md"), []byte(`---
+description: Code work
+model: anthropic/claude-opus-4-7
+---
+Code work.
+`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("TALON_STATE_DIR", talonDir)
-	t.Setenv("OPENCLAW_STATE_DIR", openclawDir)
-	t.Setenv("TALON_CONFIG_PATH", filepath.Join(talonDir, "openclaw.json"))
-	t.Setenv("OPENCLAW_CONFIG_PATH", filepath.Join(openclawDir, "openclaw.json"))
-
-	paths := openclaw.DefaultPaths()
-	// DefaultPaths() now skips the openclaw layer; this test
-	// exercises the merge semantics specifically, so opt back in.
-	paths.SkipOpenclaw = false
+	if err := os.WriteFile(filepath.Join(paths.Talon.SubagentsDir(), "chat.md"), []byte(`---
+description: Local chat model
+model: lmstudio/dolphin
+---
+Chat work.
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	tool := NewAgentsTool(paths)
 
 	out, err := tool.Run(t.Context(), nil)
@@ -61,32 +63,13 @@ func TestAgentsTool_MergesTalonOverlayOverOpenclaw(t *testing.T) {
 			t.Errorf("output missing %q:\n%s", want, out)
 		}
 	}
-	// Chat agent must carry the talon-overlay workspace.
-	if !strings.Contains(out, `workspace="/tmp/ws-chat"`) {
-		t.Errorf("chat workspace missing in output:\n%s", out)
-	}
-	// Chat agent's model resolves the string-shorthand `model` field.
 	if !strings.Contains(out, `model="lmstudio/dolphin"`) {
 		t.Errorf("chat model not resolved from string shorthand:\n%s", out)
 	}
 }
 
 func TestAgentsTool_RegisteredByNewWithSubagentAndPaths(t *testing.T) {
-	stateDir := t.TempDir()
-	openclawDir := filepath.Join(stateDir, ".openclaw")
-	talonDir := filepath.Join(stateDir, ".talon")
-	for _, d := range []string{openclawDir, talonDir} {
-		if err := os.MkdirAll(d, 0o700); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := os.WriteFile(filepath.Join(talonDir, "openclaw.json"), []byte(`{}`), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("TALON_CONFIG_PATH", filepath.Join(talonDir, "openclaw.json"))
-	t.Setenv("OPENCLAW_CONFIG_PATH", filepath.Join(openclawDir, "openclaw.json"))
-
-	paths := openclaw.DefaultPaths()
+	paths := writeAgentsFixture(t, `{"agents":{"list":[{"id":"main"}]}}`)
 	r := NewWithSubagentAndPaths(t.TempDir(), nil, paths)
 
 	found := false

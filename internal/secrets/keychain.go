@@ -57,6 +57,46 @@ func resolveKeychainRef(ctx context.Context, target string) (string, error) {
 	return strings.TrimRight(string(out), "\r\n"), nil
 }
 
+// StoreKeychainSecret writes secret into the macOS keychain and returns the
+// keychain:// reference that resolves it. Target has the same shape accepted by
+// keychain:// resolution: "<service>" or "<service>/<account>".
+func StoreKeychainSecret(ctx context.Context, target, secret string) (string, error) {
+	if runtime.GOOS != "darwin" {
+		return "", fmt.Errorf("secrets: keychain:// writes are macOS-only (current: %s)", runtime.GOOS)
+	}
+	if strings.TrimSpace(secret) == "" {
+		return "", fmt.Errorf("secrets: refusing to store an empty secret")
+	}
+	target = strings.TrimPrefix(strings.TrimSpace(target), "keychain://")
+	service, account := splitKeychainTarget(target)
+	if service == "" {
+		return "", fmt.Errorf("secrets: keychain target has empty service name")
+	}
+	if account == "" {
+		account = "talon"
+		target = service + "/" + account
+	}
+	if _, err := exec.LookPath("security"); err != nil {
+		return "", fmt.Errorf("secrets: macOS `security` CLI required for keychain writes")
+	}
+
+	args := []string{"add-generic-password", "-U", "-s", service}
+	args = append(args, "-a", account)
+	args = append(args, "-w", secret)
+
+	runCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(runCtx, "security", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		msg := strings.TrimSpace(string(out))
+		if msg != "" {
+			return "", fmt.Errorf("secrets: security add-generic-password -s %s: %w: %s", service, err, msg)
+		}
+		return "", fmt.Errorf("secrets: security add-generic-password -s %s: %w", service, err)
+	}
+	return "keychain://" + target, nil
+}
+
 // splitKeychainTarget extracts (service, account) from "service" or
 // "service/account". Last slash wins so service names that happen to
 // contain slashes survive — only the trailing segment is treated as

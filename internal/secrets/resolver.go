@@ -11,7 +11,7 @@
 //
 //	op://...        → talon-op-plugin (process-isolated; needs `op` CLI)
 //	keychain://...  → inlined call to `security find-generic-password` (macOS-only, no helper binary)
-//	(no scheme)     → returned verbatim (literal value, back-compat)
+//	(no scheme)     → returned verbatim for transient env/CLI values
 //
 // Resolved values are cached in-memory for the lifetime of the
 // process — secrets don't usually rotate within a single gateway
@@ -39,9 +39,9 @@ import (
 
 var _ = time.Now // imported for future per-resolution timeouts
 
-// Resolver looks up the cleartext value behind a reference. Returns
-// the input verbatim for non-references (treats "abc123" as a
-// literal value, the back-compat case).
+// Resolver looks up the cleartext value behind a reference. It still returns
+// non-references verbatim because CLI flags and process env may carry
+// transient literals; persisted config validates those before write.
 type Resolver interface {
 	Resolve(ctx context.Context, ref string) (string, error)
 }
@@ -55,10 +55,9 @@ type Reference struct {
 	Raw    string // the original input
 }
 
-// ParseReference splits s into a Reference. Any string that
-// doesn't match a known scheme is treated as a literal — that's
-// the back-compat path: existing plaintext config keeps working
-// without migration.
+// ParseReference splits s into a Reference. Any string that doesn't match a
+// known scheme is treated as a literal so transient env/CLI values can share
+// the same resolver surface as config references.
 func ParseReference(s string) Reference {
 	for _, scheme := range []string{"op", "keychain"} {
 		prefix := scheme + "://"
@@ -84,9 +83,9 @@ func IsReference(s string) bool {
 // in-memory cache. Hits avoid the shell-out per chat invocation.
 // Misses populate the cache on first successful resolution.
 //
-// No TTL: secrets get re-read only when talon restarts. If a token
-// rotates while the gateway runs, the user has to bounce — same
-// failure mode as plaintext config today.
+// No TTL: secrets get re-read only when talon restarts. If a token rotates
+// while the gateway runs, the user has to bounce so the process reads the
+// updated secret-store value.
 type CachingResolver struct {
 	upstream Resolver
 	mu       sync.RWMutex
@@ -118,9 +117,9 @@ func (r *CachingResolver) Resolve(ctx context.Context, ref string) (string, erro
 	return v, nil
 }
 
-// dispatchResolver is the production resolver. Routes by scheme to
-// the appropriate plugin binary; literal values (no scheme) pass
-// through unchanged for back-compat with plaintext config.
+// dispatchResolver is the production resolver. Routes by scheme to the
+// appropriate plugin binary; literal values (no scheme) pass through unchanged
+// for transient env/CLI values.
 //
 // Plugin binaries follow the talon-<scheme>-plugin naming
 // convention. Found via $PATH lookup first, then falling back to
