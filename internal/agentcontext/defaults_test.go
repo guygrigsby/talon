@@ -45,6 +45,28 @@ func TestEnsureDefaults_EmptyDirWritesAll(t *testing.T) {
 	}
 }
 
+func TestEnsureDefaults_AGENTSDefinesCoordinatorMode(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := EnsureDefaults(dir); err != nil {
+		t.Fatalf("EnsureDefaults: %v", err)
+	}
+	raw, err := os.ReadFile(filepath.Join(dir, "AGENTS.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	for _, want := range []string{
+		"The main chat agent is the coordinator",
+		"`~/.talon/subagents`",
+		"Fan out independent work in parallel",
+		"The coordinator owns the final user-facing answer",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("AGENTS.md missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestEnsureDefaults_NeverOverwritesExisting(t *testing.T) {
 	dir := t.TempDir()
 	const custom = "# my custom identity\nName: Cawdia"

@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
 func newWorkspace(t *testing.T) string {
@@ -257,9 +259,9 @@ func TestBashTool_RunsInWorkspaceDir(t *testing.T) {
 // --- subagent --------------------------------------------------------------
 
 type stubSubagent struct {
-	calls   []subagentCall
-	output  string
-	err     error
+	calls  []subagentCall
+	output string
+	err    error
 }
 type subagentCall struct{ AgentID, Prompt string }
 
@@ -324,6 +326,33 @@ func TestNewWithSubagent_RegistersSubagentAlongsideBuiltins(t *testing.T) {
 	wantSubset := []string{"bash", "edit", "glob", "grep", "read", "subagent", "write"}
 	if strings.Join(got, ",") != strings.Join(wantSubset, ",") {
 		t.Errorf("Names() = %v, want %v", got, wantSubset)
+	}
+}
+
+func TestSubagentToolSchemaEnumeratesFileBackedSubagents(t *testing.T) {
+	root := t.TempDir()
+	subDir := filepath.Join(root, "subagents")
+	if err := os.MkdirAll(subDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "coding.md"), []byte(`---
+description: Code work.
+---
+Use for code.
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paths := talonpath.Paths{Talon: talonpath.Layer{
+		Dir:    root,
+		Config: filepath.Join(root, "config.toml"),
+	}}
+	r := NewWithSubagentAndPaths(newWorkspace(t), &stubSubagent{output: "ok"}, paths)
+	raw := r.tools["subagent"].ParametersSchema()
+	if !strings.Contains(string(raw), `"coding"`) {
+		t.Fatalf("subagent schema should enumerate file-backed subagents: %s", raw)
+	}
+	if !strings.Contains(r.tools["subagent"].Description(), "coding - Code work.") {
+		t.Fatalf("subagent description should include delegation guidance: %s", r.tools["subagent"].Description())
 	}
 }
 

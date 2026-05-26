@@ -126,6 +126,63 @@ func TestConfigAgentResolver_NoModelAndNoDefaultsErrors(t *testing.T) {
 	}
 }
 
+func TestConfigAgentResolver_SubagentUsesFileModelAndInheritedWorkspace(t *testing.T) {
+	paths := writeFixture(t, `{
+		"agents": {
+			"defaults": {
+				"workspace": "/workspace/main",
+				"model": {"primary": "openai/gpt-5.4-mini"}
+			},
+			"list": [{"id": "main"}]
+		}
+	}`)
+	writeSubagent(t, paths, "coding.md", `---
+description: Code changes.
+model: anthropic/claude-opus-4-7
+---
+Use for focused coding tasks.
+`)
+
+	r := &configAgentResolver{paths: paths}
+	model, err := r.PrimaryModel("coding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != "anthropic/claude-opus-4-7" {
+		t.Fatalf("PrimaryModel(coding) = %q", model)
+	}
+	workspace, err := r.Workspace("coding")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workspace != "/workspace/main" {
+		t.Fatalf("Workspace(coding) = %q, want inherited main/default workspace", workspace)
+	}
+}
+
+func TestConfigAgentResolver_SubagentFallsBackToDefaultModel(t *testing.T) {
+	paths := writeFixture(t, `{
+		"agents": {
+			"defaults": {"model": {"primary": "openai/gpt-5.4-mini"}},
+			"list": [{"id": "main"}]
+		}
+	}`)
+	writeSubagent(t, paths, "research.md", `---
+description: Research tasks.
+---
+Use for research.
+`)
+
+	r := &configAgentResolver{paths: paths}
+	model, err := r.PrimaryModel("research")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model != "openai/gpt-5.4-mini" {
+		t.Fatalf("PrimaryModel(research) = %q, want default model", model)
+	}
+}
+
 func TestRewriteLoopback(t *testing.T) {
 	cases := []struct {
 		name        string

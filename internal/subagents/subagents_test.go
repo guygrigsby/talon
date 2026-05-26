@@ -40,6 +40,37 @@ You review code.
 	}
 }
 
+func TestLoadFile_NormalizesToolMapAndIgnoresOldIdentityFields(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "research.md")
+	raw := `---
+description: Researches a topic.
+model: deepseek/deepseek-chat
+workspace: /tmp/old-agent-workspace
+identity: old separate identity
+soul: old separate soul
+tools:
+  read: true
+  grep: true
+  edit: false
+---
+Research carefully.
+`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	def, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if def.ID != "research" || def.Model != "deepseek/deepseek-chat" {
+		t.Fatalf("definition fields wrong: %+v", def)
+	}
+	if len(def.Tools) != 2 || def.Tools[0] != "grep" || def.Tools[1] != "read" {
+		t.Fatalf("tools = %+v, want grep/read only", def.Tools)
+	}
+}
+
 func TestLoadDir_SkipsDisabledAndNonMarkdown(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "enabled.md"), []byte("---\nmodel: openai/gpt-4o-mini\n---\nEnabled"), 0o600); err != nil {
