@@ -1,12 +1,14 @@
 package agentcore_chat
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/guygrigsby/jess/memory"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
 func TestBuilder_BuildAgent_Openai(t *testing.T) {
@@ -17,7 +19,7 @@ func TestBuilder_BuildAgent_Openai(t *testing.T) {
 			"list": [{"id": "main", "workspace": "/tmp/talon-test-ws"}]
 		}
 	}`)
-	b := NewBuilder(cfg, openclaw.Paths{}).WithAuthOverride(map[string]ProviderAuth{
+	b := NewBuilder(cfg, talonpath.Paths{}).WithAuthOverride(map[string]ProviderAuth{
 		"openai": {Provider: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test"},
 	})
 	agent, choice, err := b.BuildAgent("main")
@@ -45,7 +47,7 @@ func TestBuilder_BuildAgent_ModelOverrideWins(t *testing.T) {
 			"list": [{"id": "main", "workspace": "/tmp/talon-test-ws"}]
 		}
 	}`)
-	b := NewBuilder(cfg, openclaw.Paths{}).
+	b := NewBuilder(cfg, talonpath.Paths{}).
 		WithAuthOverride(map[string]ProviderAuth{
 			"deepseek": {Provider: "deepseek", BaseURL: "https://api.deepseek.com/v1", APIKey: "sk-test"},
 		}).
@@ -71,7 +73,7 @@ func TestBuilder_BuildAgent_Mistral_RegisteredViaInit(t *testing.T) {
 	cfg := []byte(`{
 		"agents": {"defaults": {"model": {"primary": "mistral/mistral-large-3-25-12"}}}
 	}`)
-	b := NewBuilder(cfg, openclaw.Paths{}).WithAuthOverride(map[string]ProviderAuth{
+	b := NewBuilder(cfg, talonpath.Paths{}).WithAuthOverride(map[string]ProviderAuth{
 		"mistral": {Provider: "mistral", BaseURL: "https://api.mistral.ai/v1", APIKey: "test-key"},
 	})
 	_, choice, err := b.BuildAgent("main")
@@ -88,7 +90,7 @@ func TestBuilder_BuildAgent_LocalLoopback_NoKeyNeeded(t *testing.T) {
 	cfg := []byte(`{
 		"agents": {"defaults": {"model": {"primary": "mlx/llama-3-8b"}}}
 	}`)
-	b := NewBuilder(cfg, openclaw.Paths{}).WithAuthOverride(map[string]ProviderAuth{
+	b := NewBuilder(cfg, talonpath.Paths{}).WithAuthOverride(map[string]ProviderAuth{
 		"mlx": {Provider: "mlx", BaseURL: "http://localhost:8080/v1"}, // no APIKey
 	})
 	_, _, err := b.BuildAgent("main")
@@ -102,7 +104,7 @@ func TestBuilder_BuildAgent_MissingProviderAuth(t *testing.T) {
 	cfg := []byte(`{
 		"agents": {"defaults": {"model": {"primary": "anthropic/claude-opus-4-7"}}}
 	}`)
-	b := NewBuilder(cfg, openclaw.Paths{}).WithAuthOverride(map[string]ProviderAuth{})
+	b := NewBuilder(cfg, talonpath.Paths{}).WithAuthOverride(map[string]ProviderAuth{})
 	_, _, err := b.BuildAgent("main")
 	if err == nil {
 		t.Fatal("expected error when provider auth missing")
@@ -114,7 +116,7 @@ func TestBuilder_BuildAgent_MissingProviderAuth(t *testing.T) {
 
 func TestBuilder_BuildAgent_NoModelConfigured(t *testing.T) {
 	clearProviderEnv(t)
-	b := NewBuilder([]byte(`{}`), openclaw.Paths{}).WithAuthOverride(map[string]ProviderAuth{})
+	b := NewBuilder([]byte(`{}`), talonpath.Paths{}).WithAuthOverride(map[string]ProviderAuth{})
 	_, _, err := b.BuildAgent("main")
 	if err == nil {
 		t.Fatal("expected error when no model configured")
@@ -129,7 +131,7 @@ func TestBuilder_BuildAgent_BareModelIDError(t *testing.T) {
 	cfg := []byte(`{
 		"agents": {"defaults": {"model": {"primary": "broken-no-provider"}}}
 	}`)
-	b := NewBuilder(cfg, openclaw.Paths{}).WithAuthOverride(map[string]ProviderAuth{})
+	b := NewBuilder(cfg, talonpath.Paths{}).WithAuthOverride(map[string]ProviderAuth{})
 	_, _, err := b.BuildAgent("main")
 	if err == nil || !strings.Contains(err.Error(), "no provider segment") {
 		t.Errorf("expected provider-segment error, got %v", err)
@@ -144,7 +146,7 @@ func TestBuilder_BuildAgent_PerAgentWorkspace(t *testing.T) {
 			"list": [{"id": "coding", "workspace": "/tmp/coding-ws"}]
 		}
 	}`)
-	b := NewBuilder(cfg, openclaw.Paths{}).WithAuthOverride(map[string]ProviderAuth{
+	b := NewBuilder(cfg, talonpath.Paths{}).WithAuthOverride(map[string]ProviderAuth{
 		"openai": {Provider: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test"},
 	})
 	_, _, err := b.BuildAgent("coding")
@@ -180,7 +182,7 @@ func TestBuilder_BuildAgent_WithMemoryAttachesTools(t *testing.T) {
 	}`)
 	store := memory.NewInMemoryStore()
 	recaller := memory.NewSimpleRecaller()
-	b := NewBuilder(cfg, openclaw.Paths{}).
+	b := NewBuilder(cfg, talonpath.Paths{}).
 		WithAuthOverride(map[string]ProviderAuth{
 			"openai": {Provider: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test"},
 		}).
@@ -206,7 +208,7 @@ func TestBuilder_BuildAgent_NoMemoryNoMemoryTools(t *testing.T) {
 	cfg := []byte(`{
 		"agents": {"defaults": {"model": {"primary": "openai/gpt-4o-mini"}, "workspace": "/tmp/talon-no-mem"}}
 	}`)
-	b := NewBuilder(cfg, openclaw.Paths{}).WithAuthOverride(map[string]ProviderAuth{
+	b := NewBuilder(cfg, talonpath.Paths{}).WithAuthOverride(map[string]ProviderAuth{
 		"openai": {Provider: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test"},
 	})
 	// No WithMemory call.
@@ -257,5 +259,62 @@ func TestResolveSystemPrompt_TiersThenDefaults(t *testing.T) {
 	}
 	if got := resolveSystemPrompt(cfg, "y"); got != "default" {
 		t.Errorf("no per-agent prompt should fall back: got %q", got)
+	}
+}
+
+func TestComposeSystemPrompt(t *testing.T) {
+	cases := []struct {
+		name            string
+		persona, config string
+		want            string
+	}{
+		{"both empty", "", "", ""},
+		{"persona only", "I am Jess.", "", "I am Jess."},
+		{"configured only", "", "Be terse.", "Be terse."},
+		{"trims whitespace", "  I am Jess.  ", "", "I am Jess."},
+		{"persona leads, blank-line joined", "I am Jess.", "Be terse.", "I am Jess.\n\nBe terse."},
+	}
+	for _, c := range cases {
+		if got := composeSystemPrompt(c.persona, c.config); got != c.want {
+			t.Errorf("%s: composeSystemPrompt(%q,%q) = %q, want %q", c.name, c.persona, c.config, got, c.want)
+		}
+	}
+}
+
+func TestBuildSystemPrompt_FromWorkspaceFiles(t *testing.T) {
+	ws := t.TempDir()
+	if err := os.WriteFile(filepath.Join(ws, "IDENTITY.md"), []byte("Name: Jess\nCreature: fox"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "SOUL.md"), []byte("Be warm and direct."), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := []byte(`{
+		"agents": {
+			"defaults": {"workspace": "` + ws + `", "systemPrompt": "Always answer in English."}
+		}
+	}`)
+
+	got := buildSystemPrompt(cfg, "main", ws, "/nonexistent")
+
+	for _, want := range []string{"## IDENTITY.md", "Name: Jess", "## SOUL.md", "Always answer in English."} {
+		if !strings.Contains(got, want) {
+			t.Errorf("system prompt missing %q\n--- got ---\n%s", want, got)
+		}
+	}
+}
+
+func TestBuildSystemPrompt_FallsBackToTalonDir(t *testing.T) {
+	talonDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(talonDir, "IDENTITY.md"), []byte("Name: Jess"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// No workspace configured anywhere; persona must load from talonDir.
+	cfg := []byte(`{"agents": {"defaults": {}}}`)
+
+	got := buildSystemPrompt(cfg, "main", "", talonDir)
+
+	if !strings.Contains(got, "Name: Jess") {
+		t.Errorf("persona should fall back to talonDir; got %q", got)
 	}
 }

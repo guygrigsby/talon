@@ -2,6 +2,7 @@ package agentcore_chat
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/guygrigsby/jess/memory"
 	"github.com/tidwall/gjson"
@@ -9,7 +10,8 @@ import (
 	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/agentcore/tools"
 
-	"github.com/guygrigsby/talon/internal/openclaw"
+	"github.com/guygrigsby/talon/internal/agentcontext"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
 // Builder assembles an `agentcore.Agent` from talon's merged config.
@@ -18,7 +20,7 @@ import (
 // entry point.
 type Builder struct {
 	merged []byte
-	paths  openclaw.Paths
+	paths  talonpath.Paths
 	// authOverride lets tests bypass secrets resolution. nil in
 	// production; tests pass a fixed map to avoid touching the
 	// real auth chain.
@@ -36,7 +38,7 @@ type Builder struct {
 // NewBuilder constructs a Builder. merged is the result of
 // `config.MergedBytes(paths)`; paths is needed for the auth
 // resolver's profile-fallback step.
-func NewBuilder(merged []byte, paths openclaw.Paths) *Builder {
+func NewBuilder(merged []byte, paths talonpath.Paths) *Builder {
 	return &Builder{merged: merged, paths: paths}
 }
 
@@ -130,9 +132,13 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 	// here.
 	workspace := resolveAgentWorkspace(b.merged, agentID)
 
-	// System prompt: agents.list[].systemPrompt or
-	// agents.defaults.systemPrompt. Empty is fine.
-	systemPrompt := resolveSystemPrompt(b.merged, agentID)
+	// System prompt: workspace persona files (IDENTITY/SOUL/AGENTS/USER)
+	// composed with agents.list[].systemPrompt or
+	// agents.defaults.systemPrompt. Persona files live in the agent's
+	// workspace, falling back to ~/.talon where the main agent's
+	// markdown lives. Without this the model has no identity and
+	// hallucinates one (e.g. "I'm GPT-4").
+	systemPrompt := buildSystemPrompt(b.merged, agentID, workspace, b.paths.Talon.Dir)
 
 	// File-state shared across read/write/edit so write-after-read
 	// invariants hold.
@@ -199,4 +205,35 @@ func resolveSystemPrompt(merged []byte, agentID string) string {
 		return v
 	}
 	return gjson.GetBytes(merged, "agents.defaults.systemPrompt").Str
+}
+
+// buildSystemPrompt composes the workspace persona files
+// (IDENTITY/SOUL/AGENTS/USER) with the configured systemPrompt.
+// Persona is loaded from the agent's workspace, falling back to
+// talonDir (~/.talon) where the main agent's markdown lives — so the
+// fallback never grants filesystem tools, only identity context. Either
+// source may be empty.
+func buildSystemPrompt(merged []byte, agentID, workspace, talonDir string) string {
+	personaDir := workspace
+	if personaDir == "" {
+		personaDir = talonDir
+	}
+	return composeSystemPrompt(agentcontext.Build(personaDir), resolveSystemPrompt(merged, agentID))
+}
+
+// composeSystemPrompt joins workspace persona context with the
+// configured systemPrompt. Persona (IDENTITY/SOUL/...) leads because it
+// defines who the agent is; the configured prompt supplements it. Either
+// side may be empty.
+func composeSystemPrompt(persona, configured string) string {
+	persona = strings.TrimSpace(persona)
+	configured = strings.TrimSpace(configured)
+	switch {
+	case persona == "":
+		return configured
+	case configured == "":
+		return persona
+	default:
+		return persona + "\n\n" + configured
+	}
 }
