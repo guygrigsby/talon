@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -15,16 +14,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/guygrigsby/talon/internal/agentcontext"
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/connectapi"
-	plugin "github.com/guygrigsby/talon/internal/plugin/legacy"
+	plugin "github.com/guygrigsby/talon/internal/plugin/host"
 	"github.com/guygrigsby/talon/internal/plugin/native"
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 	"github.com/guygrigsby/talon/internal/secrets"
 	"github.com/guygrigsby/talon/internal/server"
 	"github.com/spf13/cobra"
 	"github.com/tidwall/gjson"
-	"google.golang.org/grpc"
 )
 
 func gatewayCmd() *cobra.Command {
@@ -187,15 +186,24 @@ func gatewayRunCmd() *cobra.Command {
 			paths := resolvePaths()
 			resolver := &configAgentResolver{paths: paths}
 
-			// Plugin Host gRPC listener. Bind ephemeral on loopback
-			// — no plugin needs to reach this from another host
-			// today. The address is handed to plugins via env so they
-			// can dial back for capability-gated reads/writes.
-			hostListener, err := net.Listen("tcp", "127.0.0.1:0")
-			if err != nil {
-				return fmt.Errorf("plugin host listener: %w", err)
+			// First-run scaffolding: seed default persona files
+			// (IDENTITY/SOUL/AGENTS/USER) when the main agent's
+			// workspace has none, so a fresh install boots with an
+			// identity instead of a blank, GPT-hallucinating agent.
+			// Write-if-missing only — never clobbers customized files.
+			// Targets the configured main workspace, falling back to
+			// ~/.talon where the persona files live by default.
+			mainWS := paths.Talon.Dir
+			if ws, err := resolver.Workspace("main"); err == nil && ws != "" {
+				mainWS = ws
 			}
-			pluginHost := plugin.NewHost(hostListener.Addr().String())
+			if created, err := agentcontext.EnsureDefaults(mainWS); err != nil {
+				slog.Warn("persona scaffolding failed", "dir", mainWS, "err", err)
+			} else if len(created) > 0 {
+				slog.Info("scaffolded default persona files", "dir", mainWS, "files", created)
+			}
+
+			pluginHost := plugin.NewHost()
 			defer pluginHost.Shutdown()
 
 			srv := server.New(server.Config{
@@ -230,7 +238,7 @@ func gatewayRunCmd() *cobra.Command {
 			// Wires the alternative chat-loop path through
 			// internal/agentcore_chat. Selected per-call by model
 			// provider; OpenAI and Anthropic currently stay on the
-			// legacy provider path. Memory
+			// host provider path. Memory
 			// sidecar (when present) is reused — same store +
 			// recaller back the jess Remember/Recall tools the
 			// agentcore agent sees.
@@ -253,33 +261,9 @@ func gatewayRunCmd() *cobra.Command {
 			)
 
 			// Now that the WS server has built its handlers, wire the
-			// plugin Host gRPC service against the SAME ChatStore /
+			// plugin Host service against the SAME ChatStore /
 			// SessionStore so plugins see the same view as the UI.
-			// The capability interceptor enforces per-plugin manifest
-			// gates; an unrecognized cookie fails Unauthenticated.
 			hostService := server.NewHostService(paths, srv.ReadHandler(), srv.ChatHandler(), srv.ChatStore(), srv.SessionStore())
-			grpcSrv := grpc.NewServer(
-				grpc.UnaryInterceptor(pluginHost.UnaryInterceptor()),
-				grpc.StreamInterceptor(pluginHost.StreamInterceptor()),
-			)
-			pb.RegisterHostServer(grpcSrv, hostService)
-			go func() {
-				if err := grpcSrv.Serve(hostListener); err != nil {
-					slog.Error("plugin host gRPC serve failed", "err", err)
-				}
-			}()
-			defer grpcSrv.GracefulStop()
-
-			// Load plugins AFTER the host service is serving so any
-			// back-channel call from the plugin during early life
-			// hits a live endpoint rather than connection-refused.
-			//
-			// Native (go-plugin) plugins use a different transport
-			// for the Host service (broker over the same gRPC
-			// connection, not the loopback listener above). The
-			// factory hands the SAME hostService to each plugin so
-			// they see the same view; per-plugin capability gating
-			// happens in native.NewCapabilityInterceptor.
 			nativeFactory := func(string, *native.ManifestHolder) pb.HostServer {
 				return hostService
 			}
@@ -307,11 +291,10 @@ func gatewayRunCmd() *cobra.Command {
 				"tools", "read/write/edit/bash/glob/grep/remember/subagent",
 				"plugins", len(pluginNames),
 				"channels", len(channelDispatchers),
-				"host_svc", hostListener.Addr().String(),
 			)
-			// Forgettable-URL mitigation: print the deep-link the openclaw
-			// web UI needs after a fresh page load (cache cleared, new
-			// browser, etc). Token is included only when --auth=token; the
+			// Forgettable-URL mitigation: print the deep-link the UI needs
+			// after a fresh page load (cache cleared, new browser, etc).
+			// Token is included only when --auth=token; the
 			// fragment form keeps it out of HTTP request logs.
 			gwHost := "localhost"
 			if host == "0.0.0.0" {
@@ -485,10 +468,8 @@ func gatewayDiagnosticsCmd() *cobra.Command {
 
 func gatewayDiagnosticsExportCmd() *cobra.Command {
 	opts := &diagnosticsExportOpts{}
-	// urlFlag/tokenFlag/passwordFlag/noStabilityBundle accepted for
-	// openclaw flag-shape parity but not yet wired — we use the
-	// shared dial path (config-driven URL/token) and don't have a
-	// stability bundle backend on talon yet (tracked separately).
+	// urlFlag/tokenFlag/passwordFlag/noStabilityBundle are accepted but not
+	// wired; diagnostics uses the shared config-driven dial path today.
 	var (
 		urlFlag           string
 		tokenFlag         string
@@ -781,7 +762,7 @@ func gatewayServiceProbe(deep bool) map[string]any {
 		out, _ := exec.Command("launchctl", "list").Output()
 		var matches []string
 		for _, line := range strings.Split(string(out), "\n") {
-			if strings.Contains(strings.ToLower(line), "openclaw") || strings.Contains(strings.ToLower(line), "talon") {
+			if strings.Contains(strings.ToLower(line), "talon") {
 				matches = append(matches, strings.TrimSpace(line))
 			}
 		}
@@ -790,7 +771,7 @@ func gatewayServiceProbe(deep bool) map[string]any {
 		out, _ := exec.Command("systemctl", "--user", "list-units", "--no-legend", "--no-pager").Output()
 		var matches []string
 		for _, line := range strings.Split(string(out), "\n") {
-			if strings.Contains(strings.ToLower(line), "openclaw") || strings.Contains(strings.ToLower(line), "talon") {
+			if strings.Contains(strings.ToLower(line), "talon") {
 				matches = append(matches, strings.TrimSpace(line))
 			}
 		}
