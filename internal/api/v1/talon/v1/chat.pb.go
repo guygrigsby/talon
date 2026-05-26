@@ -1186,13 +1186,13 @@ func (x *ToolStart) GetArgsJson() string {
 	return ""
 }
 
-// ToolResult fires after a tool returns (whether or not it
-// succeeded — failures are encoded inline in output).
+// ToolResult fires after a tool returns.
 type ToolResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ToolCallId    string                 `protobuf:"bytes,1,opt,name=tool_call_id,json=toolCallId,proto3" json:"tool_call_id,omitempty"`
 	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	Output        string                 `protobuf:"bytes,3,opt,name=output,proto3" json:"output,omitempty"`
+	IsError       bool                   `protobuf:"varint,4,opt,name=is_error,json=isError,proto3" json:"is_error,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1246,6 +1246,13 @@ func (x *ToolResult) GetOutput() string {
 		return x.Output
 	}
 	return ""
+}
+
+func (x *ToolResult) GetIsError() bool {
+	if x != nil {
+		return x.IsError
+	}
+	return false
 }
 
 var File_talon_v1_chat_proto protoreflect.FileDescriptor
@@ -1339,13 +1346,14 @@ const file_talon_v1_chat_proto_rawDesc = "" +
 	"\ftool_call_id\x18\x01 \x01(\tR\n" +
 	"toolCallId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x1b\n" +
-	"\targs_json\x18\x03 \x01(\tR\bargsJson\"Z\n" +
+	"\targs_json\x18\x03 \x01(\tR\bargsJson\"u\n" +
 	"\n" +
 	"ToolResult\x12 \n" +
 	"\ftool_call_id\x18\x01 \x01(\tR\n" +
 	"toolCallId\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x16\n" +
-	"\x06output\x18\x03 \x01(\tR\x06output2\xd8\x01\n" +
+	"\x06output\x18\x03 \x01(\tR\x06output\x12\x19\n" +
+	"\bis_error\x18\x04 \x01(\bR\aisError2\xd8\x01\n" +
 	"\vChatService\x12=\n" +
 	"\x04Send\x12\x19.talon.v1.ChatSendRequest\x1a\x1a.talon.v1.ChatSendResponse\x12F\n" +
 	"\aHistory\x12\x1c.talon.v1.ChatHistoryRequest\x1a\x1d.talon.v1.ChatHistoryResponse\x12B\n" +

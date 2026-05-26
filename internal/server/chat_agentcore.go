@@ -129,8 +129,7 @@ func (h *ChatHandler) runStreamAgentcore(runID, sessionKey, agentID, userText, r
 		h.emitAgentToolStart(sessionKey, runID, sessionKey, id, name, args)
 	}
 	emitToolResult := func(id, name, out string, isErr bool) {
-		h.emitAgentToolResult(sessionKey, runID, sessionKey, id, name, out)
-		_ = isErr // legacy emit doesn't carry an is-error flag yet; tracked for later
+		h.emitAgentToolResult(sessionKey, runID, sessionKey, id, name, out, isErr)
 	}
 	emitError := func(s int, kind, msg string) {
 		_ = h.emitError(sessionKey, runID, sessionKey, s, kind, msg)
@@ -152,7 +151,7 @@ func (h *ChatHandler) runStreamAgentcore(runID, sessionKey, agentID, userText, r
 		modelOverride = h.sessions.Model(sessionKey)
 	}
 
-	finalText, err := h.agentcoreRun(
+	result, err := h.agentcoreRun(
 		ctx,
 		agentID, sessionKey, runID, userText, modelOverride,
 		func(_ int, state, full, delta string) {
@@ -170,7 +169,23 @@ func (h *ChatHandler) runStreamAgentcore(runID, sessionKey, agentID, userText, r
 		// store so the next turn's history sees nothing partial.
 		return
 	}
-	if finalText != "" {
-		h.store.Append(sessionKey, "assistant", finalText)
+	h.recordAgentcoreUsage(agentID, sessionKey, result)
+	if result.FinalText != "" {
+		h.store.Append(sessionKey, "assistant", result.FinalText)
 	}
+}
+
+func (h *ChatHandler) recordAgentcoreUsage(agentID, sessionKey string, result AgentcoreRunResult) {
+	if h.costs == nil || result.Usage.isZero() {
+		return
+	}
+	modelID := result.ModelID
+	if modelID == "" {
+		model, err := h.resolveModelForRouting(agentID, sessionKey)
+		if err != nil {
+			return
+		}
+		modelID = model.String()
+	}
+	h.costs.RecordUsage(agentID, modelID, result.Usage.InputTokens, result.Usage.OutputTokens)
 }

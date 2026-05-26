@@ -89,6 +89,13 @@ func (t *CostTracker) Allow(agentID string) error {
 // usage tokens × the model's per-token price) to today's spend.
 // Caller passes the model used so we can look up pricing.
 func (t *CostTracker) Record(agentID string, model provider.ModelID, u provider.Usage) {
+	t.RecordUsage(agentID, string(model), u.InputTokens, u.OutputTokens)
+}
+
+// RecordUsage adds the USD cost for one response using Talon's
+// canonical model id string. This is the provider-neutral entry
+// point used by the agentcore path.
+func (t *CostTracker) RecordUsage(agentID, modelID string, inputTokens, outputTokens int) {
 	if t == nil {
 		return
 	}
@@ -97,7 +104,7 @@ func (t *CostTracker) Record(agentID string, model provider.ModelID, u provider.
 		// No cap → don't bother tracking (saves the lock + map write).
 		return
 	}
-	cost := t.costForUsage(model, u)
+	cost := t.costForTokens(modelID, inputTokens, outputTokens)
 	if cost <= 0 {
 		return
 	}
@@ -140,12 +147,17 @@ func (t *CostTracker) dailyCap() float64 {
 // per-token price for model from the config first, then the
 // builtin table; returns 0 when neither is available.
 func (t *CostTracker) costForUsage(model provider.ModelID, u provider.Usage) float64 {
+	return t.costForTokens(string(model), u.InputTokens, u.OutputTokens)
+}
+
+func (t *CostTracker) costForTokens(modelID string, inputTokens, outputTokens int) float64 {
+	model := provider.ModelID(modelID)
 	in, out := t.priceFor(model)
 	if in == 0 && out == 0 {
 		return 0
 	}
 	// Prices are USD per 1M tokens.
-	return float64(u.InputTokens)*in/1_000_000 + float64(u.OutputTokens)*out/1_000_000
+	return float64(inputTokens)*in/1_000_000 + float64(outputTokens)*out/1_000_000
 }
 
 // priceFor returns (inputUsdPer1M, outputUsdPer1M) for model,

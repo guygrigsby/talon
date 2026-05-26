@@ -178,10 +178,10 @@ message ToolStart {
   string args_json = 3;
 }
 
-// ToolResult fires after a tool returns (whether or not it
-// succeeded — failures are encoded inline in output).
+// ToolResult fires after a tool returns.
 message ToolResult {
   string tool_call_id = 1;
   string name = 2;
   string output = 3;
+  bool is_error = 4;
 }

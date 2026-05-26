@@ -167,10 +167,12 @@ func agentPayloadToEvent(p server.AgentEventPayload) *talonv1.ChatEvent {
 		}}
 	case "result":
 		output, _ := p.Data["result"].(string)
+		isError, _ := p.Data["isError"].(bool)
 		ev.Payload = &talonv1.ChatEvent_ToolResult{ToolResult: &talonv1.ToolResult{
 			ToolCallId: toolCallID,
 			Name:       name,
 			Output:     output,
+			IsError:    isError,
 		}}
 	default:
 		return nil

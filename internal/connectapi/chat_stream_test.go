@@ -139,13 +139,14 @@ func TestTranslateEvent_AgentToolResult(t *testing.T) {
 			"name":       "bash",
 			"phase":      "result",
 			"result":     "exit 0",
+			"isError":    true,
 		},
 	})
 	tr := got.GetToolResult()
 	if tr == nil {
 		t.Fatalf("expected ToolResult variant, got %T", got.GetPayload())
 	}
-	if tr.GetToolCallId() != "call_a" || tr.GetName() != "bash" || tr.GetOutput() != "exit 0" {
+	if tr.GetToolCallId() != "call_a" || tr.GetName() != "bash" || tr.GetOutput() != "exit 0" || !tr.GetIsError() {
 		t.Errorf("tool result fields wrong: %+v", tr)
 	}
 }

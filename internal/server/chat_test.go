@@ -837,8 +837,8 @@ func TestBuildToolStartPayload_FallsBackToRawArgsOnParseFailure(t *testing.T) {
 }
 
 func TestBuildToolResultPayload_PassesOutputThrough(t *testing.T) {
-	got := buildToolResultPayload("r", "s", "c", "bash", "stdout-text\n", 0)
-	if got.Data["phase"] != "result" || got.Data["result"] != "stdout-text\n" {
+	got := buildToolResultPayload("r", "s", "c", "bash", "stdout-text\n", true, 0)
+	if got.Data["phase"] != "result" || got.Data["result"] != "stdout-text\n" || got.Data["isError"] != true {
 		t.Errorf("data wrong: %+v", got.Data)
 	}
 }

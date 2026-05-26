@@ -93,9 +93,9 @@ func TestRunStreamAgentcorePassesSessionModelOverride(t *testing.T) {
 			_ func(string, string, string),
 			_ func(string, string, string, bool),
 			_ func(int, string, string),
-		) (string, error) {
+		) (AgentcoreRunResult, error) {
 			gotOverride = modelOverride
-			return "done", nil
+			return AgentcoreRunResult{FinalText: "done"}, nil
 		},
 	}
 
@@ -109,6 +109,76 @@ func TestRunStreamAgentcorePassesSessionModelOverride(t *testing.T) {
 	}
 }
 
+func TestRunStreamAgentcoreRecordsUsageCost(t *testing.T) {
+	paths := readFixture(t, `{
+		"agents":{"defaults":{"dailyUsdCap":1.00}},
+		"models":{"deepseek/deepseek-chat":{"priceUsdPer1M":{"in":100.0,"out":100.0}}}
+	}`)
+	costs := NewCostTracker(paths)
+	h := &ChatHandler{
+		store:         NewChatStore(),
+		sinks:         NewSinkRegistry(),
+		runs:          make(map[string]string),
+		StreamTimeout: time.Second,
+		costs:         costs,
+		agentcoreRun: func(
+			_ context.Context,
+			_ string, _ string, _ string, _ string, _ string,
+			_ func(int, string, string, string),
+			_ func(string, string, string),
+			_ func(string, string, string, bool),
+			_ func(int, string, string),
+		) (AgentcoreRunResult, error) {
+			return AgentcoreRunResult{
+				ModelID: "deepseek/deepseek-chat",
+				Usage:   AgentcoreUsage{InputTokens: 20_000},
+			}, nil
+		},
+	}
+
+	h.runStreamAgentcore("run_1", "agent:main:web", "main", "hello", "agent:main:web|run_1")
+	if err := costs.Allow("main"); err == nil {
+		t.Fatal("expected recorded agentcore usage to trip the daily cost cap")
+	}
+}
+
+func TestRunStreamAgentcorePreservesToolResultErrorFlag(t *testing.T) {
+	const sessionKey = "agent:main:web"
+	sinks := NewSinkRegistry()
+	sink := &captureSink{}
+	unsub := sinks.Subscribe(sessionKey, sink)
+	defer unsub()
+	h := &ChatHandler{
+		store:         NewChatStore(),
+		sinks:         sinks,
+		runs:          make(map[string]string),
+		StreamTimeout: time.Second,
+		agentcoreRun: func(
+			_ context.Context,
+			_ string, _ string, _ string, _ string, _ string,
+			_ func(int, string, string, string),
+			_ func(string, string, string),
+			emitToolResult func(string, string, string, bool),
+			_ func(int, string, string),
+		) (AgentcoreRunResult, error) {
+			emitToolResult("call_a", "bash", "failed", true)
+			return AgentcoreRunResult{}, nil
+		},
+	}
+
+	h.runStreamAgentcore("run_1", sessionKey, "main", "hello", sessionKey+"|run_1")
+	if sink.count() != 1 {
+		t.Fatalf("got %d events, want 1", sink.count())
+	}
+	payload, ok := sink.events[0].payload.(AgentEventPayload)
+	if !ok {
+		t.Fatalf("payload type = %T, want AgentEventPayload", sink.events[0].payload)
+	}
+	if payload.Data["isError"] != true {
+		t.Fatalf("isError = %+v, want true in payload %+v", payload.Data["isError"], payload.Data)
+	}
+}
+
 // noopRunner is a no-op AgentcoreRunFn so tests can populate
 // h.agentcoreRun without doing real work.
 var noopRunner AgentcoreRunFn = func(
@@ -118,6 +188,6 @@ var noopRunner AgentcoreRunFn = func(
 	_ func(string, string, string),
 	_ func(string, string, string, bool),
 	_ func(int, string, string),
-) (string, error) {
-	return "", nil
+) (AgentcoreRunResult, error) {
+	return AgentcoreRunResult{}, nil
 }

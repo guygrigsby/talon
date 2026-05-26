@@ -15,8 +15,8 @@ import (
 
 	"github.com/guygrigsby/talon/internal/agentcore_chat"
 	"github.com/guygrigsby/talon/internal/config"
-	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/guygrigsby/talon/internal/server"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
 func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) server.AgentcoreRunFn {
@@ -27,7 +27,7 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 		emitToolStart func(toolCallID, name, args string),
 		emitToolResult func(toolCallID, name, output string, isErr bool),
 		emitError func(seq int, kind, msg string),
-	) (string, error) {
+	) (server.AgentcoreRunResult, error) {
 		sink := &gatewayEventSink{
 			text:       emitText,
 			toolStart:  emitToolStart,
@@ -38,7 +38,7 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 		merged, err := config.MergedBytes(paths)
 		if err != nil {
 			sink.Error("merged-config", err.Error())
-			return "", fmt.Errorf("read merged config: %w", err)
+			return server.AgentcoreRunResult{}, fmt.Errorf("read merged config: %w", err)
 		}
 
 		builder := agentcore_chat.NewBuilder(merged, paths)
@@ -48,10 +48,10 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 		if mem != nil {
 			builder = builder.WithMemory(mem.Store, mem.Recaller)
 		}
-		agent, _, err := builder.BuildAgent(agentID)
+		agent, choice, err := builder.BuildAgent(agentID)
 		if err != nil {
 			sink.Error("build-agent", err.Error())
-			return "", err
+			return server.AgentcoreRunResult{}, err
 		}
 
 		adapter := agentcore_chat.NewEventAdapter(sink)
@@ -60,7 +60,7 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 
 		if err := agent.Prompt(userText); err != nil {
 			sink.Error("prompt", err.Error())
-			return "", err
+			return server.AgentcoreRunResult{}, err
 		}
 
 		done := make(chan struct{})
@@ -73,11 +73,19 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 		case <-ctx.Done():
 			agent.Abort()
 			<-done
-			return "", ctx.Err()
+			return server.AgentcoreRunResult{}, ctx.Err()
 		}
 
 		final, _ := adapter.Snapshot()
-		return final, nil
+		usage := agent.TotalUsage()
+		return server.AgentcoreRunResult{
+			FinalText: final,
+			ModelID:   choice.ID,
+			Usage: server.AgentcoreUsage{
+				InputTokens:  usage.Input,
+				OutputTokens: usage.Output,
+			},
+		}, nil
 	}
 }
 

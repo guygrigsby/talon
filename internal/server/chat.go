@@ -26,9 +26,9 @@ import (
 // (which transitively imports agentcore + LiteLLM — heavy and
 // orthogonal to the gateway's other responsibilities).
 //
-// Returns the final assistant text and any error. Streaming
-// happens through the supplied emit closures; one closure per
-// event kind matches the legacy ChatHandler.emit* surface.
+// Returns completion metadata and any error. Streaming happens
+// through the supplied emit closures; one closure per event kind
+// matches the legacy ChatHandler.emit* surface.
 type AgentcoreRunFn func(
 	ctx context.Context,
 	agentID, sessionKey, runID, userText, modelOverride string,
@@ -36,7 +36,27 @@ type AgentcoreRunFn func(
 	emitToolStart func(toolCallID, name, args string),
 	emitToolResult func(toolCallID, name, output string, isErr bool),
 	emitError func(seq int, kind, msg string),
-) (finalText string, err error)
+) (AgentcoreRunResult, error)
+
+// AgentcoreRunResult is the small metadata surface internal/server
+// needs back from cmd/talon's agentcore runner without importing
+// agentcore directly.
+type AgentcoreRunResult struct {
+	FinalText string
+	ModelID   string
+	Usage     AgentcoreUsage
+}
+
+// AgentcoreUsage mirrors the token fields Talon accounts for in
+// the legacy provider path.
+type AgentcoreUsage struct {
+	InputTokens  int
+	OutputTokens int
+}
+
+func (u AgentcoreUsage) isZero() bool {
+	return u.InputTokens == 0 && u.OutputTokens == 0
+}
 
 // AgentResolver looks up the model an agent should drive a chat with. The
 // gateway's chat.send handler calls this once per send to translate the
@@ -851,7 +871,7 @@ func (h *ChatHandler) runToolsParallel(ctx context.Context, emit emitTarget, run
 		if err != nil {
 			out = "ERROR: " + err.Error()
 		}
-		h.emitAgentToolResult(emit.toolSessionKey, emit.runID, emit.sessionKey, tc.ID, tc.Name, out)
+		h.emitAgentToolResult(emit.toolSessionKey, emit.runID, emit.sessionKey, tc.ID, tc.Name, out, err != nil)
 		return out
 	}
 	if len(toolCalls) == 1 {
@@ -1065,11 +1085,11 @@ func (h *ChatHandler) emitAgentToolStart(toolSessionKey, runID, sessionKey, tool
 // emitAgentToolResult fires after runner.Run completes (whether
 // or not the tool errored — failures are captured into output as
 // "ERROR: ..."). toolSessionKey same semantics as emitAgentToolStart.
-func (h *ChatHandler) emitAgentToolResult(toolSessionKey, runID, sessionKey, toolCallID, name, output string) {
+func (h *ChatHandler) emitAgentToolResult(toolSessionKey, runID, sessionKey, toolCallID, name, output string, isError bool) {
 	if toolSessionKey == "" {
 		return
 	}
-	payload := buildToolResultPayload(runID, sessionKey, toolCallID, name, output, time.Now().UnixMilli())
+	payload := buildToolResultPayload(runID, sessionKey, toolCallID, name, output, isError, time.Now().UnixMilli())
 	h.pushAgentEvent(toolSessionKey, payload)
 }
 
@@ -1097,7 +1117,7 @@ func buildToolStartPayload(runID, sessionKey, toolCallID, name, argumentsJSON st
 	}
 }
 
-func buildToolResultPayload(runID, sessionKey, toolCallID, name, output string, ts int64) AgentEventPayload {
+func buildToolResultPayload(runID, sessionKey, toolCallID, name, output string, isError bool, ts int64) AgentEventPayload {
 	return AgentEventPayload{
 		Stream:     "tool",
 		SessionKey: sessionKey,
@@ -1108,6 +1128,7 @@ func buildToolResultPayload(runID, sessionKey, toolCallID, name, output string, 
 			"name":       name,
 			"phase":      "result",
 			"result":     output,
+			"isError":    isError,
 		},
 	}
 }
