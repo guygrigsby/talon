@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -22,9 +23,56 @@ import (
 	pb "github.com/guygrigsby/talon/internal/plugin/pb"
 	"github.com/guygrigsby/talon/internal/secrets"
 	"github.com/guygrigsby/talon/internal/server"
+	"github.com/guygrigsby/talon/internal/tailnet"
 	"github.com/spf13/cobra"
 	"github.com/tidwall/gjson"
 )
+
+// tailnetServe is the tsnet bring-up entry point, injectable so tests can
+// avoid a real tailnet node. Production points it at tailnet.Serve.
+var tailnetServe = tailnet.Serve
+
+// gatewayTailnetListener brings up the tsnet node for bind=tailnet and
+// returns the gateway listener plus its FQDN. Reads gateway.tailscale.service
+// + gateway.port from merged config and resolves the OAuth client secret from
+// gateway.tailscale.oauth_client_ref via the shared secrets resolver (so
+// op:// / keychain:// refs work). Split out from gatewayRunCmd so it's unit-
+// testable with an injected tailnetServe.
+func gatewayTailnetListener(ctx context.Context, merged []byte) (net.Listener, string, error) {
+	service := gjson.GetBytes(merged, "gateway.tailscale.service").Str
+	if service == "" {
+		return nil, "", fmt.Errorf("bind=tailnet requires gateway.tailscale.service (run `talon configure tailscale`)")
+	}
+	port := int(gjson.GetBytes(merged, "gateway.port").Int())
+	if port <= 0 {
+		port = 443
+	}
+
+	var clientSecret string
+	if ref := gjson.GetBytes(merged, "gateway.tailscale.oauth_client_ref").Str; ref != "" {
+		resolveCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		resolved, err := secrets.NewResolver().Resolve(resolveCtx, ref)
+		cancel()
+		if err != nil {
+			return nil, "", fmt.Errorf("resolve gateway.tailscale.oauth_client_ref: %w", err)
+		}
+		clientSecret = resolved
+	}
+
+	stateDir := filepath.Join(resolvePaths().Talon.Dir, "tailscale")
+	ln, err := tailnetServe(ctx, tailnet.Options{
+		Hostname:      "talon",
+		StateDir:      stateDir,
+		ClientSecret:  clientSecret,
+		AdvertiseTags: []string{"tag:talon"},
+		Service:       service,
+		Port:          port,
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return ln, ln.FQDN, nil
+}
 
 func gatewayCmd() *cobra.Command {
 	c := &cobra.Command{
@@ -116,6 +164,11 @@ func gatewayRunCmd() *cobra.Command {
 				host = "127.0.0.1"
 			case "lan", "auto":
 				host = "0.0.0.0"
+			case "tailnet":
+				// Listener is owned by the embedded tsnet node, not a
+				// host:port. host stays loopback only for the local UI
+				// hint below; the real listener is built further down.
+				host = "127.0.0.1"
 			default:
 				host = "127.0.0.1"
 				fmt.Fprintf(os.Stderr, "talon: --bind=%q not yet wired; using loopback\n", bind)
@@ -339,6 +392,23 @@ func gatewayRunCmd() *cobra.Command {
 				if tailscaleReset {
 					defer resetTailscale(context.Background())
 				}
+			}
+
+			// bind=tailnet: the embedded tsnet node owns the listener.
+			// Bring it up and serve the existing mux on it instead of
+			// dialing host:port. The FQDN is the stable tailnet URL.
+			if bind == "tailnet" {
+				merged, err := config.MergedBytes(paths)
+				if err != nil {
+					return fmt.Errorf("load config for bind=tailnet: %w", err)
+				}
+				ln, fqdn, err := gatewayTailnetListener(ctx, merged)
+				if err != nil {
+					return err
+				}
+				defer ln.Close()
+				slog.Info("tailnet service listening", "fqdn", fqdn, "url", "https://"+fqdn)
+				return srv.RunListener(ctx, ln)
 			}
 			return srv.Run(ctx)
 		},

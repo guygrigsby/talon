@@ -33,6 +33,14 @@ type GatewayConfig struct {
 	TailscaleMode          string `mapstructure:"tailscale_mode"`
 	ControlUIRoot          string `mapstructure:"control_ui_root"`
 	ControlUIAllowInsecure *bool  `mapstructure:"control_ui_allow_insecure_auth"`
+
+	// Tailnet service bind (ADR 0008). Round-trips through gateway.tailscale.*
+	// in the runtime JSON view; persisted as flat tailscale_* TOML keys
+	// alongside tailscale_mode.
+	TailnetService       string `mapstructure:"tailscale_service"`          // e.g. "svc:talon"
+	TailnetOAuthClientID string `mapstructure:"tailscale_oauth_client_id"`  // non-secret OAuth client id (plaintext)
+	TailnetOAuthRef      string `mapstructure:"tailscale_oauth_client_ref"` // keychain://… or op://… ref to the OAuth secret
+	TailnetName          string `mapstructure:"tailscale_tailnet"`          // <tailnet>.ts.net, cached at provision
 }
 
 type ChatAgentConfig struct {
@@ -191,6 +199,11 @@ func gatewayFromJSON(raw []byte) GatewayConfig {
 		AuthPassword:  gjson.GetBytes(raw, "gateway.auth.password").Str,
 		TailscaleMode: gjson.GetBytes(raw, "gateway.tailscale.mode").Str,
 		ControlUIRoot: gjson.GetBytes(raw, "gateway.controlUi.root").Str,
+
+		TailnetService:       gjson.GetBytes(raw, "gateway.tailscale.service").Str,
+		TailnetOAuthClientID: gjson.GetBytes(raw, "gateway.tailscale.oauth_client_id").Str,
+		TailnetOAuthRef:      gjson.GetBytes(raw, "gateway.tailscale.oauth_client_ref").Str,
+		TailnetName:          gjson.GetBytes(raw, "gateway.tailscale.tailnet").Str,
 	}
 	if v := gjson.GetBytes(raw, "gateway.controlUi.allowInsecureAuth"); v.Exists() {
 		b := v.Bool()
@@ -635,6 +648,10 @@ func applyGatewayRuntime(root map[string]any, cfg NativeConfig, fallback []byte)
 		setPath(root, password, "gateway", "auth", "password")
 	}
 	setString(root, cfg.Gateway.TailscaleMode, "gateway", "tailscale", "mode")
+	setString(root, cfg.Gateway.TailnetService, "gateway", "tailscale", "service")
+	setString(root, cfg.Gateway.TailnetOAuthClientID, "gateway", "tailscale", "oauth_client_id")
+	setString(root, cfg.Gateway.TailnetOAuthRef, "gateway", "tailscale", "oauth_client_ref")
+	setString(root, cfg.Gateway.TailnetName, "gateway", "tailscale", "tailnet")
 	setString(root, cfg.Gateway.ControlUIRoot, "gateway", "controlUi", "root")
 	if cfg.Gateway.ControlUIAllowInsecure != nil {
 		setPath(root, *cfg.Gateway.ControlUIAllowInsecure, "gateway", "controlUi", "allowInsecureAuth")
@@ -976,6 +993,10 @@ func MarshalTOML(cfg NativeConfig, opts MarshalOptions) []byte {
 	w.kvString("auth_token_ref", cfg.Gateway.AuthToken, true)
 	w.kvString("auth_password_ref", cfg.Gateway.AuthPassword, true)
 	w.kvString("tailscale_mode", cfg.Gateway.TailscaleMode, false)
+	w.kvString("tailscale_service", cfg.Gateway.TailnetService, false)
+	w.kvString("tailscale_oauth_client_id", cfg.Gateway.TailnetOAuthClientID, false)
+	w.kvString("tailscale_oauth_client_ref", cfg.Gateway.TailnetOAuthRef, true)
+	w.kvString("tailscale_tailnet", cfg.Gateway.TailnetName, false)
 	w.kvString("control_ui_root", cfg.Gateway.ControlUIRoot, false)
 	if cfg.Gateway.ControlUIAllowInsecure != nil {
 		w.kvBool("control_ui_allow_insecure_auth", *cfg.Gateway.ControlUIAllowInsecure)

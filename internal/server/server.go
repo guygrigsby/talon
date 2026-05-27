@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"path"
@@ -255,8 +256,26 @@ func (s *Server) Run(ctx context.Context) error {
 		Handler:           s.mux,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	return s.serve(ctx, hs, func() error { return hs.ListenAndServe() })
+}
+
+// RunListener serves the gateway mux on an already-open listener instead of
+// dialing s.cfg.Addr. Used by bind=tailnet, where the tsnet node owns the
+// listener (ADR 0008). Shares cron + graceful-shutdown behavior with Run.
+func (s *Server) RunListener(ctx context.Context, ln net.Listener) error {
+	hs := &http.Server{
+		Handler:           s.mux,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+	return s.serve(ctx, hs, func() error { return hs.Serve(ln) })
+}
+
+// serve drives the http.Server lifecycle: it starts listen via the supplied
+// listen func, runs the cron scheduler, and handles graceful shutdown on
+// context cancellation. Shared by Run and RunListener.
+func (s *Server) serve(ctx context.Context, hs *http.Server, listen func() error) error {
 	errCh := make(chan error, 1)
-	go func() { errCh <- hs.ListenAndServe() }()
+	go func() { errCh <- listen() }()
 
 	// Cron scheduler ticks once a second. Granular enough that a job
 	// scheduled for "16:30" fires within the right minute even with

@@ -182,6 +182,47 @@ there per the talon convention; don't fork into internal/provider/.
 - Discovery (`/v1/models`). LiteLLM doesn't enumerate models for us;
   the picker is config-driven (`models.providers.<name>.models[]`).
 
+## tailscale.com (tsnet) — embedded tailnet node
+
+`tailscale.com` (tsnet)
+
+### What it is
+
+The official Tailscale Go module. We use the `tsnet` subpackage: an
+embeddable, userspace tailnet node. A Go program registers as its own
+machine on the tailnet and advertises a Tailscale Service (VIPService)
+in-process via `Server.ListenService`, with no system `tailscaled`, no
+CLI, no config files. BSD-3-Clause, so license-clean under the
+no-GPL/AGPL rule. Heavyweight (pulls gvisor + a netstack), accepted as
+the cost of a self-contained node.
+
+### What we use it for
+
+Selected by `gateway.bind=tailnet` (ADR 0008). Two in-tree pieces:
+
+- `internal/tailnet` — runtime. Brings up the tsnet node (state under
+  `~/.talon/tailscale/`), registers from the OAuth client secret +
+  `AdvertiseTags`, advertises `svc:talon`, and hands the resulting
+  listener (with its `FQDN`) to the gateway mux via
+  `server.RunListener`. The stable URL is `https://talon.<tailnet>.ts.net`.
+- `internal/tailscale` — provision-time REST v2 client (hand-rolled, not
+  tsnet): OAuth token exchange, read the tailnet MagicDNS name, create
+  the VIPService. Driven by the `talon configure tailscale` wizard.
+
+Distinct from the legacy `tailscale serve` wrapper (`cmd/talon/tailscale.go`,
+`gateway.tailscale.mode=serve|funnel`), which shells out to a
+user-managed `tailscaled`. The wrapper exposes the gateway at the host
+machine's name; the tsnet bind gives a host-independent service URL.
+
+### What's NOT in scope here
+
+- Auto-editing the tailnet policy. The wizard prints the ACL grant and
+  the user pastes it (ADR 0008: print-and-confirm, never silent).
+- Funnel, multi-backend service load-balancing, and `trusted-proxy`
+  identity mapping via tsnet `WhoIs` — documented follow-ups, not v1.
+- Talon's token auth is unchanged: it stays on as defense-in-depth even
+  though Tailscale authenticates at the network layer.
+
 ## How they compose
 
 ```
