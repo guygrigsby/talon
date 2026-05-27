@@ -29,7 +29,8 @@ import (
 // matches the legacy ChatHandler.emit* surface.
 type AgentcoreRunFn func(
 	ctx context.Context,
-	agentID, sessionKey, runID, userText, modelOverride string,
+	agentID, sessionKey, runID, userText, selectedModelID string,
+	priorHistory []ChatMessage,
 	emitText func(seq int, state, full, delta string),
 	emitToolStart func(toolCallID, name, args string),
 	emitToolResult func(toolCallID, name, output string, isErr bool),
@@ -186,6 +187,15 @@ func (s *ChatStore) Snapshot(sessionKey string) []ChatMessage {
 	return out
 }
 
+// Clear removes all stored turns for sessionKey. It intentionally
+// scopes to one session so clearing a web chat does not erase
+// Telegram/channel or subagent transcripts.
+func (s *ChatStore) Clear(sessionKey string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.history, sessionKey)
+}
+
 // Keys returns the sessionKeys with at least one stored message. Used by
 // sessions.list to surface chat-only sessions even if they've never been
 // patched.
@@ -268,10 +278,10 @@ func (h *ChatHandler) WithTools(ws WorkspaceResolver, mk func(workspace string) 
 	return h
 }
 
-// WithSessions enables per-session UI overrides. When set, runStream
+// WithSessions enables per-session UI state. When set, runStream
 // consults sessions.Model(sessionKey) before falling back to the agent's
-// PrimaryModel — that's how the UI's chat-model picker actually changes
-// the model that gets queried.
+// PrimaryModel; that's how the UI chat-model picker changes the model
+// queried for the current session.
 func (h *ChatHandler) WithSessions(sessions *SessionStore) *ChatHandler {
 	h.sessions = sessions
 	return h
@@ -482,6 +492,19 @@ func (h *ChatHandler) handleSend(ctx context.Context, hc HandlerCtx, params json
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "chat.send: cannot derive agent from sessionKey " + p.SessionKey}
 	}
 
+	if isClearContextCommand(p.Message) {
+		runID := p.IdempotencyKey
+		if runID == "" {
+			fresh, err := newRunID()
+			if err != nil {
+				return nil, &FrameError{Code: ErrCodeInternal, Message: "chat.send: " + err.Error()}
+			}
+			runID = fresh
+		}
+		h.store.Clear(p.SessionKey)
+		return map[string]any{"runId": runID}, nil
+	}
+
 	// Pre-flight cost-cap check. When the cap is unset (or no
 	// tracker is wired) Allow returns nil immediately — zero
 	// overhead for users not opting in.
@@ -552,6 +575,15 @@ func (h *ChatHandler) handleSend(ctx context.Context, hc HandlerCtx, params json
 	go h.runStream(runID, p.SessionKey, agentID, prov, model, runKey)
 
 	return map[string]any{"runId": runID}, nil
+}
+
+func isClearContextCommand(message string) bool {
+	switch strings.ToLower(strings.TrimSpace(message)) {
+	case "/clear", "/clear-context", "/context clear":
+		return true
+	default:
+		return false
+	}
 }
 
 // emitTarget collects the destinations for events fired during a

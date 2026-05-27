@@ -26,8 +26,8 @@ type Builder struct {
 	// authOverride lets tests bypass secrets resolution. nil in
 	// production; tests pass a fixed map to avoid touching the
 	// real auth chain.
-	authOverride  map[string]ProviderAuth
-	modelOverride string
+	authOverride    map[string]ProviderAuth
+	selectedModelID string
 	// memStore + memRecaller are optional. When both are non-nil
 	// BuildAgent attaches jess RememberTool + RecallTool to the
 	// agent. Built outside this package because chromem store
@@ -56,10 +56,10 @@ func (b *Builder) WithAuthOverride(auth map[string]ProviderAuth) *Builder {
 	return b
 }
 
-// WithModelOverride replaces the agent/default model for this build.
-// The gateway uses this for per-session model picker overrides.
-func (b *Builder) WithModelOverride(modelID string) *Builder {
-	b.modelOverride = modelID
+// WithSelectedModel replaces the agent/default model for this build.
+// The gateway uses this for the per-session model picker selection.
+func (b *Builder) WithSelectedModel(modelID string) *Builder {
+	b.selectedModelID = modelID
 	return b
 }
 
@@ -97,8 +97,8 @@ func (b *Builder) WithMemorySource(sessionID, messageID string) *Builder {
 // config).
 func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, error) {
 	choice := ResolveModel(b.merged, agentID)
-	if b.modelOverride != "" {
-		choice = ModelChoiceFromID(b.modelOverride, choice.Fallbacks)
+	if b.selectedModelID != "" {
+		choice = ModelChoiceFromID(b.selectedModelID, choice.Fallbacks)
 	}
 	if choice.ID == "" {
 		return nil, choice, fmt.Errorf("no model configured for agent %q (set agents.list[].model.primary or agents.defaults.model.primary)", agentID)

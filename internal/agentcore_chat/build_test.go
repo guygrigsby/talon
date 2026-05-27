@@ -38,7 +38,7 @@ func TestBuilder_BuildAgent_Openai(t *testing.T) {
 	}
 }
 
-func TestBuilder_BuildAgent_ModelOverrideWins(t *testing.T) {
+func TestBuilder_BuildAgent_SelectedModelWins(t *testing.T) {
 	clearProviderEnv(t)
 	cfg := []byte(`{
 		"agents": {
@@ -55,7 +55,7 @@ func TestBuilder_BuildAgent_ModelOverrideWins(t *testing.T) {
 		WithAuthOverride(map[string]ProviderAuth{
 			"deepseek": {Provider: "deepseek", BaseURL: "https://api.deepseek.com/v1", APIKey: "sk-test"},
 		}).
-		WithModelOverride("deepseek/deepseek-chat")
+		WithSelectedModel("deepseek/deepseek-chat")
 
 	agent, choice, err := b.BuildAgent("main")
 	if err != nil {

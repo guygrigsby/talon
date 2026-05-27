@@ -9,7 +9,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/voocel/agentcore"
 
@@ -22,7 +24,8 @@ import (
 func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) server.AgentcoreRunFn {
 	return func(
 		ctx context.Context,
-		agentID, sessionKey, runID, userText, modelOverride string,
+		agentID, sessionKey, runID, userText, selectedModelID string,
+		priorHistory []server.ChatMessage,
 		emitText func(seq int, state, full, delta string),
 		emitToolStart func(toolCallID, name, args string),
 		emitToolResult func(toolCallID, name, output string, isErr bool),
@@ -42,8 +45,8 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 		}
 
 		builder := agentcore_chat.NewBuilder(merged, paths)
-		if modelOverride != "" {
-			builder = builder.WithModelOverride(modelOverride)
+		if selectedModelID != "" {
+			builder = builder.WithSelectedModel(selectedModelID)
 		}
 		if mem != nil {
 			builder = builder.
@@ -60,6 +63,13 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 		adapter := agentcore_chat.NewEventAdapter(sink)
 		unsub := agent.Subscribe(func(ev agentcore.Event) { adapter.Handle(ev) })
 		defer unsub()
+
+		if history := agentcoreHistoryFromChatStore(priorHistory); len(history) > 0 {
+			if err := agent.SetMessages(history); err != nil {
+				sink.Error("seed-history", err.Error())
+				return server.AgentcoreRunResult{}, fmt.Errorf("seed history: %w", err)
+			}
+		}
 
 		if err := agent.Prompt(userText); err != nil {
 			sink.Error("prompt", err.Error())
@@ -90,6 +100,52 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 			},
 		}, nil
 	}
+}
+
+func agentcoreHistoryFromChatStore(history []server.ChatMessage) []agentcore.AgentMessage {
+	out := make([]agentcore.AgentMessage, 0, len(history))
+	for _, m := range history {
+		switch m.Role {
+		case "user":
+			out = append(out, agentcore.Message{
+				Role:      agentcore.RoleUser,
+				Content:   []agentcore.ContentBlock{agentcore.TextBlock(m.Content)},
+				Timestamp: m.At,
+			})
+		case "assistant":
+			blocks := make([]agentcore.ContentBlock, 0, 1+len(m.ToolCalls))
+			if m.Content != "" {
+				blocks = append(blocks, agentcore.TextBlock(m.Content))
+			}
+			for _, tc := range m.ToolCalls {
+				args := strings.TrimSpace(tc.ArgumentsJSON)
+				if args == "" {
+					args = "{}"
+				}
+				blocks = append(blocks, agentcore.ToolCallBlock(agentcore.ToolCall{
+					ID:   tc.ID,
+					Name: tc.Name,
+					Args: json.RawMessage(args),
+				}))
+			}
+			out = append(out, agentcore.Message{
+				Role:      agentcore.RoleAssistant,
+				Content:   blocks,
+				Timestamp: m.At,
+			})
+		case "tool":
+			msg := agentcore.ToolResultMsg(m.ToolCallID, json.RawMessage(m.Content), false)
+			msg.Timestamp = m.At
+			out = append(out, msg)
+		case "system":
+			out = append(out, agentcore.Message{
+				Role:      agentcore.RoleSystem,
+				Content:   []agentcore.ContentBlock{agentcore.TextBlock(m.Content)},
+				Timestamp: m.At,
+			})
+		}
+	}
+	return out
 }
 
 // gatewayEventSink adapts agentcore_chat.EventSink onto the four

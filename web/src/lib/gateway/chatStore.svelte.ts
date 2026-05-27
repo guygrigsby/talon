@@ -78,6 +78,10 @@ export function makeChatStore(sessionKey: string) {
 	async function send(text: string) {
 		const trimmed = text.trim();
 		if (!trimmed) return;
+		if (isClearContextCommand(trimmed)) {
+			await clearContext(trimmed);
+			return;
+		}
 		const runId = makeRunId();
 		// Optimistic user echo so the transcript reflects intent
 		// before the server roundtrip. Timestamp is local-clock;
@@ -112,6 +116,27 @@ export function makeChatStore(sessionKey: string) {
 			status = 'error';
 			errorMessage = friendlyAuthError(err);
 			if (activeRunId === runId) activeRunId = null;
+		}
+	}
+
+	async function clearContext(command: string) {
+		status = 'loading';
+		errorMessage = null;
+		activeRunId = null;
+		try {
+			const client = getChatClient();
+			await client.send(
+				create(ChatSendRequestSchema, {
+					sessionKey,
+					message: command,
+					idempotencyKey: makeRunId()
+				})
+			);
+			messages = [];
+			status = 'idle';
+		} catch (err) {
+			status = 'error';
+			errorMessage = friendlyAuthError(err);
 		}
 	}
 
@@ -371,6 +396,10 @@ function parseJSON(raw: string): Record<string, unknown> | null {
 	} catch {
 		return null;
 	}
+}
+
+function isClearContextCommand(text: string): boolean {
+	return ['/clear', '/clear-context', '/context clear'].includes(text.trim().toLowerCase());
 }
 
 // friendlyAuthError rewrites the bare Connect "unauthenticated"

@@ -96,9 +96,10 @@ func (h *ChatHandler) handleSendViaAgentcore(ctx context.Context, p chatSendPara
 	h.runs[runKey] = runID
 	h.runsMu.Unlock()
 
+	priorHistory := h.store.Snapshot(p.SessionKey)
 	h.store.Append(p.SessionKey, "user", p.Message)
 
-	go h.runStreamAgentcore(runID, p.SessionKey, agentID, p.Message, runKey)
+	go h.runStreamAgentcore(runID, p.SessionKey, agentID, p.Message, priorHistory, runKey)
 
 	return map[string]any{"runId": runID}, nil
 }
@@ -107,7 +108,7 @@ func (h *ChatHandler) handleSendViaAgentcore(ctx context.Context, p chatSendPara
 // path. Mirrors runStream's runs-map cleanup + StreamTimeout
 // scaffolding, then delegates the actual prompt to the injected
 // AgentcoreRunFn.
-func (h *ChatHandler) runStreamAgentcore(runID, sessionKey, agentID, userText, runKey string) {
+func (h *ChatHandler) runStreamAgentcore(runID, sessionKey, agentID, userText string, priorHistory []ChatMessage, runKey string) {
 	defer func() {
 		if runKey != "" {
 			h.runsMu.Lock()
@@ -146,14 +147,15 @@ func (h *ChatHandler) runStreamAgentcore(runID, sessionKey, agentID, userText, r
 		emitError(s, kind, msg)
 	}
 
-	modelOverride := ""
+	selectedModelID := ""
 	if h.sessions != nil {
-		modelOverride = h.sessions.Model(sessionKey)
+		selectedModelID = h.sessions.Model(sessionKey)
 	}
 
 	result, err := h.agentcoreRun(
 		ctx,
-		agentID, sessionKey, runID, userText, modelOverride,
+		agentID, sessionKey, runID, userText, selectedModelID,
+		priorHistory,
 		func(_ int, state, full, delta string) {
 			wrappedEmitText(state, full, delta)
 		},

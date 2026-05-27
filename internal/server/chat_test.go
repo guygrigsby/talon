@@ -215,6 +215,51 @@ func TestChatHandler_RejectsMissingFields(t *testing.T) {
 	}
 }
 
+func TestChatHandler_ClearCommandClearsSessionWithoutLLM(t *testing.T) {
+	const sessionKey = "agent:main:web"
+	store := NewChatStore()
+	store.Append(sessionKey, "user", "keep this until cleared")
+	store.Append(sessionKey, "assistant", "stored")
+
+	called := make(chan struct{}, 1)
+	h := NewChatHandler(
+		&stubResolver{models: map[string]provider.ModelID{"main": "openai/gpt-4o-mini"}},
+		&stubFactory{provider: provider.NewStub("openai", nil)},
+		store,
+	).WithAgentcoreRunner(func(
+		_ context.Context,
+		_ string, _ string, _ string, _ string, _ string,
+		_ []ChatMessage,
+		_ func(int, string, string, string),
+		_ func(string, string, string),
+		_ func(string, string, string, bool),
+		_ func(int, string, string),
+	) (AgentcoreRunResult, error) {
+		called <- struct{}{}
+		return AgentcoreRunResult{}, nil
+	})
+
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{}, []byte(`{
+		"sessionKey":"agent:main:web",
+		"message":"/clear",
+		"idempotencyKey":"run_clear"
+	}`))
+	if ferr != nil {
+		t.Fatalf("handleSend clear error: %+v", ferr)
+	}
+	if got := res.(map[string]any)["runId"]; got != "run_clear" {
+		t.Fatalf("runId = %v, want run_clear", got)
+	}
+	if history := store.Snapshot(sessionKey); len(history) != 0 {
+		t.Fatalf("history after clear = %+v, want empty", history)
+	}
+	select {
+	case <-called:
+		t.Fatal("clear command should not invoke the LLM runner")
+	default:
+	}
+}
+
 func TestChatHandler_AgentLookupFailureSurfacedAsInternal(t *testing.T) {
 	h := NewChatHandler(
 		&stubResolver{err: ErrAgentNotFound},

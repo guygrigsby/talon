@@ -69,7 +69,7 @@ func TestProviderModelID_ProviderExtraction(t *testing.T) {
 	}
 }
 
-func TestRunStreamAgentcorePassesSessionModelOverride(t *testing.T) {
+func TestRunStreamAgentcorePassesSessionSelectedModel(t *testing.T) {
 	const (
 		sessionKey = "agent:main:web"
 		override   = "deepseek/deepseek-chat"
@@ -88,24 +88,91 @@ func TestRunStreamAgentcorePassesSessionModelOverride(t *testing.T) {
 		StreamTimeout: time.Second,
 		agentcoreRun: func(
 			_ context.Context,
-			_ string, _ string, _ string, _ string, modelOverride string,
+			_ string, _ string, _ string, _ string, selectedModelID string,
+			_ []ChatMessage,
 			_ func(int, string, string, string),
 			_ func(string, string, string),
 			_ func(string, string, string, bool),
 			_ func(int, string, string),
 		) (AgentcoreRunResult, error) {
-			gotOverride = modelOverride
+			gotOverride = selectedModelID
 			return AgentcoreRunResult{FinalText: "done"}, nil
 		},
 	}
 
-	h.runStreamAgentcore("run_1", sessionKey, "main", "hello", sessionKey+"|run_1")
+	h.runStreamAgentcore("run_1", sessionKey, "main", "hello", nil, sessionKey+"|run_1")
 	if gotOverride != override {
 		t.Fatalf("model override = %q, want %q", gotOverride, override)
 	}
 	history := h.store.Snapshot(sessionKey)
 	if len(history) != 1 || history[0].Role != "assistant" || history[0].Content != "done" {
 		t.Fatalf("history = %+v", history)
+	}
+}
+
+func TestHandleSendViaAgentcorePassesPriorHistory(t *testing.T) {
+	const sessionKey = "agent:main:web"
+	store := NewChatStore()
+	store.Append(sessionKey, "user", "my favorite color is blue")
+	store.Append(sessionKey, "assistant", "noted")
+
+	type captured struct {
+		userText string
+		prior    []ChatMessage
+	}
+	got := make(chan captured, 1)
+	h := &ChatHandler{
+		store:         store,
+		sinks:         NewSinkRegistry(),
+		runs:          make(map[string]string),
+		StreamTimeout: time.Second,
+		agentcoreRun: func(
+			_ context.Context,
+			_ string, _ string, _ string, userText string, _ string,
+			priorHistory []ChatMessage,
+			_ func(int, string, string, string),
+			_ func(string, string, string),
+			_ func(string, string, string, bool),
+			_ func(int, string, string),
+		) (AgentcoreRunResult, error) {
+			got <- captured{
+				userText: userText,
+				prior:    append([]ChatMessage(nil), priorHistory...),
+			}
+			return AgentcoreRunResult{}, nil
+		},
+	}
+
+	_, ferr := h.handleSendViaAgentcore(t.Context(), chatSendParams{
+		SessionKey:     sessionKey,
+		Message:        "what color did I say?",
+		IdempotencyKey: "run_1",
+	}, "main")
+	if ferr != nil {
+		t.Fatalf("handleSendViaAgentcore error: %+v", ferr)
+	}
+
+	select {
+	case cap := <-got:
+		if cap.userText != "what color did I say?" {
+			t.Fatalf("userText = %q", cap.userText)
+		}
+		if len(cap.prior) != 2 {
+			t.Fatalf("prior len = %d, want 2: %+v", len(cap.prior), cap.prior)
+		}
+		if cap.prior[0].Role != "user" || cap.prior[0].Content != "my favorite color is blue" {
+			t.Fatalf("prior[0] = %+v", cap.prior[0])
+		}
+		if cap.prior[1].Role != "assistant" || cap.prior[1].Content != "noted" {
+			t.Fatalf("prior[1] = %+v", cap.prior[1])
+		}
+	case <-time.After(time.Second):
+		t.Fatal("agentcore runner was not called")
+	}
+
+	history := store.Snapshot(sessionKey)
+	if len(history) < 3 || history[2].Role != "user" || history[2].Content != "what color did I say?" {
+		t.Fatalf("stored history after send = %+v", history)
 	}
 }
 
@@ -124,6 +191,7 @@ func TestRunStreamAgentcoreRecordsUsageCost(t *testing.T) {
 		agentcoreRun: func(
 			_ context.Context,
 			_ string, _ string, _ string, _ string, _ string,
+			_ []ChatMessage,
 			_ func(int, string, string, string),
 			_ func(string, string, string),
 			_ func(string, string, string, bool),
@@ -136,7 +204,7 @@ func TestRunStreamAgentcoreRecordsUsageCost(t *testing.T) {
 		},
 	}
 
-	h.runStreamAgentcore("run_1", "agent:main:web", "main", "hello", "agent:main:web|run_1")
+	h.runStreamAgentcore("run_1", "agent:main:web", "main", "hello", nil, "agent:main:web|run_1")
 	if err := costs.Allow("main"); err == nil {
 		t.Fatal("expected recorded agentcore usage to trip the daily cost cap")
 	}
@@ -156,6 +224,7 @@ func TestRunStreamAgentcorePreservesToolResultErrorFlag(t *testing.T) {
 		agentcoreRun: func(
 			_ context.Context,
 			_ string, _ string, _ string, _ string, _ string,
+			_ []ChatMessage,
 			_ func(int, string, string, string),
 			_ func(string, string, string),
 			emitToolResult func(string, string, string, bool),
@@ -166,7 +235,7 @@ func TestRunStreamAgentcorePreservesToolResultErrorFlag(t *testing.T) {
 		},
 	}
 
-	h.runStreamAgentcore("run_1", sessionKey, "main", "hello", sessionKey+"|run_1")
+	h.runStreamAgentcore("run_1", sessionKey, "main", "hello", nil, sessionKey+"|run_1")
 	if sink.count() != 1 {
 		t.Fatalf("got %d events, want 1", sink.count())
 	}
@@ -184,6 +253,7 @@ func TestRunStreamAgentcorePreservesToolResultErrorFlag(t *testing.T) {
 var noopRunner AgentcoreRunFn = func(
 	_ context.Context,
 	_ string, _ string, _ string, _ string, _ string,
+	_ []ChatMessage,
 	_ func(int, string, string, string),
 	_ func(string, string, string),
 	_ func(string, string, string, bool),
