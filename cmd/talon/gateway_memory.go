@@ -21,6 +21,13 @@ import (
 	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
+// defaultRecallMinScore is the absolute cosine relevance floor applied
+// to vector recall when memory.recall.min_score is unset. Tuned for
+// MiniLM-L6-v2 cosine: below this, recalled memories are noise (the
+// "Oh hi!" -> pizza problem). Override via
+// `talon config set memory.recall.min_score <f>`.
+const defaultRecallMinScore = 0.30
+
 // buildMemorySidecar returns a configured MemoryConfig or nil when
 // memory is disabled or initialization fails. nil is the no-op
 // signal the caller hands to ChatHandler.WithMemory.
@@ -72,8 +79,11 @@ func buildMemorySidecar(paths talonpath.Paths) *server.MemoryConfig {
 
 	// Hybrid: token overlap catches keyword-exact hits, vector
 	// catches semantic ones. RRF (K=60) fuses the two rankings.
+	// The vector path carries an absolute cosine relevance floor so
+	// off-topic memories don't ride along on a low-similarity hit.
+	minScore := resolveRecallMinScore(settings)
 	recaller := memory.NewHybridRecaller(
-		memory.NewVectorRecaller(),
+		memory.NewVectorRecaller(memory.WithMinScore(float32(minScore))),
 		memory.NewSimpleRecaller(),
 	)
 
@@ -84,9 +94,20 @@ func buildMemorySidecar(paths talonpath.Paths) *server.MemoryConfig {
 }
 
 type memorySettings struct {
-	Enabled bool
-	Path    string
-	Model   string
+	Enabled        bool
+	Path           string
+	Model          string
+	RecallMinScore float64
+}
+
+// resolveRecallMinScore returns the configured vector-recall floor, or
+// the code default when unset (zero). A positive configured value
+// always wins.
+func resolveRecallMinScore(s memorySettings) float64 {
+	if s.RecallMinScore > 0 {
+		return s.RecallMinScore
+	}
+	return defaultRecallMinScore
 }
 
 func readMemorySettings(paths talonpath.Paths) (memorySettings, error) {
@@ -101,8 +122,9 @@ func readMemorySettings(paths talonpath.Paths) (memorySettings, error) {
 		return memorySettings{}, err
 	}
 	return memorySettings{
-		Enabled: cfg.Memory.Enabled,
-		Path:    cfg.Memory.Path,
-		Model:   cfg.Memory.Model,
+		Enabled:        cfg.Memory.Enabled,
+		Path:           cfg.Memory.Path,
+		Model:          cfg.Memory.Model,
+		RecallMinScore: cfg.Memory.Recall.MinScore,
 	}, nil
 }
