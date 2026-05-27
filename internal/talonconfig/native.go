@@ -77,6 +77,20 @@ type MemoryConfig struct {
 	Path    string             `mapstructure:"path"`
 	Model   string             `mapstructure:"model"`
 	Recall  MemoryRecallConfig `mapstructure:"recall"`
+	Claude  ClaudeMemoryConfig `mapstructure:"claude"`
+}
+
+// ClaudeMemoryConfig gates read-only access to a Claude-code memory dir
+// (ADR 0013). Default off. Enabled is a *bool so an unset value means
+// "use the default (false)"; Inject is a *bool so unset means "use the
+// default (true)" — tool-only access (inject=false) is an explicit
+// opt-out for tiny-context models. MaxInjectBytes caps the injected
+// index (zero lets the code default of 4096 apply).
+type ClaudeMemoryConfig struct {
+	Enabled        *bool  `mapstructure:"enabled"`
+	Path           string `mapstructure:"path"`
+	Inject         *bool  `mapstructure:"inject"`
+	MaxInjectBytes int64  `mapstructure:"max_inject_bytes"`
 }
 
 // MemoryRecallConfig tunes the recall pipeline.
@@ -282,14 +296,27 @@ func normalizeMainWorkspace(workspace string) string {
 }
 
 func memoryFromJSON(raw []byte) MemoryConfig {
-	return MemoryConfig{
+	m := MemoryConfig{
 		Enabled: gjson.GetBytes(raw, "memory.enabled").Bool(),
 		Path:    gjson.GetBytes(raw, "memory.path").Str,
 		Model:   gjson.GetBytes(raw, "memory.model").Str,
 		Recall: MemoryRecallConfig{
 			MinScore: gjson.GetBytes(raw, "memory.recall.min_score").Num,
 		},
+		Claude: ClaudeMemoryConfig{
+			Path:           gjson.GetBytes(raw, "memory.claude.path").Str,
+			MaxInjectBytes: gjson.GetBytes(raw, "memory.claude.max_inject_bytes").Int(),
+		},
 	}
+	if v := gjson.GetBytes(raw, "memory.claude.enabled"); v.Exists() {
+		b := v.Bool()
+		m.Claude.Enabled = &b
+	}
+	if v := gjson.GetBytes(raw, "memory.claude.inject"); v.Exists() {
+		b := v.Bool()
+		m.Claude.Inject = &b
+	}
+	return m
 }
 
 func auditFromJSON(raw []byte) AuditConfig {
@@ -747,6 +774,14 @@ func applyMemoryRuntime(root map[string]any, cfg NativeConfig) {
 	setString(root, cfg.Memory.Path, "memory", "path")
 	setString(root, cfg.Memory.Model, "memory", "model")
 	setFloat(root, cfg.Memory.Recall.MinScore, "memory", "recall", "min_score")
+	if cfg.Memory.Claude.Enabled != nil {
+		setPath(root, *cfg.Memory.Claude.Enabled, "memory", "claude", "enabled")
+	}
+	setString(root, cfg.Memory.Claude.Path, "memory", "claude", "path")
+	if cfg.Memory.Claude.Inject != nil {
+		setPath(root, *cfg.Memory.Claude.Inject, "memory", "claude", "inject")
+	}
+	setInt(root, cfg.Memory.Claude.MaxInjectBytes, "memory", "claude", "max_inject_bytes")
 }
 
 func applyAuditRuntime(root map[string]any, cfg NativeConfig) {
@@ -1064,6 +1099,19 @@ func MarshalTOML(cfg NativeConfig, opts MarshalOptions) []byte {
 		w.blank()
 		w.section("memory.recall")
 		w.kvFloat("min_score", cfg.Memory.Recall.MinScore)
+	}
+	if cfg.Memory.Claude.Enabled != nil || cfg.Memory.Claude.Path != "" ||
+		cfg.Memory.Claude.Inject != nil || cfg.Memory.Claude.MaxInjectBytes != 0 {
+		w.blank()
+		w.section("memory.claude")
+		if cfg.Memory.Claude.Enabled != nil {
+			w.kvBool("enabled", *cfg.Memory.Claude.Enabled)
+		}
+		w.kvString("path", cfg.Memory.Claude.Path, false)
+		if cfg.Memory.Claude.Inject != nil {
+			w.kvBool("inject", *cfg.Memory.Claude.Inject)
+		}
+		w.kvInt("max_inject_bytes", cfg.Memory.Claude.MaxInjectBytes)
 	}
 
 	w.blank()

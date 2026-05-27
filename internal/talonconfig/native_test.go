@@ -52,6 +52,106 @@ min_score = 0.35
 	}
 }
 
+func TestClaudeMemoryConfig_RoundTrips(t *testing.T) {
+	// TOML -> NativeConfig
+	cfg, err := ReadTOMLBytes([]byte(`
+[memory.claude]
+enabled = true
+path = "/tmp/claude-mem"
+inject = false
+max_inject_bytes = 2048
+`))
+	if err != nil {
+		t.Fatalf("ReadTOMLBytes: %v", err)
+	}
+	if cfg.Memory.Claude.Enabled == nil || *cfg.Memory.Claude.Enabled != true {
+		t.Fatalf("decoded memory.claude.enabled = %v, want true", cfg.Memory.Claude.Enabled)
+	}
+	if cfg.Memory.Claude.Path != "/tmp/claude-mem" {
+		t.Fatalf("decoded memory.claude.path = %q, want /tmp/claude-mem", cfg.Memory.Claude.Path)
+	}
+	if cfg.Memory.Claude.Inject == nil || *cfg.Memory.Claude.Inject != false {
+		t.Fatalf("decoded memory.claude.inject = %v, want false", cfg.Memory.Claude.Inject)
+	}
+	if cfg.Memory.Claude.MaxInjectBytes != 2048 {
+		t.Fatalf("decoded memory.claude.max_inject_bytes = %v, want 2048", cfg.Memory.Claude.MaxInjectBytes)
+	}
+
+	// NativeConfig -> TOML -> NativeConfig (TOML round-trip)
+	out := string(MarshalTOML(cfg, MarshalOptions{}))
+	reparsed, err := ReadTOMLBytes([]byte(out))
+	if err != nil {
+		t.Fatalf("reparse generated TOML: %v\n%s", err, out)
+	}
+	if reparsed.Memory.Claude.Enabled == nil || *reparsed.Memory.Claude.Enabled != true {
+		t.Fatalf("TOML round-trip memory.claude.enabled = %v, want true\n%s", reparsed.Memory.Claude.Enabled, out)
+	}
+	if reparsed.Memory.Claude.Path != "/tmp/claude-mem" {
+		t.Fatalf("TOML round-trip memory.claude.path = %q\n%s", reparsed.Memory.Claude.Path, out)
+	}
+	if reparsed.Memory.Claude.Inject == nil || *reparsed.Memory.Claude.Inject != false {
+		t.Fatalf("TOML round-trip memory.claude.inject = %v, want false\n%s", reparsed.Memory.Claude.Inject, out)
+	}
+	if reparsed.Memory.Claude.MaxInjectBytes != 2048 {
+		t.Fatalf("TOML round-trip memory.claude.max_inject_bytes = %v\n%s", reparsed.Memory.Claude.MaxInjectBytes, out)
+	}
+
+	// NativeConfig -> runtime JSON view (memory.claude.* paths)
+	raw, err := ToRuntimeJSON(cfg, nil)
+	if err != nil {
+		t.Fatalf("ToRuntimeJSON: %v", err)
+	}
+	if got := gjson.GetBytes(raw, "memory.claude.enabled").Bool(); got != true {
+		t.Fatalf("runtime JSON memory.claude.enabled = %v, want true\n%s", got, raw)
+	}
+	if got := gjson.GetBytes(raw, "memory.claude.path").Str; got != "/tmp/claude-mem" {
+		t.Fatalf("runtime JSON memory.claude.path = %q\n%s", got, raw)
+	}
+	if got := gjson.GetBytes(raw, "memory.claude.inject").Bool(); got != false {
+		t.Fatalf("runtime JSON memory.claude.inject = %v, want false\n%s", got, raw)
+	}
+	if got := gjson.GetBytes(raw, "memory.claude.max_inject_bytes").Int(); got != 2048 {
+		t.Fatalf("runtime JSON memory.claude.max_inject_bytes = %v, want 2048\n%s", got, raw)
+	}
+
+	// runtime JSON -> NativeConfig
+	back, err := FromRuntimeJSON(raw)
+	if err != nil {
+		t.Fatalf("FromRuntimeJSON: %v", err)
+	}
+	if back.Memory.Claude.Enabled == nil || *back.Memory.Claude.Enabled != true {
+		t.Fatalf("runtime JSON round-trip memory.claude.enabled = %v, want true", back.Memory.Claude.Enabled)
+	}
+	if back.Memory.Claude.Path != "/tmp/claude-mem" {
+		t.Fatalf("runtime JSON round-trip memory.claude.path = %q", back.Memory.Claude.Path)
+	}
+	if back.Memory.Claude.Inject == nil || *back.Memory.Claude.Inject != false {
+		t.Fatalf("runtime JSON round-trip memory.claude.inject = %v, want false", back.Memory.Claude.Inject)
+	}
+	if back.Memory.Claude.MaxInjectBytes != 2048 {
+		t.Fatalf("runtime JSON round-trip memory.claude.max_inject_bytes = %v, want 2048", back.Memory.Claude.MaxInjectBytes)
+	}
+}
+
+// TestClaudeMemoryConfig_Defaults asserts the nil-means-default semantics:
+// an unset enabled is nil (treated as false) and an unset inject is nil
+// (treated as true) by consumers.
+func TestClaudeMemoryConfig_Defaults(t *testing.T) {
+	cfg, err := ReadTOMLBytes([]byte(`
+[memory]
+enabled = true
+`))
+	if err != nil {
+		t.Fatalf("ReadTOMLBytes: %v", err)
+	}
+	if cfg.Memory.Claude.Enabled != nil {
+		t.Fatalf("unset memory.claude.enabled should be nil, got %v", *cfg.Memory.Claude.Enabled)
+	}
+	if cfg.Memory.Claude.Inject != nil {
+		t.Fatalf("unset memory.claude.inject should be nil, got %v", *cfg.Memory.Claude.Inject)
+	}
+}
+
 func TestAuditConfig_RoundTrips(t *testing.T) {
 	// TOML -> NativeConfig
 	cfg, err := ReadTOMLBytes([]byte(`
