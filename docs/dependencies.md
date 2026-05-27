@@ -259,3 +259,34 @@ system prompt + context manager from merged config), translate
 agentcore events to talon's wire shape (`chat.event` JSON frames over
 WebSocket), and own platform-side concerns (channels, session prefs,
 identity, cost cap, FE).
+
+## Agent-action audit log (`internal/audit`, ADR 0011)
+
+Alongside the live event stream, talon persists a durable, redacted,
+correlated trail of agent actions to `~/.talon/logs/agent-audit.jsonl`
+so a session can be traced after a failure or restart.
+
+- **Source-agnostic.** `audit.Event` is talon-owned, not
+  `agentcore.Event`. It's fed from the `ChatHandler` emit choke points
+  (`emitAgentToolStart`/`emitAgentToolResult`/`emitError` plus turn
+  boundaries in `runStreamAgentcore`). When `talon-17z` moves the agent
+  loop behind jess, only the adapter that populates `Event` changes.
+- **What it captures.** Turn boundaries (with model), tool calls +
+  args, tool results + error flag, agent-loop errors. Correlated by
+  `session` + `run` + monotonic `seq`.
+- **Redaction (load-bearing).** JSON args/output go through
+  `secrets.RedactJSON` (sensitive keys → `[REDACTED]`); a literal-secret
+  scrub then strips `op://` / `keychain://` refs and provider key /
+  bearer-token shapes from non-JSON output/text. Every secret-bearing
+  field is truncated to a byte cap. The audit log must never become a
+  secret-leak vector (tested in `recorder_test.go`).
+- **Rotation + non-blocking.** A `JSONLRecorder` appends on a single
+  background goroutine fed by a buffered channel; a full buffer drops
+  with a warn rather than blocking the chat turn, and write errors are
+  logged via slog, never propagated. Size-rotated
+  (`agent-audit.jsonl` → `.1` → `.2` …, default 10 MB × 3).
+- **Config.** `audit.{enabled,max_size_mb,keep}`; `enabled` defaults to
+  true. Read at gateway startup (restart to change).
+- **CLI.** `talon audit show [--session K] [--run R] [--since DUR]
+  [--json]` reads the live + rotated files and prints a time-ordered,
+  filtered view.
