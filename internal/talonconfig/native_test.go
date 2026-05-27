@@ -52,6 +52,65 @@ min_score = 0.35
 	}
 }
 
+func TestAuditConfig_RoundTrips(t *testing.T) {
+	// TOML -> NativeConfig
+	cfg, err := ReadTOMLBytes([]byte(`
+[audit]
+enabled = false
+max_size_mb = 25
+keep = 5
+`))
+	if err != nil {
+		t.Fatalf("ReadTOMLBytes: %v", err)
+	}
+	if cfg.Audit.Enabled == nil || *cfg.Audit.Enabled != false {
+		t.Fatalf("decoded audit.enabled = %v, want false", cfg.Audit.Enabled)
+	}
+	if cfg.Audit.MaxSizeMB != 25 {
+		t.Fatalf("decoded audit.max_size_mb = %v, want 25", cfg.Audit.MaxSizeMB)
+	}
+	if cfg.Audit.Keep != 5 {
+		t.Fatalf("decoded audit.keep = %v, want 5", cfg.Audit.Keep)
+	}
+
+	// NativeConfig -> TOML -> NativeConfig (TOML round-trip)
+	out := string(MarshalTOML(cfg, MarshalOptions{}))
+	reparsed, err := ReadTOMLBytes([]byte(out))
+	if err != nil {
+		t.Fatalf("reparse generated TOML: %v\n%s", err, out)
+	}
+	if reparsed.Audit.Enabled == nil || *reparsed.Audit.Enabled != false {
+		t.Fatalf("TOML round-trip audit.enabled = %v, want false\n%s", reparsed.Audit.Enabled, out)
+	}
+	if reparsed.Audit.MaxSizeMB != 25 || reparsed.Audit.Keep != 5 {
+		t.Fatalf("TOML round-trip audit max_size_mb/keep = %v/%v, want 25/5\n%s", reparsed.Audit.MaxSizeMB, reparsed.Audit.Keep, out)
+	}
+
+	// NativeConfig -> runtime JSON view (audit.* paths)
+	raw, err := ToRuntimeJSON(cfg, nil)
+	if err != nil {
+		t.Fatalf("ToRuntimeJSON: %v", err)
+	}
+	if got := gjson.GetBytes(raw, "audit.enabled").Bool(); got != false {
+		t.Fatalf("runtime JSON audit.enabled = %v, want false\n%s", got, raw)
+	}
+	if got := gjson.GetBytes(raw, "audit.max_size_mb").Int(); got != 25 {
+		t.Fatalf("runtime JSON audit.max_size_mb = %v, want 25\n%s", got, raw)
+	}
+
+	// runtime JSON -> NativeConfig
+	back, err := FromRuntimeJSON(raw)
+	if err != nil {
+		t.Fatalf("FromRuntimeJSON: %v", err)
+	}
+	if back.Audit.Enabled == nil || *back.Audit.Enabled != false {
+		t.Fatalf("runtime JSON round-trip audit.enabled = %v, want false", back.Audit.Enabled)
+	}
+	if back.Audit.MaxSizeMB != 25 || back.Audit.Keep != 5 {
+		t.Fatalf("runtime JSON round-trip max_size_mb/keep = %v/%v, want 25/5", back.Audit.MaxSizeMB, back.Audit.Keep)
+	}
+}
+
 func TestFromOpenClawJSON_MapsCoreConfig(t *testing.T) {
 	cfg, report, err := FromOpenClawJSON([]byte(`{
 		"gateway": {"mode": "local", "bind": "loopback", "port": 18789, "auth": {"mode": "token", "token": "literal-token"}},

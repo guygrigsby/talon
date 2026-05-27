@@ -21,6 +21,17 @@ type NativeConfig struct {
 	Models   ModelsConfig    `mapstructure:"models"`
 	Telegram TelegramConfig  `mapstructure:"-"`
 	Plugins  PluginsConfig   `mapstructure:"plugins"`
+	Audit    AuditConfig     `mapstructure:"audit"`
+}
+
+// AuditConfig controls the agent-action audit log (ADR 0011). The trail is
+// on by default — Enabled is a *bool so an unset value means "use the
+// default (true)" rather than the zero-value false. MaxSizeMB/Keep fall
+// back to the recorder defaults (10 MB × 3) when zero.
+type AuditConfig struct {
+	Enabled   *bool `mapstructure:"enabled"`
+	MaxSizeMB int64 `mapstructure:"max_size_mb"`
+	Keep      int64 `mapstructure:"keep"`
 }
 
 type GatewayConfig struct {
@@ -167,6 +178,7 @@ func fromJSONConfig(raw []byte, sourceLabel string) (NativeConfig, MigrationRepo
 	cfg.Models = modelsFromJSON(raw)
 	cfg.Telegram = telegramFromJSON(raw)
 	cfg.Plugins = pluginsFromJSON(raw)
+	cfg.Audit = auditFromJSON(raw)
 
 	report := MigrationReport{
 		SourceTopLevelKeys: sortedKeys(decoded),
@@ -278,6 +290,18 @@ func memoryFromJSON(raw []byte) MemoryConfig {
 			MinScore: gjson.GetBytes(raw, "memory.recall.min_score").Num,
 		},
 	}
+}
+
+func auditFromJSON(raw []byte) AuditConfig {
+	cfg := AuditConfig{
+		MaxSizeMB: gjson.GetBytes(raw, "audit.max_size_mb").Int(),
+		Keep:      gjson.GetBytes(raw, "audit.keep").Int(),
+	}
+	if v := gjson.GetBytes(raw, "audit.enabled"); v.Exists() {
+		b := v.Bool()
+		cfg.Enabled = &b
+	}
+	return cfg
 }
 
 func toolsFromJSON(raw []byte) ToolsConfig {
@@ -632,6 +656,7 @@ func ToRuntimeJSON(cfg NativeConfig, fallbackRuntime []byte) ([]byte, error) {
 	applyModelsRuntime(root, cfg, fallbackRuntime)
 	applyTelegramRuntime(root, cfg, fallbackRuntime)
 	applyPluginsRuntime(root, cfg)
+	applyAuditRuntime(root, cfg)
 
 	return json.Marshal(root)
 }
@@ -722,6 +747,14 @@ func applyMemoryRuntime(root map[string]any, cfg NativeConfig) {
 	setString(root, cfg.Memory.Path, "memory", "path")
 	setString(root, cfg.Memory.Model, "memory", "model")
 	setFloat(root, cfg.Memory.Recall.MinScore, "memory", "recall", "min_score")
+}
+
+func applyAuditRuntime(root map[string]any, cfg NativeConfig) {
+	if cfg.Audit.Enabled != nil {
+		setPath(root, *cfg.Audit.Enabled, "audit", "enabled")
+	}
+	setInt(root, cfg.Audit.MaxSizeMB, "audit", "max_size_mb")
+	setInt(root, cfg.Audit.Keep, "audit", "keep")
 }
 
 func applyToolsRuntime(root map[string]any, cfg NativeConfig, fallback []byte) {
@@ -1088,6 +1121,16 @@ func MarshalTOML(cfg NativeConfig, opts MarshalOptions) []byte {
 	w.kvStrings("enabled", cfg.Plugins.Enabled)
 	w.kvStrings("deny", cfg.Plugins.Deny)
 	w.kvStrings("load_paths", cfg.Plugins.LoadPaths)
+
+	if cfg.Audit.Enabled != nil || cfg.Audit.MaxSizeMB != 0 || cfg.Audit.Keep != 0 {
+		w.blank()
+		w.section("audit")
+		if cfg.Audit.Enabled != nil {
+			w.kvBool("enabled", *cfg.Audit.Enabled)
+		}
+		w.kvInt("max_size_mb", cfg.Audit.MaxSizeMB)
+		w.kvInt("keep", cfg.Audit.Keep)
+	}
 	return []byte(b.String())
 }
 
