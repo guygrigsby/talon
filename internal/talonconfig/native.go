@@ -41,6 +41,7 @@ type ChatAgentConfig struct {
 	Workspace    string       `mapstructure:"workspace"`
 	ToolsProfile string       `mapstructure:"tools_profile"`
 	ToolsEnabled *bool        `mapstructure:"tools_enabled"`
+	ToolsAllow   []string     `mapstructure:"tools_allow"`
 	ModelAliases []ModelAlias `mapstructure:"model_aliases"`
 	DailyUSDCap  float64      `mapstructure:"daily_usd_cap"`
 	MaxTurns     int64        `mapstructure:"max_turns"`
@@ -203,6 +204,7 @@ func chatAgentFromJSON(raw []byte) ChatAgentConfig {
 		Model:        gjson.GetBytes(raw, "agents.defaults.model.primary").Str,
 		Workspace:    normalizeMainWorkspace(gjson.GetBytes(raw, "agents.defaults.workspace").Str),
 		ToolsProfile: gjson.GetBytes(raw, "tools.profile").Str,
+		ToolsAllow:   stringArray(gjson.GetBytes(raw, "agents.defaults.tools.allow")),
 		DailyUSDCap:  gjson.GetBytes(raw, "agents.defaults.dailyUsdCap").Float(),
 		MaxTurns:     gjson.GetBytes(raw, "agents.defaults.maxTurns").Int(),
 		SystemPrompt: gjson.GetBytes(raw, "agents.defaults.systemPrompt").Str,
@@ -225,6 +227,9 @@ func chatAgentFromJSON(raw []byte) ChatAgentConfig {
 		}
 		if profile := main.Get("tools.profile").Str; profile != "" {
 			a.ToolsProfile = profile
+		}
+		if allow := main.Get("tools.allow"); allow.Exists() {
+			a.ToolsAllow = stringArray(allow)
 		}
 		if v := main.Get("tools.enabled"); v.Exists() {
 			b := v.Bool()
@@ -677,6 +682,14 @@ func applyAgentsRuntime(root map[string]any, cfg NativeConfig) {
 		tools["enabled"] = *cfg.Agent.ToolsEnabled
 		main["tools"] = tools
 	}
+	if len(cfg.Agent.ToolsAllow) > 0 {
+		tools, _ := main["tools"].(map[string]any)
+		if tools == nil {
+			tools = map[string]any{}
+		}
+		tools["allow"] = cfg.Agent.ToolsAllow
+		main["tools"] = tools
+	}
 	if cfg.Agent.MaxTurns > 0 {
 		main["maxTurns"] = cfg.Agent.MaxTurns
 	}
@@ -977,6 +990,7 @@ func MarshalTOML(cfg NativeConfig, opts MarshalOptions) []byte {
 	if cfg.Agent.ToolsEnabled != nil {
 		w.kvBool("tools_enabled", *cfg.Agent.ToolsEnabled)
 	}
+	w.kvStrings("tools_allow", cfg.Agent.ToolsAllow)
 	w.kvFloat("daily_usd_cap", cfg.Agent.DailyUSDCap)
 	w.kvInt("max_turns", cfg.Agent.MaxTurns)
 	w.kvString("system_prompt", cfg.Agent.SystemPrompt, false)

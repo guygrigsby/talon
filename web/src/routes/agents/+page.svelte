@@ -35,7 +35,7 @@
 	function modelSourceLabel(source?: string): string {
 		switch (source) {
 			case 'agent':
-				return 'override';
+				return 'configured';
 			case 'frontmatter':
 				return 'frontmatter';
 			case 'default':
@@ -49,6 +49,12 @@
 		if (!chars) return '';
 		if (chars >= 1_000) return `${(chars / 1_000).toFixed(chars % 1_000 === 0 ? 0 : 1)}K`;
 		return String(chars);
+	}
+
+	function toolsLabel(tools?: string[]): string {
+		if (!tools) return 'default';
+		if (tools.length === 0) return 'none';
+		return tools.join(', ');
 	}
 </script>
 
@@ -87,6 +93,8 @@
 							<dt class="t-label">workspace</dt>
 							<dd class="t-mono break">{primary.workspace}</dd>
 						{/if}
+						<dt class="t-label">tools</dt>
+						<dd class="t-mono break">{toolsLabel(primary.tools)}</dd>
 					</dl>
 				</article>
 			{:else}
@@ -134,7 +142,7 @@
 										{/if}
 									</td>
 									<td>{modelSourceLabel(a.modelSource)}</td>
-									<td class="t-mono tools">{a.tools?.join(', ') || 'default'}</td>
+									<td class="t-mono tools">{toolsLabel(a.tools)}</td>
 									<td class="t-num num">{promptLabel(a.promptChars)}</td>
 									<td class="t-mono break">{a.path ?? ''}</td>
 								</tr>

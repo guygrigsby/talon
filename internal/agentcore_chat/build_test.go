@@ -164,6 +164,80 @@ func TestBuilder_BuildAgent_PerAgentWorkspace(t *testing.T) {
 	// build test.
 }
 
+func TestBuilder_BuildAgent_ToolAllowListFiltersTools(t *testing.T) {
+	clearProviderEnv(t)
+	cfg := []byte(`{
+		"agents": {
+			"defaults": {"model": {"primary": "openai/gpt-5.4-mini"}, "workspace": "/tmp/talon-test-ws"},
+			"list": [{"id": "main", "tools": {"allow": ["read", "grep"]}}]
+		}
+	}`)
+	b := NewBuilder(cfg, talonpath.Paths{}).WithAuthOverride(map[string]ProviderAuth{
+		"openai": {Provider: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test"},
+	})
+	agent, _, err := b.BuildAgent("main")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	names := agentToolNames(agent)
+	if len(names) != 2 || !names["read"] || !names["grep"] {
+		t.Fatalf("tool names = %v, want read+grep only", names)
+	}
+}
+
+func TestBuilder_BuildAgent_ToolsEnabledFalseDisablesMemoryTools(t *testing.T) {
+	clearProviderEnv(t)
+	cfg := []byte(`{
+		"agents": {
+			"defaults": {"model": {"primary": "openai/gpt-4o-mini"}, "workspace": "/tmp/talon-no-tools"},
+			"list": [{"id": "main", "tools": {"enabled": false}}]
+		}
+	}`)
+	b := NewBuilder(cfg, talonpath.Paths{}).
+		WithAuthOverride(map[string]ProviderAuth{
+			"openai": {Provider: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test"},
+		}).
+		WithMemory(memory.NewInMemoryStore(), memory.NewSimpleRecaller())
+	agent, _, err := b.BuildAgent("main")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if names := agentToolNames(agent); len(names) != 0 {
+		t.Fatalf("tool names = %v, want no tools", names)
+	}
+}
+
+func TestBuilder_BuildAgent_SubagentFrontMatterFiltersTools(t *testing.T) {
+	clearProviderEnv(t)
+	root := t.TempDir()
+	paths := talonpath.Paths{Talon: talonpath.Layer{Dir: root}}
+	if err := os.MkdirAll(paths.Talon.SubagentsDir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(paths.Talon.SubagentsDir(), "coding.md"), []byte(`---
+model: openai/gpt-4o-mini
+tools: [read, grep]
+---
+Code work.
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := []byte(`{
+		"agents": {"defaults": {"model": {"primary": "openai/gpt-4o-mini"}, "workspace": "/tmp/talon-subagent-ws"}}
+	}`)
+	b := NewBuilder(cfg, paths).WithAuthOverride(map[string]ProviderAuth{
+		"openai": {Provider: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test"},
+	})
+	agent, _, err := b.BuildAgent("coding")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	names := agentToolNames(agent)
+	if len(names) != 2 || !names["read"] || !names["grep"] {
+		t.Fatalf("tool names = %v, want read+grep only", names)
+	}
+}
+
 func TestResolveAgentWorkspace_TiersThenDefaults(t *testing.T) {
 	cfg := []byte(`{
 		"agents": {
@@ -177,6 +251,14 @@ func TestResolveAgentWorkspace_TiersThenDefaults(t *testing.T) {
 	if got := resolveAgentWorkspace(cfg, "y"); got != "/tmp/d" {
 		t.Errorf("no per-agent workspace should fall back to defaults: got %q", got)
 	}
+}
+
+func agentToolNames(agent *agentcore.Agent) map[string]bool {
+	out := map[string]bool{}
+	for _, tool := range agent.State().Tools {
+		out[tool.Name()] = true
+	}
+	return out
 }
 
 func TestBuilder_BuildAgent_WithMemoryAttachesTools(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"github.com/guygrigsby/talon/internal/server"
 	"github.com/guygrigsby/talon/internal/subagents"
 	"github.com/guygrigsby/talon/internal/talonpath"
+	"github.com/guygrigsby/talon/internal/toolaccess"
 	"github.com/guygrigsby/talon/internal/tools"
 	"github.com/tidwall/gjson"
 )
@@ -45,22 +46,22 @@ type configAgentResolver struct {
 // + dispatch entirely — useful for personas pinned to local models
 // that don't support function calling.
 func (r *configAgentResolver) ToolsEnabled(agentID string) (bool, error) {
+	policy, err := r.ToolAccess(agentID)
+	if err != nil {
+		return true, err
+	}
+	return policy.Enabled, nil
+}
+
+// ToolAccess implements server.AgentToolAccessResolver. The policy is shared
+// by the agentcore path and the legacy provider runner so subagent front matter
+// and main-agent config mean the same thing everywhere.
+func (r *configAgentResolver) ToolAccess(agentID string) (toolaccess.Policy, error) {
 	merged, err := config.MergedBytes(r.paths)
 	if err != nil {
-		return true, fmt.Errorf("read merged config: %w", err)
+		return toolaccess.AllowAll(), fmt.Errorf("read merged config: %w", err)
 	}
-	if !agentExists(merged, agentID) {
-		if _, ok, err := r.findSubagent(agentID); err != nil {
-			return true, err
-		} else if ok {
-			return true, nil
-		}
-	}
-	v := gjson.GetBytes(merged, fmt.Sprintf(`agents.list.#(id==%q).tools.enabled`, agentID))
-	if !v.Exists() {
-		return true, nil
-	}
-	return v.Bool(), nil
+	return toolaccess.Resolve(merged, r.paths, agentID)
 }
 
 // Workspace implements server.WorkspaceResolver: per-agent workspace,

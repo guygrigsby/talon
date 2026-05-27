@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/guygrigsby/talon/internal/provider"
+	"github.com/guygrigsby/talon/internal/toolaccess"
 )
 
 func TestAgentIDFromSessionKey(t *testing.T) {
@@ -53,6 +54,15 @@ func (r *stubResolver) PrimaryModel(agentID string) (provider.ModelID, error) {
 		return "", ErrAgentNotFound
 	}
 	return m, nil
+}
+
+type stubToolAccessResolver struct {
+	stubResolver
+	policy toolaccess.Policy
+}
+
+func (r *stubToolAccessResolver) ToolAccess(agentID string) (toolaccess.Policy, error) {
+	return r.policy, nil
 }
 
 // stubFactory implements ProviderFactory for tests.
@@ -847,6 +857,81 @@ func TestChatHandler_TextOnlyChatStillWorksWithoutTools(t *testing.T) {
 	hist := store.Snapshot("agent:main:main")
 	if len(hist) != 2 || hist[1].Role != "assistant" || hist[1].Content != "hello" {
 		t.Errorf("history wrong: %+v", hist)
+	}
+}
+
+func TestChatHandler_ToolAccessFiltersAdvertisedTools(t *testing.T) {
+	scripted := &scriptedProvider{
+		scripts: [][]provider.Delta{
+			{{Kind: provider.DeltaText, Text: "ok"}},
+		},
+	}
+	runner := &stubToolRunner{
+		specs: []provider.ToolSpec{
+			{Name: "bash"},
+			{Name: "read"},
+		},
+		outputs: map[string]string{},
+	}
+	h := NewChatHandler(
+		&stubToolAccessResolver{
+			stubResolver: stubResolver{models: map[string]provider.ModelID{"main": "scripted/m"}},
+			policy:       toolaccess.AllowOnly([]string{"read"}),
+		},
+		&stubFactory{provider: scripted},
+		NewChatStore(),
+	).WithTools(&stubWorkspace{dir: "/tmp/ws"}, func(ws string) ToolRunner { return runner })
+
+	body := []byte(`{"sessionKey":"agent:main:main","message":"hi","idempotencyKey":"r-policy"}`)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{}, body)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	runID := res.(map[string]any)["runId"].(string)
+	waitForRunDone(t, h, runID, "agent:main:main")
+
+	reqs := scripted.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("provider got %d calls, want 1", len(reqs))
+	}
+	if got := reqs[0].Tools; len(got) != 1 || got[0].Name != "read" {
+		t.Fatalf("advertised tools = %+v, want only read", got)
+	}
+}
+
+func TestChatHandler_ToolAccessDisabledAdvertisesNoTools(t *testing.T) {
+	scripted := &scriptedProvider{
+		scripts: [][]provider.Delta{
+			{{Kind: provider.DeltaText, Text: "ok"}},
+		},
+	}
+	runner := &stubToolRunner{
+		specs:   []provider.ToolSpec{{Name: "bash"}},
+		outputs: map[string]string{},
+	}
+	h := NewChatHandler(
+		&stubToolAccessResolver{
+			stubResolver: stubResolver{models: map[string]provider.ModelID{"main": "scripted/m"}},
+			policy:       toolaccess.Policy{Enabled: false},
+		},
+		&stubFactory{provider: scripted},
+		NewChatStore(),
+	).WithTools(&stubWorkspace{dir: "/tmp/ws"}, func(ws string) ToolRunner { return runner })
+
+	body := []byte(`{"sessionKey":"agent:main:main","message":"hi","idempotencyKey":"r-no-tools"}`)
+	res, ferr := h.handleSend(t.Context(), HandlerCtx{}, body)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	runID := res.(map[string]any)["runId"].(string)
+	waitForRunDone(t, h, runID, "agent:main:main")
+
+	reqs := scripted.requests()
+	if len(reqs) != 1 {
+		t.Fatalf("provider got %d calls, want 1", len(reqs))
+	}
+	if got := reqs[0].Tools; len(got) != 0 {
+		t.Fatalf("advertised tools = %+v, want none", got)
 	}
 }
 

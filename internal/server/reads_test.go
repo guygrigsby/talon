@@ -161,6 +161,45 @@ func TestAgentsList_DefaultIDIsMainFromNativeConfig(t *testing.T) {
 	}
 }
 
+func TestAgentsList_AttachesResolvedToolPolicy(t *testing.T) {
+	h := NewReadHandler(readFixture(t, `{
+		"agents": {
+			"defaults": {"model": {"primary": "openai/gpt-4o-mini"}},
+			"list": [{"id": "main", "tools": {"allow": ["read", "grep"]}}]
+		}
+	}`))
+	res, ferr := h.handleAgentsList(t.Context(), HandlerCtx{}, nil)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	agents := res.(map[string]any)["agents"].([]map[string]any)
+	if len(agents) != 1 {
+		t.Fatalf("agents = %+v", agents)
+	}
+	tools := agents[0]["tools"].([]string)
+	if len(tools) != 2 || tools[0] != "grep" || tools[1] != "read" {
+		t.Fatalf("tools = %+v, want grep+read", tools)
+	}
+}
+
+func TestAgentsList_AttachesDisabledToolPolicy(t *testing.T) {
+	h := NewReadHandler(readFixture(t, `{
+		"agents": {
+			"defaults": {"model": {"primary": "openai/gpt-4o-mini"}},
+			"list": [{"id": "main", "tools": {"enabled": false}}]
+		}
+	}`))
+	res, ferr := h.handleAgentsList(t.Context(), HandlerCtx{}, nil)
+	if ferr != nil {
+		t.Fatal(ferr)
+	}
+	agents := res.(map[string]any)["agents"].([]map[string]any)
+	tools, ok := agents[0]["tools"].([]string)
+	if !ok || len(tools) != 0 {
+		t.Fatalf("tools = %#v, want explicit empty list", agents[0]["tools"])
+	}
+}
+
 func TestModelsList_FlattensProvidersAndAttachesAliases(t *testing.T) {
 	h := NewReadHandler(readFixture(t, fixtureRealConfig))
 	res, ferr := h.handleModelsList(t.Context(), HandlerCtx{}, nil)
