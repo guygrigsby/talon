@@ -127,7 +127,7 @@
 <style>
 	.bar {
 		display: flex;
-		align-items: stretch;
+		align-items: center;
 		height: var(--statusbar-h);
 		background: var(--canvas);
 		color: var(--ink-2);
@@ -139,8 +139,10 @@
 		display: inline-flex;
 		align-items: center;
 		gap: var(--s-2);
+		height: 100%;
 		padding: 0 var(--s-3);
 		border-right: 1px solid var(--border);
+		line-height: 1;
 	}
 	.cell.spacer {
 		flex: 1;
@@ -191,6 +193,23 @@
 		.hide-md { display: none; }
 	}
 	@media (max-width: 720px) {
+		.bar {
+			gap: var(--s-3);
+			padding: 0 var(--s-3);
+		}
+		.cell {
+			border-right: 0;
+			padding: 0;
+		}
+		.cell.spacer {
+			display: none;
+		}
+		.gateway {
+			flex: 1 1 auto;
+		}
+		.state {
+			display: none;
+		}
 		.hide-sm { display: none; }
 	}
 </style>

@@ -9,6 +9,8 @@
 		current?: string;
 		onOpenPalette?: () => void;
 	} = $props();
+
+	const currentLabel = $derived(navTabs.find((tab) => tab.key === current)?.label ?? current);
 </script>
 
 <header class="top">
@@ -16,6 +18,8 @@
 		<Wordmark />
 		<span class="tag hide-sm" aria-hidden="true">personal gateway</span>
 	</div>
+
+	<div class="mobile-context" aria-hidden="true">{currentLabel}</div>
 
 	<nav class="nav" aria-label="Primary">
 		{#each navTabs as tab (tab.key)}
@@ -30,7 +34,18 @@
 	</nav>
 
 	<div class="right">
-		<button type="button" class="cmd" onclick={() => onOpenPalette?.()} aria-haspopup="dialog">
+		<button
+			type="button"
+			class="cmd"
+			onclick={() => onOpenPalette?.()}
+			aria-haspopup="dialog"
+			aria-label="Open command palette"
+			title="Open command palette"
+		>
+			<svg class="cmd-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+				<circle cx="11" cy="11" r="6.5" stroke="currentColor" stroke-width="2" fill="none" />
+				<path d="M16 16 L 21 21" stroke="currentColor" stroke-width="2" fill="none" />
+			</svg>
 			<span class="cmd-label hide-sm">Search</span>
 			<kbd class="key t-mono">⌘K</kbd>
 		</button>
@@ -54,6 +69,17 @@
 		align-items: center;
 		gap: var(--s-3);
 		flex-shrink: 0;
+	}
+	.mobile-context {
+		display: none;
+		font-size: var(--fs-sm);
+		font-weight: 700;
+		color: var(--ink);
+		text-transform: lowercase;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 	.tag {
 		font-size: var(--fs-xs);
@@ -113,6 +139,10 @@
 		background: var(--surface);
 		color: var(--ink-2);
 	}
+	.cmd-icon {
+		display: none;
+		flex-shrink: 0;
+	}
 	.cmd:hover {
 		border-color: var(--accent-edge);
 		color: var(--ink);
@@ -133,6 +163,31 @@
 	}
 
 	@media (max-width: 720px) {
+		.top {
+			display: grid;
+			grid-template-columns: var(--tap) 1fr var(--tap);
+			gap: 0;
+			padding: 0 var(--s-2);
+		}
+		.left {
+			justify-content: center;
+			width: var(--tap);
+		}
+		.left :global(.word) {
+			display: none;
+		}
+		.mobile-context {
+			display: block;
+			justify-self: center;
+			max-width: 100%;
+		}
+		.nav {
+			display: none;
+		}
+		.right {
+			margin-left: 0;
+			justify-content: flex-end;
+		}
 		.hide-sm {
 			display: none !important;
 		}
@@ -141,6 +196,14 @@
 			width: var(--tap);
 			justify-content: center;
 			padding: 0;
+			border: 0;
+			background: transparent;
+		}
+		.cmd-icon {
+			display: block;
+		}
+		.key {
+			display: none;
 		}
 	}
 </style>

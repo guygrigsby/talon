@@ -73,6 +73,7 @@
 	// keep it enabled so the user can reload and start typing — the
 	// draft buffers until onSend lands.
 	const composerDisabled = $derived(!wired && status !== 'loading');
+	const canSubmit = $derived(wired && !busy && draft.trim().length > 0);
 
 	function sourceChipLabel(src: Channel): string {
 		if (src.source === 'web') return 'web';
@@ -98,7 +99,7 @@
 	}
 
 	async function submit() {
-		if (!onSend) return;
+		if (!onSend || !canSubmit) return;
 		const text = draft.trim();
 		if (!text) return;
 		draft = '';
@@ -166,8 +167,14 @@
 				class="op"
 				onclick={() => onToggleInspector?.()}
 				aria-pressed={inspectorOpen}
+				aria-label="Open details"
 			>
-				Inspector
+				<svg class="op-icon" viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+					<circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="2" fill="none" />
+					<path d="M12 11 V 16" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
+					<circle cx="12" cy="8" r="1" fill="currentColor" />
+				</svg>
+				<span class="op-label">Details</span>
 			</button>
 		</div>
 	</header>
@@ -209,12 +216,17 @@
 				disabled={composerDisabled}
 				use:focusOnMount
 				placeholder={wired
-					? 'Write a message…  (⇧⏎ newline · ⏎ send)'
+					? 'Message Talon'
 					: status === 'loading'
-						? 'Connecting…  start typing, send once ready'
+						? 'Connecting…'
 						: 'Composer disabled for this channel.'}
 				aria-describedby="composer-help"
 			></textarea>
+			<button type="submit" class="send" disabled={!canSubmit} aria-label="Send message">
+				<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+					<path d="M12 5 V 19 M 12 5 L 6 11 M 12 5 L 18 11" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none" />
+				</svg>
+			</button>
 		</div>
 		<span id="composer-help" class="sr-only">
 			Compose a message to {channel.name} on {sourceLabel[channel.source]}.
@@ -325,6 +337,10 @@
 		flex-shrink: 0;
 	}
 	.op {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		gap: var(--s-2);
 		color: var(--ink-2);
 		padding: 0 var(--s-3);
 		min-height: 32px;
@@ -342,6 +358,9 @@
 		color: var(--accent-strong);
 		border-color: var(--accent-edge);
 		background: var(--accent-tint);
+	}
+	.op-icon {
+		flex-shrink: 0;
 	}
 
 	.stream {
@@ -373,7 +392,8 @@
 	}
 	.input-wrap {
 		display: flex;
-		align-items: flex-start;
+		align-items: flex-end;
+		gap: var(--s-2);
 		background: var(--surface);
 		border: 1px solid var(--border-strong);
 		border-radius: var(--radius);
@@ -394,6 +414,7 @@
 		line-height: var(--lh-body);
 		color: var(--ink);
 		min-height: 44px;
+		max-height: 180px;
 	}
 	.input::placeholder {
 		color: var(--ink-3);
@@ -401,6 +422,26 @@
 	.input:disabled {
 		opacity: 0.6;
 		cursor: not-allowed;
+	}
+	.send {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: 34px;
+		height: 34px;
+		margin-bottom: 2px;
+		border-radius: var(--radius);
+		background: var(--accent);
+		color: var(--on-accent);
+		flex-shrink: 0;
+	}
+	.send:disabled {
+		background: var(--surface-3);
+		color: var(--ink-3);
+		cursor: not-allowed;
+	}
+	.send:not(:disabled):hover {
+		background: var(--accent-strong);
 	}
 	.err {
 		margin-top: var(--s-2);
@@ -410,21 +451,67 @@
 
 	@media (max-width: 720px) {
 		.head {
-			align-items: stretch;
-			flex-direction: column;
-			padding: var(--s-3) var(--s-4);
+			align-items: center;
+			flex-direction: row;
+			padding: var(--s-2) var(--s-3);
+			gap: var(--s-2);
+			min-height: 48px;
+		}
+		.head-main {
+			display: none;
 		}
 		.ops {
-			flex-wrap: wrap;
+			width: 100%;
+			flex: 1;
+			justify-content: space-between;
+			min-width: 0;
+		}
+		.ops :global(.model-picker) {
+			flex: 1;
+			min-width: 0;
+			justify-content: flex-start;
+		}
+		.ops :global(.model-picker .t-label) {
+			display: none;
+		}
+		.ops :global(.model-picker select) {
+			width: min(100%, 240px);
+			min-height: 36px;
+		}
+		.op {
+			width: 36px;
+			min-height: 36px;
+			padding: 0;
+			border-color: transparent;
+			background: transparent;
+		}
+		.op-label {
+			display: none;
 		}
 		.stream {
-			padding: 0 var(--s-4);
+			padding: var(--s-1) var(--s-3) 0;
 		}
 		.composer {
-			padding: var(--s-3) var(--s-4);
+			padding: var(--s-2) var(--s-3) calc(var(--s-2) + env(safe-area-inset-bottom));
+		}
+		.composer-label {
+			display: none;
+		}
+		.input-wrap {
+			border-radius: 18px;
+			padding: 7px 7px 7px var(--s-3);
 		}
 		.input {
-			min-height: 48px;
+			min-height: 28px;
+			max-height: 120px;
+			resize: none;
+			line-height: var(--lh-snug);
+		}
+		.send {
+			width: 32px;
+			height: 32px;
+			border-radius: 50%;
+			margin-bottom: 0;
 		}
 	}
 </style>

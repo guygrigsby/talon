@@ -141,10 +141,10 @@
 	}
 </script>
 
-<aside class="ins" class:is-open={open} aria-label="Channel inspector" aria-hidden={!open}>
+<aside class="ins" class:is-open={open} aria-label="Details" aria-hidden={!open}>
 	<header class="ins-head">
-		<h2 class="t-label">Inspector</h2>
-		<button type="button" class="x" onclick={() => onClose?.()} aria-label="Close inspector">
+		<h2 class="t-label">Details</h2>
+		<button type="button" class="x" onclick={() => onClose?.()} aria-label="Close details">
 			<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" focusable="false">
 				<path d="M6 6 L 18 18 M 18 6 L 6 18" stroke="currentColor" stroke-width="2" fill="none" />
 			</svg>
@@ -263,17 +263,22 @@
 	@media (max-width: 720px) {
 		.ins {
 			position: fixed;
+			left: 0;
 			right: 0;
-			top: var(--topbar-h);
+			top: auto;
 			bottom: var(--statusbar-h);
-			width: min(86vw, 360px);
+			width: 100%;
+			max-height: min(72dvh, 620px);
 			z-index: 50;
-			transform: translateX(100%);
+			border-left: 0;
+			border-top: 1px solid var(--border);
+			border-radius: 8px 8px 0 0;
+			transform: translateY(100%);
 			transition: transform 180ms ease-out;
 			box-shadow: var(--shadow-pop);
 		}
 		.ins.is-open {
-			transform: translateX(0);
+			transform: translateY(0);
 		}
 	}
 	@media (prefers-reduced-motion: reduce) {

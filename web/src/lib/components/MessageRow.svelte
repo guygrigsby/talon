@@ -394,6 +394,42 @@
 		max-width: 380px;
 	}
 	@media (max-width: 720px) {
+		.row {
+			padding: var(--s-3) 0;
+			border-bottom: 0;
+		}
+		.r-user {
+			display: flex;
+			flex-direction: column;
+			align-items: flex-end;
+		}
+		.meta {
+			display: none;
+		}
+		.text {
+			max-width: none;
+		}
+		.r-user .text {
+			max-width: 86%;
+			padding: 8px var(--s-3);
+			border: 1px solid var(--border);
+			border-radius: 8px;
+			background: var(--surface-2);
+			line-height: var(--lh-snug);
+		}
+		.r-assistant .text {
+			width: 100%;
+		}
+		.text.md :global(pre) {
+			max-width: 100%;
+		}
+		.tools {
+			width: 100%;
+			padding: var(--s-2);
+		}
+		.tc-summary {
+			align-items: center;
+		}
 		.tc-args {
 			max-width: 50vw;
 		}
