@@ -54,6 +54,12 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 				WithMemoryOptions(mem.MaxRecallEntries, mem.MemoryHeader, mem.Kinds).
 				WithMemorySource(sessionKey, runID)
 		}
+		// ADR 0013: read-only Claude-memory access, gated by
+		// memory.claude.*. Resolved per-run so the index reflects the
+		// current MEMORY.md. ok=false when disabled or inert.
+		if claudeIndex, claudeTool, ok := buildClaudeMemory(paths); ok {
+			builder = builder.WithClaudeMemory(claudeIndex, claudeTool)
+		}
 		agent, choice, err := builder.BuildAgent(agentID)
 		if err != nil {
 			sink.Error("build-agent", err.Error())

@@ -15,12 +15,99 @@ import (
 
 	"github.com/guygrigsby/jess/memory"
 	"github.com/guygrigsby/jess/memory/embed/gomlx"
+	"github.com/voocel/agentcore"
 
 	"github.com/guygrigsby/talon/internal/audit"
+	"github.com/guygrigsby/talon/internal/claudemem"
 	"github.com/guygrigsby/talon/internal/server"
 	"github.com/guygrigsby/talon/internal/talonconfig"
 	"github.com/guygrigsby/talon/internal/talonpath"
 )
+
+// defaultClaudeInjectBytes caps the Claude-memory index folded into the
+// system prompt when memory.claude.max_inject_bytes is unset (ADR 0013).
+const defaultClaudeInjectBytes = 4096
+
+// defaultClaudeReadBytes bounds a single claude_memory tool read. Larger
+// than the inject cap because a deliberate tool read wants the full
+// entry, but still bounded so one read can't blow the context.
+const defaultClaudeReadBytes = 32768
+
+type claudeMemorySettings struct {
+	Enabled        bool
+	Path           string
+	Inject         bool
+	MaxInjectBytes int
+}
+
+// readClaudeMemorySettings reads memory.claude.* from native config,
+// applying the nil-means-default semantics: enabled defaults false,
+// inject defaults true. A missing config file yields the defaults.
+func readClaudeMemorySettings(paths talonpath.Paths) (claudeMemorySettings, error) {
+	defaults := claudeMemorySettings{Inject: true, MaxInjectBytes: defaultClaudeInjectBytes}
+	if _, err := os.Stat(paths.Talon.Config); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return defaults, nil
+		}
+		return defaults, err
+	}
+	cfg, err := talonconfig.LoadFile(paths.Talon.Config)
+	if err != nil {
+		return defaults, err
+	}
+	c := cfg.Memory.Claude
+	out := defaults
+	if c.Enabled != nil {
+		out.Enabled = *c.Enabled
+	}
+	out.Path = c.Path
+	if c.Inject != nil {
+		out.Inject = *c.Inject
+	}
+	if c.MaxInjectBytes > 0 {
+		out.MaxInjectBytes = int(c.MaxInjectBytes)
+	}
+	return out, nil
+}
+
+// buildClaudeMemory resolves memory.claude.* and, when enabled with a
+// valid dir, returns the (capped) index to inject and the path-confined
+// claude_memory tool (ADR 0013). ok=false means the feature is off or
+// inert. Like buildMemorySidecar, failures log + return ok=false rather
+// than aborting startup. index is empty when inject is disabled.
+func buildClaudeMemory(paths talonpath.Paths) (index string, tool agentcore.Tool, ok bool) {
+	settings, err := readClaudeMemorySettings(paths)
+	if err != nil {
+		slog.Debug("claude-memory: cannot read native config; skipping", "err", err)
+		return "", nil, false
+	}
+	if !settings.Enabled {
+		// Default off. Opt in via: talon config set memory.claude.enabled true
+		return "", nil, false
+	}
+	if settings.Path == "" {
+		slog.Warn("claude-memory: enabled but memory.claude.path is unset; feature inert")
+		return "", nil, false
+	}
+	store, err := claudemem.New(settings.Path)
+	if err != nil {
+		slog.Error("claude-memory: cannot open memory dir; feature disabled",
+			"path", settings.Path, "err", err)
+		return "", nil, false
+	}
+	if settings.Inject {
+		idx, err := store.Index(settings.MaxInjectBytes)
+		if err != nil {
+			slog.Error("claude-memory: cannot read index; injecting nothing",
+				"path", settings.Path, "err", err)
+		} else {
+			index = idx
+		}
+	}
+	tool = claudemem.NewTool(store, defaultClaudeReadBytes)
+	slog.Info("claude-memory enabled", "path", store.Dir(), "inject", settings.Inject)
+	return index, tool, true
+}
 
 // defaultRecallMinScore is the absolute cosine relevance floor applied
 // to vector recall when memory.recall.min_score is unset. Tuned for
