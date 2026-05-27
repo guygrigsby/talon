@@ -65,6 +65,7 @@ subcommand (e.g. 'talon configure channel telegram').`,
 		},
 	}
 	c.AddCommand(configureChannelCmd())
+	c.AddCommand(configureTailscaleCmd())
 	return c
 }
 
@@ -101,6 +102,7 @@ type configureWizard struct {
 var configureWizardsForTest = []configureWizard{
 	{Kind: "channel", Name: "telegram", Label: "Telegram", Run: configureTelegram},
 	{Kind: "channel", Name: "bluebubbles", Aliases: []string{"bb"}, Label: "BlueBubbles (iMessage)", Run: configureBluebubbles},
+	{Kind: "tailscale", Name: "tailscale", Aliases: []string{"ts"}, Label: "Tailscale (tailnet service)", Run: configureTailscale},
 }
 
 // wizardsByKind returns the subset of registered wizards whose Kind
