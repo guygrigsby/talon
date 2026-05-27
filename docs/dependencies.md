@@ -86,6 +86,13 @@ Two extension packages:
   Tools the model can call: `RememberTool` (save) + `RecallTool`
   (query). `ContextManager` adapter injects layered memory (always-on
   core + relevance-recalled) into every LLM call.
+  `VectorRecaller` carries an absolute cosine **relevance floor**
+  (`memory.WithMinScore`): vector hits below it are dropped before
+  `HybridRecaller`'s RRF fusion, so off-topic memories don't ride
+  along on a low-similarity match (ADR 0009). talon sets the floor
+  from `memory.recall.min_score` (default `0.30` for MiniLM-L6-v2
+  cosine when unset); `talon config set memory.recall.min_score <f>`
+  tunes it, and the gateway must restart to apply (startup-read).
 
 - **`jess/skills`** — registerable capability bundles. A `Skill` is
   a name, description, system-prompt contribution, and zero-or-more
