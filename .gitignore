@@ -5,6 +5,7 @@
 # these from `go test` runs invoked outside a package dir).
 /pb.test
 /talon
+/.pnpm-store/
 
 # Beads / Dolt files (added by bd init)
 .dolt/

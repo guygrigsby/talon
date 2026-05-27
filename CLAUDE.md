@@ -87,6 +87,13 @@ Single test: `go test ./internal/server -run TestName -v`. The `web*`,
   enforces beads.
 - Keep `notYetImplemented("talon-<id>")` stubs around for unwired flags/
   commands; that's how the gap stays discoverable.
+- **A feature isn't done until it's reachable from the CLI.** In addition to
+  being tested, every new feature must be exposed as a `talon` command and,
+  where it has setup/config, wired into the relevant `talon configure` wizard.
+  A feature whose only configuration path is hand-editing `config.toml` is
+  incomplete. This is especially load-bearing for anything requiring a secret:
+  plaintext secrets are rejected (ADR 0006), so there must be a guided
+  store-and-reference flow.
 
 ### Policy: config changes are explicit (talon-5zx)
 
