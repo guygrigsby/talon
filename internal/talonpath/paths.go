@@ -92,6 +92,11 @@ func (l Layer) ConfigAuditLogPath() string {
 	return filepath.Join(l.LogsDir(), "config-audit.jsonl")
 }
 
+// AgentAuditLogPath returns the JSONL agent-action audit-log path.
+func (l Layer) AgentAuditLogPath() string {
+	return filepath.Join(l.LogsDir(), "agent-audit.jsonl")
+}
+
 // CredentialsDir returns "<Dir>/credentials".
 func (l Layer) CredentialsDir() string { return filepath.Join(l.Dir, "credentials") }
 
