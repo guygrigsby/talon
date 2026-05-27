@@ -89,12 +89,11 @@ talon bumps the jess dependency to the version carrying the change.
   can still surface an exact-text match even at modest cosine score; the floor
   bounds the *vector* contribution, not lexical matches. Acceptable and arguably
   desirable; documented so it isn't mistaken for a leak.
-- The keyword path still over-matches common tokens (`SimpleRecaller` scores a
-  memory for sharing words like "the"/"user" with the hint, since
-  `MinTokenLength` is 3). This surfaces low-value memories on content queries,
-  but the relevant memory still dominates via RRF; it is a milder issue than
-  the original bug and is left as a follow-up (stopword filtering / raise the
-  token bar).
+- Keyword over-matching on common tokens is addressed by stopword filtering:
+  jess `SimpleRecaller` gained `WithStopwords` (+ `DefaultStopwords`, a standard
+  English set), and talon enables it with the defaults plus user-centric domain
+  terms (`user`, `talon`, `gateway`) that otherwise match nearly every memory.
+  The integration test confirms an on-topic query now recalls only the relevant
+  memory, with the previously-leaked entries gone.
 - Future work: relative/top-gap trimming on top of the floor (deferred — see
-  the threshold decision), per-agent floor overrides, and stopword filtering in
-  `SimpleRecaller`.
+  the threshold decision) and per-agent floor overrides.

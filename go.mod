@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	connectrpc.com/connect v1.20.0
-	github.com/guygrigsby/jess v0.0.0-20260527034844-dbd3d915c0b7
+	github.com/guygrigsby/jess v0.0.0-20260527041307-9dbb91318a5b
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/robfig/cron/v3 v3.0.1

@@ -81,8 +81,17 @@ func TestRecallRelevanceFloor_E2E(t *testing.T) {
 		var hit bool
 		for _, e := range got {
 			t.Logf("recalled: %q (score %.3f)", e.Text, e.Score)
-			if strings.Contains(strings.ToLower(e.Text), "pizza") {
+			lower := strings.ToLower(e.Text)
+			if strings.Contains(lower, "pizza") {
 				hit = true
+				continue
+			}
+			// Stopwords ("user"/"the") + RequireMatch should keep the
+			// unrelated memories out — they only matched on common glue.
+			for _, bad := range []string{"dark mode", "deploys", "tailnet"} {
+				if strings.Contains(lower, bad) {
+					t.Errorf("over-match: irrelevant memory recalled on food query: %q", e.Text)
+				}
 			}
 		}
 		if !hit {

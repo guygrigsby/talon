@@ -110,9 +110,21 @@ func buildRecaller(minScore float64) memory.Recaller {
 		// Token overlap catches keyword-exact hits, vector catches
 		// semantic ones; RRF (K=60) fuses the two rankings.
 		memory.NewVectorRecaller(memory.WithMinScore(float32(minScore))),
-		memory.NewSimpleRecaller(memory.WithRequireMatch()),
+		// RequireMatch drops zero-signal hits; stopwords drop common
+		// query glue. "user"/"talon" are added to the English defaults
+		// because talon's memories are user-centric ("User likes X"),
+		// so those tokens otherwise match nearly everything.
+		memory.NewSimpleRecaller(
+			memory.WithRequireMatch(),
+			memory.WithStopwords(recallStopwords...),
+		),
 	)
 }
+
+// recallStopwords is the English default set plus talon domain terms that
+// are ubiquitous in memories and thus low-signal for keyword recall.
+var recallStopwords = append(append([]string{}, memory.DefaultStopwords...),
+	"user", "talon", "gateway")
 
 func readMemorySettings(paths talonpath.Paths) (memorySettings, error) {
 	if _, err := os.Stat(paths.Talon.Config); err != nil {
