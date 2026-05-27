@@ -11,8 +11,10 @@ package server
 
 import (
 	"context"
+	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/guygrigsby/talon/internal/audit"
 )
@@ -126,6 +128,16 @@ func (h *ChatHandler) runStreamAgentcore(runID, sessionKey, agentID, userText st
 		selectedModelID = h.sessions.Model(sessionKey)
 	}
 
+	// Lifecycle INFO: one line per turn boundary, correlated by
+	// session/run/agent. Per-token output stays on the event stream.
+	turnStart := time.Now()
+	slog.Info("chat turn start",
+		"session", sessionKey, "run", runID, "agent", agentID, "model", selectedModelID)
+	defer func() {
+		slog.Info("chat turn end",
+			"session", sessionKey, "run", runID, "dur", time.Since(turnStart))
+	}()
+
 	if h.audit != nil {
 		auditModel := selectedModelID
 		if auditModel == "" && h.resolver != nil {
@@ -163,6 +175,9 @@ func (h *ChatHandler) runStreamAgentcore(runID, sessionKey, agentID, userText st
 		_ = h.emitChat(sessionKey, runID, sessionKey, s, state, full, delta)
 	}
 	emitToolStart := func(id, name, args string) {
+		// DEBUG per-tool dispatch; args stay off the log line (they
+		// may carry secrets) and remain on the audit/event stream.
+		slog.Debug("tool dispatch", "tool", name, "session", sessionKey, "run", runID)
 		h.emitAgentToolStart(sessionKey, runID, sessionKey, id, name, args)
 	}
 	emitToolResult := func(id, name, out string, isErr bool) {

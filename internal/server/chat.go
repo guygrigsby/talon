@@ -1286,6 +1286,10 @@ func (h *ChatHandler) pushAgentEvent(toolSessionKey string, payload AgentEventPa
 // Empty chatSessionKey suppresses (matches the previous
 // chatSess=nil semantics for subagent runs).
 func (h *ChatHandler) emitError(chatSessionKey, runID, sessionKey string, seq int, kind, msg string) error {
+	// Error sink emit carries correlation keys so a failure can be
+	// traced to its turn. kind is a short tag; msg is the error text
+	// (never tool args/output).
+	slog.Error("chat error", "session", sessionKey, "run", runID, "kind", kind, "err", msg)
 	h.recordAudit(audit.Event{
 		Kind:    audit.KindError,
 		Session: sessionKey,
