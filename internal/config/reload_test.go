@@ -14,6 +14,8 @@ func TestClassifyReload(t *testing.T) {
 		{"gateway.auth.token", ReloadRestart},
 		{"gateway.auth.password", ReloadRestart},
 		{"gateway.tailscale.mode", ReloadRestart},
+		{"gateway.tailscale.service", ReloadRestart},
+		{"gateway.tailscale.oauth_client_ref", ReloadRestart},
 		{"gateway.controlUi.root", ReloadRestart},
 		{"plugins.entries.brave.enabled", ReloadRestart},
 		{"plugins.entries.openai.enabled", ReloadRestart},

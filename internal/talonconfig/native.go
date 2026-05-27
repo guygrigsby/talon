@@ -33,6 +33,12 @@ type GatewayConfig struct {
 	TailscaleMode          string `mapstructure:"tailscale_mode"`
 	ControlUIRoot          string `mapstructure:"control_ui_root"`
 	ControlUIAllowInsecure *bool  `mapstructure:"control_ui_allow_insecure_auth"`
+
+	// Tailnet service bind (ADR 0008). Populated from gateway.tailscale.*.
+	TailnetService       string `mapstructure:"-"` // e.g. "svc:talon"
+	TailnetOAuthClientID string `mapstructure:"-"` // non-secret OAuth client id (plaintext)
+	TailnetOAuthRef      string `mapstructure:"-"` // keychain://… or op://… ref to the OAuth secret
+	TailnetName          string `mapstructure:"-"` // <tailnet>.ts.net, cached at provision
 }
 
 type ChatAgentConfig struct {
@@ -180,6 +186,11 @@ func gatewayFromJSON(raw []byte) GatewayConfig {
 		AuthPassword:  gjson.GetBytes(raw, "gateway.auth.password").Str,
 		TailscaleMode: gjson.GetBytes(raw, "gateway.tailscale.mode").Str,
 		ControlUIRoot: gjson.GetBytes(raw, "gateway.controlUi.root").Str,
+
+		TailnetService:       gjson.GetBytes(raw, "gateway.tailscale.service").Str,
+		TailnetOAuthClientID: gjson.GetBytes(raw, "gateway.tailscale.oauth_client_id").Str,
+		TailnetOAuthRef:      gjson.GetBytes(raw, "gateway.tailscale.oauth_client_ref").Str,
+		TailnetName:          gjson.GetBytes(raw, "gateway.tailscale.tailnet").Str,
 	}
 	if v := gjson.GetBytes(raw, "gateway.controlUi.allowInsecureAuth"); v.Exists() {
 		b := v.Bool()
