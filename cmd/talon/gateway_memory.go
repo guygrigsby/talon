@@ -16,6 +16,7 @@ import (
 	"github.com/guygrigsby/jess/memory"
 	"github.com/guygrigsby/jess/memory/embed/gomlx"
 
+	"github.com/guygrigsby/talon/internal/audit"
 	"github.com/guygrigsby/talon/internal/server"
 	"github.com/guygrigsby/talon/internal/talonconfig"
 	"github.com/guygrigsby/talon/internal/talonpath"
@@ -125,6 +126,64 @@ func buildRecaller(minScore float64) memory.Recaller {
 // are ubiquitous in memories and thus low-signal for keyword recall.
 var recallStopwords = append(append([]string{}, memory.DefaultStopwords...),
 	"user", "talon", "gateway")
+
+// buildAuditRecorder constructs the agent-action audit recorder (ADR 0011)
+// when audit.enabled is true (the default). Returns nil when disabled or
+// when the recorder can't be created — a failed audit setup must never take
+// down the gateway, so errors are logged and swallowed.
+func buildAuditRecorder(paths talonpath.Paths) audit.Recorder {
+	cfg, err := readAuditSettings(paths)
+	if err != nil {
+		slog.Debug("audit: cannot read native config; using defaults", "err", err)
+	}
+	if !cfg.enabled {
+		slog.Info("audit log disabled (audit.enabled=false)")
+		return nil
+	}
+	path := paths.Talon.AgentAuditLogPath()
+	rec, err := audit.NewJSONLRecorder(audit.Options{
+		Path:      path,
+		MaxSizeMB: cfg.maxSizeMB,
+		Keep:      int(cfg.keep),
+	})
+	if err != nil {
+		slog.Error("audit: recorder init failed; audit log disabled", "path", path, "err", err)
+		return nil
+	}
+	slog.Info("audit log enabled", "path", path)
+	return rec
+}
+
+type auditSettings struct {
+	enabled   bool
+	maxSizeMB int64
+	keep      int64
+}
+
+// readAuditSettings reads audit.* from native config. A missing config file
+// yields the defaults (enabled). Enabled defaults to true when unset.
+func readAuditSettings(paths talonpath.Paths) (auditSettings, error) {
+	defaults := auditSettings{enabled: true}
+	if _, err := os.Stat(paths.Talon.Config); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return defaults, nil
+		}
+		return defaults, err
+	}
+	cfg, err := talonconfig.LoadFile(paths.Talon.Config)
+	if err != nil {
+		return defaults, err
+	}
+	out := auditSettings{
+		enabled:   true,
+		maxSizeMB: cfg.Audit.MaxSizeMB,
+		keep:      cfg.Audit.Keep,
+	}
+	if cfg.Audit.Enabled != nil {
+		out.enabled = *cfg.Audit.Enabled
+	}
+	return out, nil
+}
 
 func readMemorySettings(paths talonpath.Paths) (memorySettings, error) {
 	if _, err := os.Stat(paths.Talon.Config); err != nil {

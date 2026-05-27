@@ -10,9 +10,11 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/guygrigsby/talon/internal/agentcontext"
+	"github.com/guygrigsby/talon/internal/audit"
 	plugin "github.com/guygrigsby/talon/internal/plugin/host"
 	"github.com/guygrigsby/talon/internal/provider"
 	"github.com/guygrigsby/talon/internal/talonpath"
@@ -247,6 +249,18 @@ type ChatHandler struct {
 	// internal/agentcore_chat.
 	agentcoreRun AgentcoreRunFn
 
+	// audit, when set, persists a redacted, correlated trail of agent
+	// actions (tool calls/results, errors, turn boundaries) to disk via
+	// the recordAudit choke point. nil = disabled; every call site guards
+	// on it. Recording is best-effort and never blocks the turn (ADR 0011).
+	audit audit.Recorder
+
+	// auditSeq holds a per-run monotonic counter keyed by runID so audit
+	// events for a run are totally ordered independent of the live event
+	// stream's seq. Guarded by auditSeqMu.
+	auditSeqMu sync.Mutex
+	auditSeq   map[string]*atomic.Int64
+
 	// runs tracks active runs by "sessionKey|idempotencyKey" so a duplicate
 	// chat.send returns the same runId without spawning a second stream.
 	runsMu sync.Mutex
@@ -273,9 +287,44 @@ func NewChatHandler(resolver AgentResolver, factory ProviderFactory, store *Chat
 		factory:           factory,
 		store:             store,
 		runs:              make(map[string]string),
+		auditSeq:          make(map[string]*atomic.Int64),
 		StreamTimeout:     5 * time.Minute,
 		MaxToolIterations: 16,
 	}
+}
+
+// WithAudit wires a best-effort agent-action audit recorder (ADR 0011).
+// Nil keeps the handler unaudited (the previous behavior). Recording is
+// non-blocking; a slow or failed write never affects the chat turn.
+func (h *ChatHandler) WithAudit(r audit.Recorder) *ChatHandler {
+	h.audit = r
+	return h
+}
+
+// auditNextSeq returns the next monotonic sequence number for runID's audit
+// trail, allocating the counter on first use.
+func (h *ChatHandler) auditNextSeq(runID string) int64 {
+	h.auditSeqMu.Lock()
+	c := h.auditSeq[runID]
+	if c == nil {
+		c = &atomic.Int64{}
+		h.auditSeq[runID] = c
+	}
+	h.auditSeqMu.Unlock()
+	return c.Add(1)
+}
+
+// recordAudit fills the correlation seq and forwards e to the recorder.
+// No-op when auditing is disabled. Never blocks (the recorder's Record is
+// itself non-blocking and best-effort).
+func (h *ChatHandler) recordAudit(e audit.Event) {
+	if h.audit == nil {
+		return
+	}
+	if e.Seq == 0 {
+		e.Seq = h.auditNextSeq(e.Run)
+	}
+	h.audit.Record(e)
 }
 
 // WithTools enables tool calling by wiring a workspace resolver and a
@@ -1130,6 +1179,14 @@ type AgentEventPayload struct {
 // destination for the agent event (parent's key in subagent
 // flows); empty suppresses.
 func (h *ChatHandler) emitAgentToolStart(toolSessionKey, runID, sessionKey, toolCallID, name, argumentsJSON string) {
+	h.recordAudit(audit.Event{
+		Kind:       audit.KindToolCall,
+		Session:    sessionKey,
+		Run:        runID,
+		ToolCallID: toolCallID,
+		Tool:       name,
+		Args:       argumentsJSON,
+	})
 	if toolSessionKey == "" {
 		return
 	}
@@ -1141,6 +1198,15 @@ func (h *ChatHandler) emitAgentToolStart(toolSessionKey, runID, sessionKey, tool
 // or not the tool errored — failures are captured into output as
 // "ERROR: ..."). toolSessionKey same semantics as emitAgentToolStart.
 func (h *ChatHandler) emitAgentToolResult(toolSessionKey, runID, sessionKey, toolCallID, name, output string, isError bool) {
+	h.recordAudit(audit.Event{
+		Kind:       audit.KindToolResult,
+		Session:    sessionKey,
+		Run:        runID,
+		ToolCallID: toolCallID,
+		Tool:       name,
+		Output:     output,
+		IsError:    isError,
+	})
 	if toolSessionKey == "" {
 		return
 	}
@@ -1201,6 +1267,13 @@ func (h *ChatHandler) pushAgentEvent(toolSessionKey string, payload AgentEventPa
 // Empty chatSessionKey suppresses (matches the previous
 // chatSess=nil semantics for subagent runs).
 func (h *ChatHandler) emitError(chatSessionKey, runID, sessionKey string, seq int, kind, msg string) error {
+	h.recordAudit(audit.Event{
+		Kind:    audit.KindError,
+		Session: sessionKey,
+		Run:     runID,
+		ErrKind: kind,
+		ErrMsg:  msg,
+	})
 	if chatSessionKey == "" {
 		return nil
 	}

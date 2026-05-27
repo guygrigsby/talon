@@ -310,6 +310,16 @@ func gatewayRunCmd() *cobra.Command {
 				WithPaths(paths).
 				WithAgentcoreRunner(buildAgentcoreRunner(paths, mem))
 
+			// Agent-action audit log (ADR 0011): persist a redacted,
+			// correlated trail of tool calls/results/errors/turns to
+			// ~/.talon/logs/agent-audit.jsonl. On by default; opt out
+			// with `talon config set audit.enabled false`. Best-effort
+			// writes never block the chat turn.
+			if rec := buildAuditRecorder(paths); rec != nil {
+				srv.ChatHandler().WithAudit(rec)
+				defer func() { _ = rec.Close() }()
+			}
+
 			// Connect API (talon-y6v): expose every RPC the WS
 			// path serves over Connect (HTTP/JSON for browsers,
 			// gRPC wire elsewhere) too. Both transports run in

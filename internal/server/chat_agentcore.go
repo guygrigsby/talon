@@ -13,6 +13,8 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+
+	"github.com/guygrigsby/talon/internal/audit"
 )
 
 // resolveModelForRouting picks the model the chat-send will use,
@@ -119,6 +121,40 @@ func (h *ChatHandler) runStreamAgentcore(runID, sessionKey, agentID, userText st
 	ctx, cancel := context.WithTimeout(context.Background(), h.StreamTimeout)
 	defer cancel()
 
+	selectedModelID := ""
+	if h.sessions != nil {
+		selectedModelID = h.sessions.Model(sessionKey)
+	}
+
+	if h.audit != nil {
+		auditModel := selectedModelID
+		if auditModel == "" && h.resolver != nil {
+			if m, err := h.resolveModelForRouting(agentID, sessionKey); err == nil && m != nil {
+				auditModel = m.String()
+			}
+		}
+		h.recordAudit(audit.Event{
+			Kind:    audit.KindTurnStart,
+			Session: sessionKey,
+			Run:     runID,
+			Agent:   agentID,
+			Model:   auditModel,
+		})
+		defer func() {
+			h.recordAudit(audit.Event{
+				Kind:    audit.KindTurnEnd,
+				Session: sessionKey,
+				Run:     runID,
+				Agent:   agentID,
+			})
+			// Drop the per-run audit seq counter so the map doesn't grow
+			// unbounded across the gateway's lifetime.
+			h.auditSeqMu.Lock()
+			delete(h.auditSeq, runID)
+			h.auditSeqMu.Unlock()
+		}()
+	}
+
 	var seq atomic.Int64
 	var emitMu sync.Mutex
 	emitText := func(s int, state, full, delta string) {
@@ -145,11 +181,6 @@ func (h *ChatHandler) runStreamAgentcore(runID, sessionKey, agentID, userText st
 	wrappedEmitError := func(kind, msg string) {
 		s := int(seq.Add(1))
 		emitError(s, kind, msg)
-	}
-
-	selectedModelID := ""
-	if h.sessions != nil {
-		selectedModelID = h.sessions.Model(sessionKey)
 	}
 
 	result, err := h.agentcoreRun(
