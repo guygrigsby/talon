@@ -103,7 +103,7 @@ func (r *RunLog) Append(run Run) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	body, err := json.Marshal(run)
 	if err != nil {
 		return err
@@ -128,7 +128,7 @@ func (r *RunLog) Read(jobID string, limit int) ([]Run, error) {
 		}
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	all, err := io.ReadAll(f)
 	if err != nil {
 		return nil, err

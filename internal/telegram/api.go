@@ -97,7 +97,7 @@ func GetMe(ctx context.Context, token string) (*BotInfo, error) {
 	if err != nil {
 		return nil, sanitizeBotAPIError(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("getMe http %d: %s", resp.StatusCode, truncate(string(raw), 256))
@@ -188,7 +188,7 @@ func GetUpdates(ctx context.Context, token string, offset int64, timeoutSec int)
 	if err != nil {
 		return nil, sanitizeBotAPIError(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("getUpdates http %d: %s", resp.StatusCode, truncate(string(raw), 256))
@@ -232,7 +232,7 @@ func sendMessage(ctx context.Context, token string, chatID int64, text, parseMod
 	if err != nil {
 		return sanitizeBotAPIError(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("sendMessage http %d: %s", resp.StatusCode, truncate(string(raw), 256))

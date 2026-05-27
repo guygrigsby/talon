@@ -121,7 +121,7 @@ func (p *Provider) Stream(ctx context.Context, req provider.Request) (<-chan pro
 	}
 	if resp.StatusCode != http.StatusOK {
 		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4*1024))
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("anthropic: http %d: %s", resp.StatusCode, strings.TrimSpace(string(errBody)))
 	}
 
@@ -144,7 +144,7 @@ func (p *Provider) Stream(ctx context.Context, req provider.Request) (<-chan pro
 // DeltaUsage at the end of the stream.
 func (p *Provider) pumpSSE(ctx context.Context, body io.ReadCloser, ch chan<- provider.Delta) {
 	defer close(ch)
-	defer body.Close()
+	defer func() { _ = body.Close() }()
 
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)

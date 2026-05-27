@@ -82,7 +82,7 @@ func discoverLMStudioModels(ctx context.Context, merged []byte, httpClient *http
 	if err != nil {
 		return nil, fmt.Errorf("lmstudio discover: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode/100 != 2 {
 		// Read a short prefix for the error message so the operator

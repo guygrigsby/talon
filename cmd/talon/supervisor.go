@@ -107,7 +107,7 @@ func appendGatewayEvent(paths talonpath.Paths, ev gatewayEvent) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	body, err := json.Marshal(ev)
 	if err != nil {
 		return err
@@ -126,7 +126,7 @@ func tailGatewayEvents(paths talonpath.Paths, n int) ([]gatewayEvent, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	out := []gatewayEvent{}
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 64*1024), 1024*1024)

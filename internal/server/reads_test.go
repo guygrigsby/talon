@@ -340,22 +340,6 @@ func TestModelsList_IgnoresPluginManifestModels(t *testing.T) {
 	}
 }
 
-func keysOf(m map[string]map[string]any) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
-}
-
-func keysOfBool(m map[string]bool) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	return out
-}
-
 func TestConfigSchema_ReturnsCachedEnvelope(t *testing.T) {
 	paths := readFixture(t, `{}`)
 	if err := os.MkdirAll(paths.Talon.CacheDir(), 0o700); err != nil {

@@ -22,9 +22,7 @@ import (
 // is exempt by design; NodeList is the canary that verifies the
 // gate fires on non-health calls.
 
-type stubInfra struct {
-	srv *server.Server
-}
+type stubInfra struct{}
 
 func (s *stubInfra) Health(_ context.Context, _ *connect.Request[talonv1.Empty]) (*connect.Response[talonv1.HealthResponse], error) {
 	return connect.NewResponse(&talonv1.HealthResponse{Ok: true, Server: "stub", Version: "test"}), nil
@@ -167,7 +165,7 @@ func TestAuthInterceptor_HealthExempt_RawHTTP(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST Health: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
 		t.Errorf("Health status = %d, want 200 (body: %s)", resp.StatusCode, body)

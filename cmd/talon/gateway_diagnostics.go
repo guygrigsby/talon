@@ -66,9 +66,9 @@ func diagnosticsExportRunE(opts diagnosticsExportOpts) error {
 	if err != nil {
 		return fmt.Errorf("create %s: %w", abs, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	zw := zip.NewWriter(f)
-	defer zw.Close()
+	defer func() { _ = zw.Close() }()
 
 	included := []string{}
 
@@ -275,7 +275,7 @@ func tailFile(path string, limit, maxBytes int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	// Read at most maxBytes from the tail of the file. For short
 	// files we just read the whole thing.
@@ -319,7 +319,7 @@ func tryFetchHealth(timeoutMs int) (any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial gateway: %w", err)
 	}
-	defer cli.Close()
+	defer func() { _ = cli.Close() }()
 	raw, err := cli.Request(ctx, "health", nil)
 	if err != nil {
 		return nil, fmt.Errorf("health rpc: %w", err)

@@ -158,7 +158,7 @@ func gatewayRunCmd() *cobra.Command {
 			_ = wsLog
 			_ = verbose
 
-			host := "127.0.0.1"
+			var host string
 			switch bind {
 			case "", "loopback":
 				host = "127.0.0.1"
@@ -406,7 +406,7 @@ func gatewayRunCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				defer ln.Close()
+				defer func() { _ = ln.Close() }()
 				slog.Info("tailnet service listening", "fqdn", fqdn, "url", "https://"+fqdn)
 				return srv.RunListener(ctx, ln)
 			}
@@ -570,11 +570,10 @@ func gatewayDiagnosticsExportCmd() *cobra.Command {
 					fmt.Fprintf(os.Stderr, "talon: %s accepted but not yet wired (using config-driven dial)\n", flag)
 				}
 			}
-			if noStabilityBundle {
-				// Stability bundle integration is a separate item
-				// (we don't write a bundle today) — flag is a no-op
-				// for now, accept silently.
-			}
+			// noStabilityBundle: stability bundle integration is a
+			// separate item (we don't write a bundle today), so the
+			// flag is currently a silent no-op.
+			_ = noStabilityBundle
 			return diagnosticsExportRunE(*opts)
 		},
 	}
@@ -707,7 +706,7 @@ func gatewayProbeCmd() *cobra.Command {
 				emitValue(out)
 				return err
 			}
-			defer cli.Close()
+			defer func() { _ = cli.Close() }()
 
 			rpcStart := time.Now()
 			payload, rpcErr := cli.Request(ctx, "health", nil)
@@ -797,7 +796,7 @@ func gatewayStatusCmd() *cobra.Command {
 				}
 				return nil
 			}
-			defer cli.Close()
+			defer func() { _ = cli.Close() }()
 
 			rpcStart := time.Now()
 			payload, rpcErr := cli.Request(ctx, "health", nil)

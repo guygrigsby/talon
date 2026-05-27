@@ -88,7 +88,7 @@ func (c *Client) Request(ctx context.Context, method string, params any) (json.R
 	if err != nil {
 		return nil, fmt.Errorf("gateway: %s: %w", method, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {

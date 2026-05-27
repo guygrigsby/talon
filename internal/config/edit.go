@@ -165,23 +165,6 @@ func Validate(p talonpath.Paths) error {
 	return nil
 }
 
-func readOverlayOrEmpty(path string) ([]byte, error) {
-	if path == "" {
-		return []byte("{}"), nil
-	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return []byte("{}"), nil
-		}
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
-	if !gjson.ValidBytes(b) {
-		return nil, fmt.Errorf("invalid JSON in %s", path)
-	}
-	return b, nil
-}
-
 func applySet(raw []byte, segments []string, value any, mode SetMode) ([]byte, error) {
 	switch mode {
 	case SetForceReplace, SetReplaceSafe:

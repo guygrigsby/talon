@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -79,16 +80,5 @@ func (t *bashTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 // asExit is a tiny errors.As helper kept inline so the file doesn't need
 // to import "errors" just for one call.
 func asExit(err error, target **exec.ExitError) bool {
-	for e := err; e != nil; {
-		if v, ok := e.(*exec.ExitError); ok {
-			*target = v
-			return true
-		}
-		u, ok := e.(interface{ Unwrap() error })
-		if !ok {
-			return false
-		}
-		e = u.Unwrap()
-	}
-	return false
+	return errors.As(err, target)
 }

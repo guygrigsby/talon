@@ -165,7 +165,7 @@ func readZipManifest(t *testing.T, path string) map[string]any {
 	if err != nil {
 		t.Fatalf("open zip: %v", err)
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	for _, f := range r.File {
 		if f.Name != "manifest.json" {
 			continue
@@ -174,7 +174,7 @@ func readZipManifest(t *testing.T, path string) map[string]any {
 		if err != nil {
 			t.Fatalf("open manifest entry: %v", err)
 		}
-		defer rc.Close()
+		defer func() { _ = rc.Close() }()
 		var m map[string]any
 		if err := json.NewDecoder(rc).Decode(&m); err != nil {
 			t.Fatalf("decode manifest: %v", err)

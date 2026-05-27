@@ -46,7 +46,7 @@ func TestServeIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	if !strings.HasSuffix(ln.FQDN, ".ts.net") {
 		t.Fatalf("FQDN = %q", ln.FQDN)
 	}

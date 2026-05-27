@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -82,7 +83,7 @@ func (t *grepTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		if err != nil {
 			return nil
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }()
 		scanner := bufio.NewScanner(f)
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		lineNo := 0
@@ -103,7 +104,7 @@ func (t *grepTool) Run(ctx context.Context, input json.RawMessage) (string, erro
 		}
 		return nil
 	})
-	if walkErr != nil && walkErr != filepath.SkipAll {
+	if walkErr != nil && !errors.Is(walkErr, filepath.SkipAll) {
 		return b.String(), fmt.Errorf("grep: %w", walkErr)
 	}
 	if matches == 0 {

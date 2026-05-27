@@ -284,7 +284,7 @@ func (s *bluebubblesPlugin) postMessage(ctx context.Context, chatGUID, text stri
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("BlueBubbles send http %d: %s", resp.StatusCode, truncate(string(raw), 256))

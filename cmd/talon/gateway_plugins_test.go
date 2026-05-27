@@ -243,13 +243,6 @@ func TestCollectChannelOffers_WalksManifestEntries(t *testing.T) {
 
 // --- newToolRunnerFactory ----------------------------------------------
 
-// stubLocal is a minimal tools-side base runner; mirrors the local
-// builtins without depending on the full tools package.
-type stubLocal struct{}
-
-func (stubLocal) Specs() []provider.ToolSpec                 { return []provider.ToolSpec{{Name: "read"}} }
-func (stubLocal) Run(_ any, _ string, _ any) (string, error) { panic("not used") }
-
 func TestNewToolRunnerFactory_NilHostDelegatesToBase(t *testing.T) {
 	factory := newToolRunnerFactory(nil, talonpath.Paths{})
 	runner := factory(t.TempDir(), nil)

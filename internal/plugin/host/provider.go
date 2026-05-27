@@ -68,7 +68,7 @@ func (p *PluginProvider) Stream(ctx context.Context, req provider.Request) (<-ch
 		defer close(ch)
 		for {
 			pbDelta, err := stream.Recv()
-			if errors.Is(err, io.EOF) || err == io.EOF {
+			if errors.Is(err, io.EOF) {
 				return
 			}
 			if err != nil {

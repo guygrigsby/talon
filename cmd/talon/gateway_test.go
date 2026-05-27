@@ -44,7 +44,7 @@ func TestBindTailnetUsesTailnetServe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("gatewayTailnetListener: %v", err)
 	}
-	defer ln.Close()
+	defer func() { _ = ln.Close() }()
 	if !called {
 		t.Fatal("tailnetServe was not called")
 	}

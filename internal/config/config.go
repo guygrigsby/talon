@@ -107,17 +107,6 @@ func buildMergedCacheKey(p talonpath.Paths) mergedCacheKey {
 	return k
 }
 
-// invalidateMergedCacheForTest drops the cached entry. Tests that
-// manipulate config files between calls and don't go through Set
-// (which already invalidates on write) call this to force a re-read.
-// Production code shouldn't need this — stat changes do the work.
-func invalidateMergedCacheForTest() {
-	mergedCacheMu.Lock()
-	mergedCacheEntry.key = mergedCacheKey{}
-	mergedCacheEntry.bytes = nil
-	mergedCacheMu.Unlock()
-}
-
 // Load returns a typed Config built from the merged view. Use MergedBytes
 // (or Get) to read fields outside the typed schema.
 func Load(p talonpath.Paths) (*Config, error) {

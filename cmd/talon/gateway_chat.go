@@ -523,10 +523,6 @@ func (r *configAgentResolver) findSubagent(agentID string) (subagents.Definition
 	return def, ok, nil
 }
 
-func agentExists(merged []byte, agentID string) bool {
-	return gjson.GetBytes(merged, fmt.Sprintf(`agents.list.#(id==%q)`, agentID)).Exists()
-}
-
 // agentProviderFactory implements server.ProviderFactory. Resolution
 // order: native built-ins (openai, deepseek) first, then any loaded
 // plugin whose manifest offers the requested provider name. Only fails

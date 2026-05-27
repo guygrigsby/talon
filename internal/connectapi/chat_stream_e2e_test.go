@@ -2,6 +2,7 @@ package connectapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -134,7 +135,7 @@ func TestChatSubscribe_EndToEnd_RunIDFiltering(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe open: %v", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	// Drain the ready frame.
 	if !stream.Receive() {
@@ -175,7 +176,7 @@ func TestChatSubscribe_MissingSessionKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Subscribe open: %v", err)
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	// First Receive must surface the server-side validation error.
 	if stream.Receive() {
@@ -208,32 +209,12 @@ func errorsAs(err error, target any) bool {
 	if err == nil {
 		return false
 	}
-	type asTarget interface {
-		As(any) bool
-	}
-	// stdlib path
 	if e, ok := target.(**connect.Error); ok {
 		var ce *connect.Error
-		if connectErrorAs(err, &ce) {
+		if errors.As(err, &ce) {
 			*e = ce
 			return true
 		}
-	}
-	return false
-}
-
-func connectErrorAs(err error, dst **connect.Error) bool {
-	for err != nil {
-		if ce, ok := err.(*connect.Error); ok {
-			*dst = ce
-			return true
-		}
-		type unwrapper interface{ Unwrap() error }
-		u, ok := err.(unwrapper)
-		if !ok {
-			return false
-		}
-		err = u.Unwrap()
 	}
 	return false
 }

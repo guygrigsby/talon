@@ -130,7 +130,7 @@ func (s *telegramPlugin) runTelegramSend(ctx context.Context, req *pb.RunToolReq
 	if err != nil {
 		return &pb.RunToolResponse{Output: "telegram_send: " + sanitizeTelegramError(err), IsError: true}, nil
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(resp.Body)
 		return &pb.RunToolResponse{
@@ -217,7 +217,7 @@ func (s *telegramPlugin) StartChannel(req *pb.StartChannelRequest, stream pb.Plu
 				return err
 			}
 		case err := <-pollErr:
-			if err != nil && err != context.Canceled {
+			if err != nil && !errors.Is(err, context.Canceled) {
 				return err
 			}
 			return nil
@@ -257,7 +257,7 @@ func (s *telegramPlugin) SendChannelMessage(ctx context.Context, req *pb.SendCha
 	if err != nil {
 		return &pb.SendChannelMessageResponse{Ok: false}, sanitizeTelegramURLError(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(resp.Body)
 		return &pb.SendChannelMessageResponse{Ok: false}, fmt.Errorf("sendMessage http %d: %s", resp.StatusCode, truncate(string(raw), 256))
@@ -456,8 +456,11 @@ func isTransientTelegramPollErr(err error) bool {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return true
 	}
+	// A network-level error during polling is transient: keep retrying.
+	// net.Error.Temporary is deprecated and ill-defined, so treat any
+	// net.Error (timeout or otherwise) as retryable.
 	var netErr net.Error
-	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
+	return errors.As(err, &netErr)
 }
 
 type telegramHTTPError struct {
@@ -540,7 +543,7 @@ func (s *telegramPlugin) getMe(ctx context.Context, token string) (string, error
 	if err != nil {
 		return "", sanitizeTelegramURLError(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != 200 {
 		raw, _ := io.ReadAll(resp.Body)
 		return "", &telegramHTTPError{Method: "getMe", Status: resp.StatusCode, Body: truncate(string(raw), 256)}
@@ -575,7 +578,7 @@ func (s *telegramPlugin) getUpdates(ctx context.Context, token string, offset in
 	if err != nil {
 		return nil, sanitizeTelegramURLError(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode/100 != 2 {
 		raw, _ := io.ReadAll(resp.Body)
 		return nil, &telegramHTTPError{Method: "getUpdates", Status: resp.StatusCode, Body: truncate(string(raw), 256)}

@@ -125,7 +125,7 @@ func (s *whisperPlugin) callWhisper(ctx context.Context, apiKey, audioPath, lang
 	if err != nil {
 		return nil, fmt.Errorf("open: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -171,7 +171,7 @@ func (s *whisperPlugin) callWhisper(ctx context.Context, apiKey, audioPath, lang
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)

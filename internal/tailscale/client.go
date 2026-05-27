@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,7 +61,7 @@ func newFromOAuthAt(ctx context.Context, base, id, secret string) (*Client, erro
 	if err != nil {
 		return nil, fmt.Errorf("tailscale: oauth token exchange: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode/100 != 2 {
 		return nil, fmt.Errorf("tailscale: oauth token exchange: HTTP %d: %s", resp.StatusCode, truncate(string(body), 200))
@@ -142,11 +143,7 @@ func (e *apiError) Error() string {
 
 // as is a tiny errors.As shim avoiding an import for one use.
 func as(err error, target **apiError) bool {
-	if e, ok := err.(*apiError); ok {
-		*target = e
-		return true
-	}
-	return false
+	return errors.As(err, target)
 }
 
 // do issues a bearer-authed JSON request. When body is non-nil it is
@@ -173,7 +170,7 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 	if err != nil {
 		return fmt.Errorf("tailscale: %s %s: %w", method, path, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode/100 != 2 {
 		return &apiError{status: resp.StatusCode, msg: truncate(string(raw), 300)}

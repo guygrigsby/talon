@@ -156,9 +156,8 @@ func TestResolver_UnknownSchemeErrors(t *testing.T) {
 	// silently passing through (which would expose the literal
 	// "vault://x" string as a real secret).
 	r := &dispatchResolver{}
-	_, err := r.Resolve(context.Background(), "vault://x/y")
 	// vault:// isn't a known scheme so it parses as a literal, NOT
-	// as an unknown scheme — by design. Verify pass-through:
+	// as an unknown scheme, by design. Verify pass-through:
 	got, err := r.Resolve(context.Background(), "vault://x/y")
 	if err != nil {
 		t.Errorf("unknown-scheme strings should pass as literals, got error: %v", err)
@@ -196,9 +195,9 @@ func TestCachingResolver_DistinctRefsCallUpstream(t *testing.T) {
 		return ref, nil
 	})
 	c := NewCachingResolver(upstream)
-	c.Resolve(context.Background(), "op://a")
-	c.Resolve(context.Background(), "op://b")
-	c.Resolve(context.Background(), "op://a")
+	_, _ = c.Resolve(context.Background(), "op://a")
+	_, _ = c.Resolve(context.Background(), "op://b")
+	_, _ = c.Resolve(context.Background(), "op://a")
 	if calls != 2 {
 		t.Errorf("expected 2 upstream calls (a + b, a hit cache), got %d", calls)
 	}
@@ -212,7 +211,7 @@ func TestCachingResolver_ErrorsNotCached(t *testing.T) {
 	})
 	c := NewCachingResolver(upstream)
 	for i := 0; i < 3; i++ {
-		c.Resolve(context.Background(), "op://x")
+		_, _ = c.Resolve(context.Background(), "op://x")
 	}
 	if calls != 3 {
 		t.Errorf("expected 3 upstream calls (errors not cached), got %d", calls)

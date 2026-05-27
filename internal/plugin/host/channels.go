@@ -155,7 +155,7 @@ func (d *ChannelDispatcher) run(ctx context.Context) error {
 
 	for {
 		msg, err := stream.Recv()
-		if errors.Is(err, io.EOF) || err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {

@@ -143,13 +143,6 @@ func (t *CostTracker) dailyCap() float64 {
 	return v.Float()
 }
 
-// costForUsage computes USD for one Usage record. Looks up the
-// per-token price for model from the config first, then the
-// builtin table; returns 0 when neither is available.
-func (t *CostTracker) costForUsage(model provider.ModelID, u provider.Usage) float64 {
-	return t.costForTokens(string(model), u.InputTokens, u.OutputTokens)
-}
-
 func (t *CostTracker) costForTokens(modelID string, inputTokens, outputTokens int) float64 {
 	model := provider.ModelID(modelID)
 	in, out := t.priceFor(model)

@@ -125,7 +125,7 @@ func copyToClipboard(s string) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	stdin.Write([]byte(s))
-	stdin.Close()
+	_, _ = stdin.Write([]byte(s))
+	_ = stdin.Close()
 	return cmd.Wait()
 }

@@ -93,13 +93,13 @@ func writeFile(path string, data []byte, mode os.FileMode) error {
 		return fmt.Errorf("create temp: %w", err)
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer func() { _ = os.Remove(tmpName) }()
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("write temp: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("sync temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -170,7 +170,7 @@ func appendAudit(layer talonpath.Layer, rec AuditRecord) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := f.Write(line); err != nil {
 		return err
 	}
@@ -206,7 +206,7 @@ func IsAuditLogReadable(layer talonpath.Layer) error {
 		}
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if _, err := io.ReadAll(f); err != nil {
 		return err
 	}
