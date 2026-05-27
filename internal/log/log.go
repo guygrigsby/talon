@@ -50,28 +50,50 @@ func ParseFormat(s string) Format {
 	return FormatText
 }
 
+// LevelFromEnv parses a level string (case-insensitive, surrounding
+// whitespace ignored) into a slog.Level. Recognized values are
+// debug, info, warn, error. Anything unrecognized — including the
+// empty string — falls back to info, so a misconfigured
+// --log-level / TALON_LOG_LEVEL never silences the gateway.
+//
+// Callers pass the resolved flag-or-env string; LevelFromEnv does not
+// read the environment itself, keeping the resolution policy in the
+// command layer.
+func LevelFromEnv(s string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
 // Init replaces slog's default logger and the stdlib `log` package's
-// output with a handler matching the requested format. Returns the
-// configured *slog.Logger so callers that want a non-default logger
-// can keep a reference.
+// output with a handler matching the requested format, gated at the
+// given level. Returns the configured *slog.Logger so callers that
+// want a non-default logger can keep a reference.
 //
 // Side effects (intentional):
 //   - slog.SetDefault is called.
 //   - stdlib log.SetOutput / SetFlags are called so any leftover
 //     log.Printf calls (third-party libs, code we haven't migrated
-//     yet) flow through slog at INFO level instead of writing to
-//     stderr with their own prefix.
+//     yet) flow through slog at the configured level instead of
+//     writing to stderr with their own prefix.
 //
 // Idempotent: calling Init twice replaces the default cleanly.
-func Init(format Format) *slog.Logger {
+func Init(format Format, level slog.Level) *slog.Logger {
 	var h slog.Handler
 	switch format {
 	case FormatJSON:
-		h = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo})
+		h = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})
 	case FormatHCLog:
-		h = NewHCLogHandler(os.Stderr)
+		h = NewHCLogHandlerLevel(os.Stderr, level)
 	default:
-		h = newConsoleHandler(os.Stderr)
+		h = newConsoleHandlerLevel(os.Stderr, level)
 	}
 	logger := slog.New(h)
 	slog.SetDefault(logger)
@@ -79,6 +101,6 @@ func Init(format Format) *slog.Logger {
 	// through the right pipeline. Strip stdlib's date/time prefix —
 	// our handler emits its own timestamp.
 	stdlog.SetFlags(0)
-	stdlog.SetOutput(slog.NewLogLogger(h, slog.LevelInfo).Writer())
+	stdlog.SetOutput(slog.NewLogLogger(h, level).Writer())
 	return logger
 }

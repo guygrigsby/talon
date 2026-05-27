@@ -22,7 +22,7 @@ import (
 // via go-plugin's magic-cookie env; missing/wrong cookie prints
 // go-plugin's handshake-help message and exits non-zero.
 func Serve(name string, srv pb.PluginServer) {
-	talonlog.Init(talonlog.ParseFormat(os.Getenv("TALON_LOG_FORMAT")))
+	talonlog.Init(talonlog.ParseFormat(os.Getenv("TALON_LOG_FORMAT")), talonlog.LevelFromEnv(os.Getenv("TALON_LOG_LEVEL")))
 	logger := slog.With("plugin", name)
 
 	gp := &grpcPlugin{Impl: srv}

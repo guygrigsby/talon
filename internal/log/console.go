@@ -46,7 +46,16 @@ type consoleHandler struct {
 	group string
 }
 
+// newConsoleHandler is a thin wrapper that builds a console handler
+// gated at INFO — retained for callers that don't thread a level.
 func newConsoleHandler(out io.Writer) *consoleHandler {
+	return newConsoleHandlerLevel(out, slog.LevelInfo)
+}
+
+// newConsoleHandlerLevel builds a console handler gated at the given
+// level. TTY color detection and the NO_COLOR / TALON_LOG_COLOR=0
+// overrides apply regardless of level.
+func newConsoleHandlerLevel(out io.Writer, level slog.Level) *consoleHandler {
 	color := false
 	if f, ok := out.(*os.File); ok {
 		if fi, err := f.Stat(); err == nil && (fi.Mode()&os.ModeCharDevice) != 0 {
@@ -61,7 +70,7 @@ func newConsoleHandler(out io.Writer) *consoleHandler {
 		mu:    &sync.Mutex{},
 		out:   out,
 		color: color,
-		level: slog.LevelInfo,
+		level: level,
 	}
 }
 

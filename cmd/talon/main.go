@@ -70,7 +70,7 @@ func main() {
 		if f == "" {
 			f = os.Getenv("TALON_LOG_FORMAT")
 		}
-		talonlog.Init(talonlog.ParseFormat(f))
+		talonlog.Init(talonlog.ParseFormat(f), talonlog.LevelFromEnv(os.Getenv("TALON_LOG_LEVEL")))
 		// Propagate to plugin subprocesses: spawned plugins inherit
 		// our env, so writing TALON_LOG_FORMAT here makes the flag
 		// take effect in every child plugin's talonlog.Init call.

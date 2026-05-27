@@ -26,7 +26,15 @@ import (
 // JSON output. Only the `@`-prefixed fields are reserved; arbitrary
 // attribute keys go at the top level.
 func NewHCLogHandler(w io.Writer) slog.Handler {
-	return &hclogHandler{w: w, mu: &sync.Mutex{}}
+	return NewHCLogHandlerLevel(w, slog.LevelInfo)
+}
+
+// NewHCLogHandlerLevel is NewHCLogHandler with an explicit level
+// gate. Records below the level are dropped in-process before they
+// reach the host, so a plugin spawned with TALON_LOG_LEVEL=debug
+// surfaces its debug lines while the default-info case stays quiet.
+func NewHCLogHandlerLevel(w io.Writer, level slog.Level) slog.Handler {
+	return &hclogHandler{w: w, mu: &sync.Mutex{}, level: level}
 }
 
 // hclogHandler stores its mutex by pointer so WithAttrs / WithGroup
@@ -36,15 +44,17 @@ func NewHCLogHandler(w io.Writer) slog.Handler {
 type hclogHandler struct {
 	w     io.Writer
 	mu    *sync.Mutex
+	level slog.Level
 	attrs []slog.Attr
 	group string
 }
 
-func (h *hclogHandler) Enabled(_ context.Context, _ slog.Level) bool {
-	// Plugin processes don't filter — let the host's level gate
-	// drop noise. Trace from the plugin reaching the host as
-	// Trace lets the host's adapter decide what to surface.
-	return true
+func (h *hclogHandler) Enabled(_ context.Context, l slog.Level) bool {
+	// Gate on the configured level so the plugin subprocess can be
+	// quieted or made verbose via TALON_LOG_LEVEL (inherited from the
+	// host). The host's adapter still decides final routing, but we
+	// no longer ship below-level noise across the pipe.
+	return l >= h.level
 }
 
 func (h *hclogHandler) Handle(_ context.Context, r slog.Record) error {
