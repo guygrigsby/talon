@@ -492,7 +492,7 @@
 			padding: var(--s-1) var(--s-3) 0;
 		}
 		.composer {
-			padding: var(--s-2) var(--s-3) calc(var(--s-2) + env(safe-area-inset-bottom));
+			padding: var(--s-2) var(--s-3);
 		}
 		.composer-label {
 			display: none;

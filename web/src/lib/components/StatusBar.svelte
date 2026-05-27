@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { create } from '@bufbuild/protobuf';
+	import { navTabs } from '$lib/data/sections';
 	import { getInfraClient } from '$lib/gateway/connect';
 	import { EmptySchema } from '$lib/gateway/gen/talon/v1/common_pb.js';
+
+	let { current = 'chat' }: { current?: string } = $props();
 
 	const fmt = () =>
 		new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -93,35 +96,51 @@
 	aria-label="Gateway {healthLabel} at {host}"
 	title={health.error ?? `${serverLabel} ${versionLabel} uptime ${uptimeLabel}`}
 >
-	<div class="cell gateway">
-		<span class="t-label">gw</span>
-		<span class="status-dot tone-{healthTone}" aria-hidden="true">●</span>
-		<span class="t-mono host">{host}</span>
-		<span class="t-mono state">{healthLabel}</span>
-	</div>
-
-	<div class="cell hide-sm">
-		<span class="t-label">server</span>
-		<span class="t-mono">{serverLabel}</span>
-		<span class="t-mono muted">{versionLabel}</span>
-	</div>
-
-	<div class="cell hide-md">
-		<span class="t-label">up</span>
-		<span class="t-num">{uptimeLabel}</span>
-	</div>
-
-	{#if health.error}
-		<div class="cell error hide-md">
-			<span class="t-mono truncate">{health.error}</span>
+	<div class="status-cells">
+		<div class="cell gateway">
+			<span class="t-label">gw</span>
+			<span class="status-dot tone-{healthTone}" aria-hidden="true">●</span>
+			<span class="t-mono host">{host}</span>
+			<span class="t-mono state">{healthLabel}</span>
 		</div>
-	{/if}
 
-	<div class="cell spacer"></div>
+		<div class="cell hide-sm">
+			<span class="t-label">server</span>
+			<span class="t-mono">{serverLabel}</span>
+			<span class="t-mono muted">{versionLabel}</span>
+		</div>
 
-	<div class="cell" aria-hidden="true">
-		<span class="t-num">{now}</span>
+		<div class="cell hide-md">
+			<span class="t-label">up</span>
+			<span class="t-num">{uptimeLabel}</span>
+		</div>
+
+		{#if health.error}
+			<div class="cell error hide-md">
+				<span class="t-mono truncate">{health.error}</span>
+			</div>
+		{/if}
+
+		<div class="cell spacer"></div>
+
+		<div class="cell" aria-hidden="true">
+			<span class="t-num">{now}</span>
+		</div>
 	</div>
+
+	<nav class="mobile-nav" aria-label="Primary">
+		{#each navTabs as tab (tab.key)}
+			<a
+				href={tab.href}
+				class="mobile-link"
+				class:active={current === tab.key}
+				aria-current={current === tab.key ? 'page' : undefined}
+			>
+				<span class="mobile-dot" aria-hidden="true"></span>
+				<span class="mobile-label">{tab.label}</span>
+			</a>
+		{/each}
+	</nav>
 </footer>
 
 <style>
@@ -134,6 +153,13 @@
 		font-size: var(--fs-xs);
 		overflow: hidden;
 		border-top: 1px solid var(--border);
+	}
+	.status-cells {
+		display: flex;
+		align-items: center;
+		width: 100%;
+		height: 100%;
+		min-width: 0;
 	}
 	.cell {
 		display: inline-flex;
@@ -188,28 +214,60 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+	.mobile-nav {
+		display: none;
+	}
 
 	@media (max-width: 900px) {
 		.hide-md { display: none; }
 	}
 	@media (max-width: 720px) {
 		.bar {
-			gap: var(--s-3);
-			padding: 0 var(--s-3);
-		}
-		.cell {
-			border-right: 0;
+			height: 100%;
 			padding: 0;
+			font-size: var(--fs-xs);
 		}
-		.cell.spacer {
+		.status-cells {
 			display: none;
 		}
-		.gateway {
-			flex: 1 1 auto;
+		.mobile-nav {
+			display: grid;
+			grid-template-columns: repeat(5, minmax(0, 1fr));
+			width: 100%;
+			height: 100%;
+			padding: 4px var(--s-1) calc(4px + env(safe-area-inset-bottom));
+			background: var(--canvas);
 		}
-		.state {
-			display: none;
+		.mobile-link {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			gap: 3px;
+			min-width: 0;
+			min-height: 48px;
+			color: var(--ink-3);
+			font-size: var(--fs-xs);
+			font-weight: 700;
+			text-transform: lowercase;
 		}
-		.hide-sm { display: none; }
+		.mobile-label {
+			max-width: 100%;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+		.mobile-dot {
+			width: 5px;
+			height: 5px;
+			border-radius: 50%;
+			background: transparent;
+		}
+		.mobile-link.active {
+			color: var(--accent);
+		}
+		.mobile-link.active .mobile-dot {
+			background: var(--accent);
+		}
 	}
 </style>

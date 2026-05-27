@@ -46,7 +46,7 @@
 	<main id="main" class="body" tabindex="-1">
 		{@render children()}
 	</main>
-	<StatusBar />
+	<StatusBar {current} />
 </div>
 
 <CommandPalette open={chrome.paletteOpen} onClose={() => chrome.closePalette()} />
@@ -69,5 +69,11 @@
 	.body:focus-visible {
 		outline: none;
 		box-shadow: none;
+	}
+
+	@media (max-width: 720px) {
+		.shell {
+			grid-template-rows: var(--topbar-h) 1fr calc(var(--mobile-nav-h) + env(safe-area-inset-bottom));
+		}
 	}
 </style>

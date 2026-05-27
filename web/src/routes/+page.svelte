@@ -140,14 +140,16 @@
 	{onModelChange}
 	{defaultModelLabel}
 />
-<Inspector
-	{channel}
-	messages={stream}
-	{activeModelId}
-	{activeModelSource}
-	open={chrome.inspectorOpen}
-	onClose={() => (chrome.inspectorOpen = false)}
-/>
+{#if chrome.inspectorOpen}
+	<Inspector
+		{channel}
+		messages={stream}
+		{activeModelId}
+		{activeModelSource}
+		open={chrome.inspectorOpen}
+		onClose={() => (chrome.inspectorOpen = false)}
+	/>
+{/if}
 
 {#if chrome.isNarrow && chrome.inspectorOpen}
 	<button
