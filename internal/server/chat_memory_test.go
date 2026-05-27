@@ -76,66 +76,6 @@ func TestWithMemory_FillsDefaults(t *testing.T) {
 	}
 }
 
-func TestAugmentSystemPrompt_NoOpWithoutStore(t *testing.T) {
-	h := &ChatHandler{}
-	got := h.augmentSystemPrompt(context.Background(), "base prompt", "main", "hello")
-	if got != "base prompt" {
-		t.Errorf("nil memory should pass base through; got %q", got)
-	}
-}
-
-func TestAugmentSystemPrompt_PrependsCoreMemories(t *testing.T) {
-	mc := newTestMemory(t)
-	// Save a user-Kind memory (KindUser is AlwaysInclude in defaults).
-	_, err := mc.Store.Append(context.Background(), memory.Entry{
-		Kind:    string(memory.KindUser),
-		AgentID: "main",
-		Text:    "user prefers tabs over spaces",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	h := &ChatHandler{}
-	h.WithMemory(mc)
-
-	got := h.augmentSystemPrompt(context.Background(), "you are an assistant", "main", "unrelated question about pizza")
-	if !strings.Contains(got, "Core memories") {
-		t.Errorf("expected 'Core memories' section; got: %q", got)
-	}
-	if !strings.Contains(got, "prefers tabs") {
-		t.Errorf("expected the user memory text; got: %q", got)
-	}
-	if !strings.HasSuffix(got, "you are an assistant") {
-		t.Errorf("base prompt should be preserved at end; got: %q", got)
-	}
-}
-
-func TestAugmentSystemPrompt_RelevantSurfacesOnRecall(t *testing.T) {
-	mc := newTestMemory(t)
-	// Project Kind is recall-only — should appear only when the
-	// hint mentions related tokens.
-	_, _ = mc.Store.Append(context.Background(), memory.Entry{
-		Kind: string(memory.KindProject), AgentID: "main",
-		Text: "we decided to use go for the backend",
-	})
-	_, _ = mc.Store.Append(context.Background(), memory.Entry{
-		Kind: string(memory.KindProject), AgentID: "main",
-		Text: "user research showed feline preferences over canine",
-	})
-
-	h := (&ChatHandler{}).WithMemory(mc)
-
-	// Query that mentions "go": project memory about go should win.
-	got := h.augmentSystemPrompt(context.Background(), "", "main", "what language should we use? go?")
-	if !strings.Contains(got, "Relevant memories") {
-		t.Errorf("expected 'Relevant memories' section; got: %q", got)
-	}
-	if !strings.Contains(got, "use go for the backend") {
-		t.Errorf("expected go-related memory to surface; got: %q", got)
-	}
-}
-
 func TestStampSourceCtx_AttachesProvenance(t *testing.T) {
 	ctx := stampSourceCtx(context.Background(), "agent:main:main", "run-123")
 	src := memory.SourceFromContext(ctx)
@@ -228,30 +168,5 @@ func TestWrapWithRemember_NilRememberPassesThrough(t *testing.T) {
 	got := wrapWithMemoryTools(inner, nil, nil)
 	if got != inner {
 		t.Error("nil remember should leave inner untouched (returned as-is)")
-	}
-}
-
-func TestLastUserText(t *testing.T) {
-	history := []ChatMessage{
-		{Role: "user", Content: "first"},
-		{Role: "assistant", Content: "reply"},
-		{Role: "user", Content: "second"},
-		{Role: "tool", Content: "result"},
-	}
-	if got := lastUserText(history); got != "second" {
-		t.Errorf("lastUserText = %q, want second", got)
-	}
-	// Empty / whitespace-only user turns get skipped.
-	history = []ChatMessage{
-		{Role: "user", Content: "real question"},
-		{Role: "user", Content: "  "},
-	}
-	if got := lastUserText(history); got != "real question" {
-		t.Errorf("lastUserText skipped non-empty; got %q", got)
-	}
-	// No user messages at all.
-	history = []ChatMessage{{Role: "assistant", Content: "hi"}}
-	if got := lastUserText(history); got != "" {
-		t.Errorf("no-user history should yield empty; got %q", got)
 	}
 }

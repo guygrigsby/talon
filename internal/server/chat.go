@@ -12,8 +12,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/guygrigsby/jess/memory"
-
 	"github.com/guygrigsby/talon/internal/agentcontext"
 	plugin "github.com/guygrigsby/talon/internal/plugin/host"
 	"github.com/guygrigsby/talon/internal/provider"
@@ -653,26 +651,7 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 	}
 	systemPrompt := agentcontext.Build(workspace)
 
-	// Memory sidecar: wrap the tool runner with the RememberTool +
-	// RecallTool so the model can save AND query memory during a
-	// turn, and stamp the run's source onto ctx so saves carry
-	// provenance. The system prompt also gets augmented per-
-	// iteration below (auto-recall) — explicit `recall` calls
-	// cover the "what did you tell me about X" case auto-recall
-	// missed.
-	if h.memory != nil && h.memory.Store != nil {
-		ctx = stampSourceCtx(ctx, emit.sessionKey, emit.runID)
-		remember := memory.NewRememberTool(h.memory.Store, memory.RememberOptions{
-			AgentID: agentID,
-		})
-		var recall *memory.RecallTool
-		if h.memory.Recaller != nil {
-			recall = memory.NewRecallTool(h.memory.Store, h.memory.Recaller, memory.RecallOptions{
-				AgentID: agentID,
-			})
-		}
-		runner = wrapWithMemoryTools(runner, remember, recall)
-	}
+	ctx, runner = h.wrapLegacyMemoryTools(ctx, emit, agentID, runner)
 
 	var seq int
 	var accumulated strings.Builder // visible assistant text across iterations
@@ -712,13 +691,7 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 	for iter := 0; iter < h.MaxToolIterations; iter++ {
 		history := h.store.Snapshot(storeKey)
 		reqMsgs := messagesFromHistory(history)
-		// Augment the system prompt with memories on EVERY iteration.
-		// Doing it inside the loop (not once before) means tool-result
-		// turns can pull in newly-stored memories from a recent
-		// remember call — the model's context catches up immediately
-		// instead of waiting for the next chat.send.
-		iterSystem := h.augmentSystemPrompt(ctx, systemPrompt, agentID, lastUserText(history))
-		req := provider.Request{Model: model, Messages: reqMsgs, System: iterSystem}
+		req := provider.Request{Model: model, Messages: reqMsgs, System: systemPrompt}
 		if runner != nil {
 			req.Tools = runner.Specs()
 		}

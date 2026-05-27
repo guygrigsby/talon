@@ -35,11 +35,11 @@ This file + `docs/dependencies.md` + the CLAUDE.md rewrite. No code change.
 |---|---|
 | 0 — docs | ✅ done |
 | 1 — agentcore-based chat handler scaffold | ✅ done. `internal/agentcore_chat/` with 30+ unit tests. |
-| 1.5 — jess memory + agentcore builtin tools | ✅ done. `Builder.WithMemory` wires jess RememberTool/RecallTool when the gateway has the memory sidecar. agentcore/tools Read/Write/Edit/Bash/Glob/Grep/Ls attached automatically. |
+| 1.5 — jess memory + agentcore builtin tools | ✅ done. `Builder.WithMemory` wires jess RememberTool/RecallTool and `memory.NewContextManager` when the gateway has the memory sidecar. agentcore/tools Read/Write/Edit/Bash/Glob/Grep/Ls attached automatically. |
 | 2 — integration tests | ✅ openai/gpt-4o-mini, openai/gpt-5.4-mini, anthropic/claude-haiku-4-5, deepseek/deepseek-chat, and mistral/mistral-small-latest are covered by the agentcore integration suite. Tests skip when local secrets are absent. |
 | 3 — gateway dispatch | ✅ done. When cmd/talon wires `WithAgentcoreRunner`, every provider routes through the new handler. Provider-specific fixes live below agentcore, not in Talon routing. |
 | 4 — delete direct provider stack | ✅ unblocked. The Anthropic top_p conflict and OpenAI GPT-5 Responses routing are handled by narrow provider shims in `internal/agentcore_chat/providers_init.go`; delete the old direct provider stack next. |
-| 5 — followups | open: per-session model override + cost-cap Record() + sinks fan-out integration in the agentcore path; FE wire-shape Playwright verification; `client.id` rename. |
+| 5 — followups | open: FE wire-shape Playwright verification, direct-provider deletion, typed native config cleanup, and `client.id` rename. |
 
 **Provider shim detail:** `agentcore/llm` still targets LiteLLM's common
 `Provider` interface. Talon overrides LiteLLM's `openai` builtin so GPT-5
@@ -93,7 +93,9 @@ In one commit (or a small commit cluster), remove:
 
 - `internal/provider/{provider.go,openai/,anthropic/,deepseek/,stub.go}`
 - `internal/plugins/{openaicompat/,anthropic/}`
-- `internal/server/chat_memory.go` (the recall logic moves to jess CM)
+- `internal/server/chat_memory.go` once the direct provider loop is gone.
+  The recall logic has moved to jess CM; the remaining file is only the
+  temporary provider-shaped RememberTool/RecallTool adapter.
 - The chat loop body in `internal/server/chat.go` — keep the handler
   shell as the registry adapter that calls into the agentcore-based
   layer.

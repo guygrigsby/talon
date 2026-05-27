@@ -1,6 +1,8 @@
 package agentcore_chat
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -33,6 +35,10 @@ type Builder struct {
 	// gateway builds the sidecar once and reuses across agents.
 	memStore    memory.Store
 	memRecaller memory.Recaller
+	memKinds    *memory.KindRegistry
+	memMaxItems int
+	memHeader   string
+	source      memory.Source
 }
 
 // NewBuilder constructs a Builder. merged is the result of
@@ -64,6 +70,23 @@ func (b *Builder) WithModelOverride(modelID string) *Builder {
 func (b *Builder) WithMemory(store memory.Store, recaller memory.Recaller) *Builder {
 	b.memStore = store
 	b.memRecaller = recaller
+	return b
+}
+
+// WithMemoryOptions configures the jess memory ContextManager.
+// Zero values leave jess defaults intact.
+func (b *Builder) WithMemoryOptions(maxItems int, header string, kinds *memory.KindRegistry) *Builder {
+	b.memMaxItems = maxItems
+	b.memHeader = header
+	b.memKinds = kinds
+	return b
+}
+
+// WithMemorySource stamps memories saved through the remember tool
+// with Talon's session/run provenance.
+func (b *Builder) WithMemorySource(sessionID, messageID string) *Builder {
+	b.source.SessionID = sessionID
+	b.source.MessageID = messageID
 	return b
 }
 
@@ -192,6 +215,12 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 		agentcore.WithModel(model),
 		agentcore.WithMaxTurns(maxTurns),
 	}
+	if cm := b.memoryContextManager(agentID); cm != nil {
+		opts = append(opts, agentcore.WithContextManager(cm))
+	}
+	if b.source.SessionID != "" || b.source.MessageID != "" {
+		opts = append(opts, agentcore.WithMiddlewares(memorySourceMiddleware(b.source)))
+	}
 	if systemPrompt != "" {
 		opts = append(opts, agentcore.WithSystemPrompt(systemPrompt))
 	}
@@ -200,6 +229,32 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 	}
 
 	return agentcore.NewAgent(opts...), choice, nil
+}
+
+func (b *Builder) memoryContextManager(agentID string) agentcore.ContextManager {
+	if b.memStore == nil || b.memRecaller == nil || agentID == "" {
+		return nil
+	}
+	return memory.NewContextManager(b.memStore, b.memRecaller, memory.ContextManagerOptions{
+		AgentID:  agentID,
+		MaxItems: b.memMaxItems,
+		Header:   b.memHeader,
+		Kinds:    b.memKinds,
+	})
+}
+
+func memorySourceMiddleware(src memory.Source) agentcore.ToolMiddleware {
+	return func(ctx context.Context, call agentcore.ToolCall, next agentcore.ToolExecuteFunc) (json.RawMessage, error) {
+		if call.Name == "remember" {
+			nextSrc := src
+			nextSrc.Tool = call.Name
+			if nextSrc.Reason == "" {
+				nextSrc.Reason = "model decided"
+			}
+			ctx = memory.WithSource(ctx, nextSrc)
+		}
+		return next(ctx, call.Args)
+	}
 }
 
 // resolveAgentWorkspace mirrors the existing chat handler's lookup.

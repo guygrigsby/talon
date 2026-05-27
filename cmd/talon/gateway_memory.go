@@ -2,22 +2,23 @@ package main
 
 // Memory sidecar wiring for `talon gateway run` (talon-2dn).
 //
-// Constructs jess/memory pieces only when the merged config has
+// Constructs jess/memory pieces only when the native config has
 // `memory.enabled: true`. Disabled (default) skips the whole
 // thing — no embedder download, no chromem allocation. Path is
 // `~/.talon/memory/` by default; override via `memory.path`.
 
 import (
+	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
 
 	"github.com/guygrigsby/jess/memory"
 	"github.com/guygrigsby/jess/memory/embed/gomlx"
-	"github.com/tidwall/gjson"
 
-	"github.com/guygrigsby/talon/internal/config"
-	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/guygrigsby/talon/internal/server"
+	"github.com/guygrigsby/talon/internal/talonconfig"
+	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
 // buildMemorySidecar returns a configured MemoryConfig or nil when
@@ -29,18 +30,18 @@ import (
 // answering chat.send. Users get plain (no-memory) behavior and
 // a log line pointing at the cause.
 func buildMemorySidecar(paths talonpath.Paths) *server.MemoryConfig {
-	merged, err := config.MergedBytes(paths)
+	settings, err := readMemorySettings(paths)
 	if err != nil {
-		slog.Debug("memory: cannot read merged config; skipping sidecar", "err", err)
+		slog.Debug("memory: cannot read native config; skipping sidecar", "err", err)
 		return nil
 	}
-	if !gjson.GetBytes(merged, "memory.enabled").Bool() {
+	if !settings.Enabled {
 		// Default disabled. User opts in via:
 		//   talon config set memory.enabled true
 		return nil
 	}
 
-	storePath := gjson.GetBytes(merged, "memory.path").Str
+	storePath := settings.Path
 	if storePath == "" {
 		storePath = filepath.Join(paths.Talon.Dir, "memory")
 	}
@@ -49,7 +50,7 @@ func buildMemorySidecar(paths talonpath.Paths) *server.MemoryConfig {
 	// 90MB, 384-dim). Override via memory.model (a HuggingFace repo
 	// ID) — Dim+SeqLen auto-detected from the repo's config.json.
 	embedOpts := gomlx.Options{}
-	if modelID := gjson.GetBytes(merged, "memory.model").Str; modelID != "" {
+	if modelID := settings.Model; modelID != "" {
 		embedOpts.ModelID = modelID
 	}
 
@@ -80,4 +81,28 @@ func buildMemorySidecar(paths talonpath.Paths) *server.MemoryConfig {
 		Store:    store,
 		Recaller: recaller,
 	}
+}
+
+type memorySettings struct {
+	Enabled bool
+	Path    string
+	Model   string
+}
+
+func readMemorySettings(paths talonpath.Paths) (memorySettings, error) {
+	if _, err := os.Stat(paths.Talon.Config); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return memorySettings{}, nil
+		}
+		return memorySettings{}, err
+	}
+	cfg, err := talonconfig.LoadFile(paths.Talon.Config)
+	if err != nil {
+		return memorySettings{}, err
+	}
+	return memorySettings{
+		Enabled: cfg.Memory.Enabled,
+		Path:    cfg.Memory.Path,
+		Model:   cfg.Memory.Model,
+	}, nil
 }

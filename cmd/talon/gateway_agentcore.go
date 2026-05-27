@@ -46,7 +46,10 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 			builder = builder.WithModelOverride(modelOverride)
 		}
 		if mem != nil {
-			builder = builder.WithMemory(mem.Store, mem.Recaller)
+			builder = builder.
+				WithMemory(mem.Store, mem.Recaller).
+				WithMemoryOptions(mem.MaxRecallEntries, mem.MemoryHeader, mem.Kinds).
+				WithMemorySource(sessionKey, runID)
 		}
 		agent, choice, err := builder.BuildAgent(agentID)
 		if err != nil {

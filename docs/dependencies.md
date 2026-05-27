@@ -100,7 +100,9 @@ Two extension packages:
   agentcore tools.
 - jess's `ContextManager` is the prompt assembler. Old talon had
   inline memory recall logic in `internal/server/chat_memory.go`;
-  the migration deletes that and uses jess's CM directly.
+  the migration removed that recall assembly and uses jess's CM
+  directly. The remaining server file is only a temporary adapter
+  for the direct provider loop.
 - `jess/skills` is unused today. Candidate for adopting once we want
   to expose user-authored skills like Claude Code does.
 
