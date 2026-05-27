@@ -419,6 +419,11 @@
 	.input::placeholder {
 		color: var(--ink-3);
 	}
+	.input:focus,
+	.input:focus-visible {
+		box-shadow: none;
+		border-radius: 0;
+	}
 	.input:disabled {
 		opacity: 0.6;
 		cursor: not-allowed;
@@ -492,7 +497,7 @@
 			padding: var(--s-1) var(--s-3) 0;
 		}
 		.composer {
-			padding: var(--s-2) var(--s-3);
+			padding: var(--s-2) var(--s-3) calc(var(--s-2) + env(safe-area-inset-bottom));
 		}
 		.composer-label {
 			display: none;

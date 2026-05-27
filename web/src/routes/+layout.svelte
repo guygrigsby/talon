@@ -46,7 +46,7 @@
 	<main id="main" class="body" tabindex="-1">
 		{@render children()}
 	</main>
-	<StatusBar {current} />
+	<StatusBar />
 </div>
 
 <CommandPalette open={chrome.paletteOpen} onClose={() => chrome.closePalette()} />
@@ -73,7 +73,7 @@
 
 	@media (max-width: 720px) {
 		.shell {
-			grid-template-rows: var(--topbar-h) 1fr calc(var(--mobile-nav-h) + env(safe-area-inset-bottom));
+			grid-template-rows: var(--topbar-h) 1fr;
 		}
 	}
 </style>

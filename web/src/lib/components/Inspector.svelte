@@ -266,7 +266,7 @@
 			left: 0;
 			right: 0;
 			top: auto;
-			bottom: calc(var(--mobile-nav-h) + env(safe-area-inset-bottom));
+			bottom: 0;
 			width: 100%;
 			max-height: min(72dvh, 620px);
 			z-index: 50;
@@ -274,7 +274,7 @@
 			border-top: 1px solid var(--border);
 			border-radius: 8px 8px 0 0;
 			pointer-events: none;
-			transform: translateY(calc(100% + var(--mobile-nav-h) + env(safe-area-inset-bottom)));
+			transform: translateY(100%);
 			transition: transform 180ms ease-out;
 			box-shadow: var(--shadow-pop);
 		}

@@ -1,10 +1,7 @@
 <script lang="ts">
 	import { create } from '@bufbuild/protobuf';
-	import { navTabs } from '$lib/data/sections';
 	import { getInfraClient } from '$lib/gateway/connect';
 	import { EmptySchema } from '$lib/gateway/gen/talon/v1/common_pb.js';
-
-	let { current = 'chat' }: { current?: string } = $props();
 
 	const fmt = () =>
 		new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -127,20 +124,6 @@
 			<span class="t-num">{now}</span>
 		</div>
 	</div>
-
-	<nav class="mobile-nav" aria-label="Primary">
-		{#each navTabs as tab (tab.key)}
-			<a
-				href={tab.href}
-				class="mobile-link"
-				class:active={current === tab.key}
-				aria-current={current === tab.key ? 'page' : undefined}
-			>
-				<span class="mobile-dot" aria-hidden="true"></span>
-				<span class="mobile-label">{tab.label}</span>
-			</a>
-		{/each}
-	</nav>
 </footer>
 
 <style>
@@ -214,60 +197,12 @@
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
-	.mobile-nav {
-		display: none;
-	}
-
 	@media (max-width: 900px) {
 		.hide-md { display: none; }
 	}
 	@media (max-width: 720px) {
 		.bar {
-			height: 100%;
-			padding: 0;
-			font-size: var(--fs-xs);
-		}
-		.status-cells {
 			display: none;
-		}
-		.mobile-nav {
-			display: grid;
-			grid-template-columns: repeat(5, minmax(0, 1fr));
-			width: 100%;
-			height: 100%;
-			padding: 4px var(--s-1) calc(4px + env(safe-area-inset-bottom));
-			background: var(--canvas);
-		}
-		.mobile-link {
-			display: flex;
-			flex-direction: column;
-			align-items: center;
-			justify-content: center;
-			gap: 3px;
-			min-width: 0;
-			min-height: 48px;
-			color: var(--ink-3);
-			font-size: var(--fs-xs);
-			font-weight: 700;
-			text-transform: lowercase;
-		}
-		.mobile-label {
-			max-width: 100%;
-			overflow: hidden;
-			text-overflow: ellipsis;
-			white-space: nowrap;
-		}
-		.mobile-dot {
-			width: 5px;
-			height: 5px;
-			border-radius: 50%;
-			background: transparent;
-		}
-		.mobile-link.active {
-			color: var(--accent);
-		}
-		.mobile-link.active .mobile-dot {
-			background: var(--accent);
 		}
 	}
 </style>
