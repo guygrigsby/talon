@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,7 +26,19 @@ var (
 	flagTalonConfig string
 	flagJSON        bool
 	flagLogFormat   string
+	flagLogLevel    string
+	flagVerbose     bool
 )
+
+// firstNonEmpty returns the first non-empty string in args, or "".
+func firstNonEmpty(args ...string) string {
+	for _, a := range args {
+		if a != "" {
+			return a
+		}
+	}
+	return ""
+}
 
 // resolvePaths returns the Talon paths for this invocation, applying the
 // global --config override.
@@ -60,6 +73,8 @@ func main() {
 	root.PersistentFlags().StringVar(&flagTalonConfig, "config", "", "path to the Talon config (default: $TALON_CONFIG_PATH or ~/.talon/config.toml)")
 	root.PersistentFlags().BoolVar(&flagJSON, "json", false, "emit raw JSON response")
 	root.PersistentFlags().StringVar(&flagLogFormat, "log-format", "", "log handler: text (default, ANSI-colored on TTY) or json. Env override: TALON_LOG_FORMAT")
+	root.PersistentFlags().StringVar(&flagLogLevel, "log-level", "", "log level: debug, info (default), warn, error. Env override: TALON_LOG_LEVEL")
+	root.PersistentFlags().BoolVar(&flagVerbose, "verbose", false, "shorthand for --log-level=debug")
 
 	// Wire the structured logger before any other init runs so
 	// PersistentPreRun and the cobra-RunE bodies all share the same
@@ -70,13 +85,21 @@ func main() {
 		if f == "" {
 			f = os.Getenv("TALON_LOG_FORMAT")
 		}
-		talonlog.Init(talonlog.ParseFormat(f), talonlog.LevelFromEnv(os.Getenv("TALON_LOG_LEVEL")))
+		// Resolve level: --verbose wins, then --log-level, then
+		// TALON_LOG_LEVEL, else the default (info).
+		lvl := talonlog.LevelFromEnv(firstNonEmpty(flagLogLevel, os.Getenv("TALON_LOG_LEVEL")))
+		if flagVerbose {
+			lvl = slog.LevelDebug
+		}
+		talonlog.Init(talonlog.ParseFormat(f), lvl)
 		// Propagate to plugin subprocesses: spawned plugins inherit
-		// our env, so writing TALON_LOG_FORMAT here makes the flag
-		// take effect in every child plugin's talonlog.Init call.
+		// our env, so writing TALON_LOG_FORMAT / TALON_LOG_LEVEL here
+		// makes the flags take effect in every child plugin's
+		// talonlog.Init call (one --log-level covers the whole tree).
 		if f != "" {
 			_ = os.Setenv("TALON_LOG_FORMAT", f)
 		}
+		_ = os.Setenv("TALON_LOG_LEVEL", strings.ToLower(lvl.String()))
 		return nil
 	}
 
