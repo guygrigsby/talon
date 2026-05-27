@@ -25,7 +25,7 @@ GO_SRC := $(shell find cmd internal web -name '*.go' 2>/dev/null)
 PLUGINS := op
 PLUGIN_BINS := $(addprefix bin/talon-,$(addsuffix -plugin,$(PLUGINS)))
 
-.PHONY: build all install run dev gateway-run gateway-run-with-ui plugins test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop docker-bounce docker-logs proto proto-tools smoke
+.PHONY: build all install run dev dev-backend dev-open gateway-run gateway-run-with-ui plugins test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop docker-bounce docker-logs proto proto-tools smoke
 
 build: $(BIN) plugins
 
@@ -57,18 +57,39 @@ run: build
 gateway-run: build
 	$(BIN) gateway run $(ARGS)
 
-# dev runs the talon gateway and the Vite dev server side-by-side. The
-# Vite server proxies /ws and /healthz to the gateway (vite.config.ts),
-# so visit http://127.0.0.1:5173 — not the gateway port — while iterating.
-# Ctrl-C kills both processes via the EXIT trap.
-dev: build
-	@echo "talon dev loop:"
-	@echo "  gateway: http://127.0.0.1:18789 (WS at /ws)"
-	@echo "  ui:      http://127.0.0.1:5173"
+# dev-backend watches Go source (cmd/, internal/, go.mod) and rebuilds +
+# bounces the gateway on every change. UI is left to Vite (make web-dev), so
+# the gateway runs WITHOUT --web. Run this in its own terminal to iterate on
+# the backend, or use `make dev` to launch it alongside Vite. Pass extra
+# `gateway run` flags after `--`: make dev-backend ARGS="-- --verbose".
+dev-backend:
+	@scripts/dev-watch.sh $(ARGS)
+
+# dev runs the backend watcher and the Vite dev server side-by-side, so BOTH
+# halves hot-reload: Go changes rebuild+bounce the gateway (dev-watch.sh),
+# frontend changes hot-reload via Vite. The Vite server proxies /ws, /healthz,
+# and /talon.v1.* to the gateway (vite.config.ts), so visit
+# http://127.0.0.1:5173 — not the gateway port — while iterating. Ctrl-C kills
+# both via the EXIT trap.
+dev:
+	@echo "talon dev loop (both halves hot-reload):"
+	@echo "  gateway: http://127.0.0.1:18789 (WS at /ws) — rebuilds on Go changes"
+	@echo "  ui:      http://127.0.0.1:5173             — vite HMR"
 	@trap 'kill 0' EXIT INT TERM; \
-	  $(BIN) gateway run $(ARGS) & \
+	  scripts/dev-watch.sh & \
 	  $(MAKE) web-dev & \
 	  wait
+
+# dev-open opens the dashboard pointed at the Vite dev server (not the gateway
+# port), with the gateway token baked into the URL fragment so auth works
+# without --auth none. The gateway stays token-authed — important because Vite
+# binds 0.0.0.0 for phone/LAN testing. From a phone, override the host with the
+# Mac's LAN IP and skip the (local) browser launch, then open the printed URL:
+#   make dev-open UI_HOST=http://10.0.0.228:5173 OPEN=--no-open
+UI_HOST ?= http://localhost:5173
+OPEN    ?=
+dev-open: build
+	@$(BIN) dashboard --ui-host $(UI_HOST) $(OPEN)
 
 gateway-run-with-ui: build web-build
 	$(BIN) gateway run --web $(WEB_DIST) $(ARGS)
