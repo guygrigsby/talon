@@ -51,6 +51,28 @@ The config schema is much larger than talon's typed `Config` struct knows
 about. Round-tripping through the typed struct would silently drop or
 reorder unknown keys.
 
+### Claude-memory access (`internal/claudemem/`, ADR 0013)
+
+Config-gated, read-only bridge from the talon agent to a Claude-code memory
+dir (a `MEMORY.md` index plus per-fact markdown files). Default off.
+
+- Config (`memory.claude.*`): `enabled` (bool, default false), `path` (the
+  memory dir, explicit — no path guessing), `inject` (bool, default true;
+  false = tool-only), `max_inject_bytes` (default 4096).
+- `internal/claudemem` is the loader + tool, with one responsibility:
+  read-only, path-confined access. `Store.Read` rejects slugs containing
+  `/`, `\`, or `..` and re-verifies the resolved path stays under the dir;
+  index and tool-read output are byte-bounded and truncated on a line
+  boundary with a marker.
+- Hybrid access: the capped `MEMORY.md` index is folded into the system
+  prompt under a labeled section (`internal/agentcore_chat.Builder.
+  WithClaudeMemory`), and a path-confined `claude_memory` list/read tool is
+  registered before `toolaccess.Resolve` so the per-agent tool policy
+  governs it. `cmd/talon/gateway_memory.go:buildClaudeMemory` resolves
+  config → index + tool per run (parallel to `buildMemorySidecar`).
+- Reachable from the CLI: `talon config set memory.claude.enabled true`,
+  `talon config set memory.claude.path <dir>` (a non-secret scalar).
+
 ## Gateway client (`internal/gateway/client.go`)
 
 Connect-based client. Key bits:
