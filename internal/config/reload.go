@@ -91,6 +91,10 @@ func ClassifyReload(segments []string) ReloadClass {
 		"plugins.deny",
 		"plugins.load.paths",
 		"skills.",
+		// memory.* (enabled/path/model/recall.min_score) is read once
+		// in buildMemorySidecar at gateway startup; changes need a
+		// restart to rebuild the store + recaller.
+		"memory.",
 	}
 	for _, prefix := range restartPrefixes {
 		if p == strings.TrimSuffix(prefix, ".") || strings.HasPrefix(p, prefix) {

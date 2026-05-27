@@ -21,6 +21,8 @@ func TestClassifyReload(t *testing.T) {
 		{"plugins.load.paths", ReloadRestart},
 		{"skills.install.nodeManager", ReloadRestart},
 		{"skills.entries.openai-whisper-api.apiKey", ReloadRestart},
+		{"memory.enabled", ReloadRestart},
+		{"memory.recall.min_score", ReloadRestart},
 
 		// Next-RPC (default).
 		{"agents.list", ReloadNextRPC},

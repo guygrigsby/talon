@@ -3,7 +3,54 @@ package talonconfig
 import (
 	"strings"
 	"testing"
+
+	"github.com/tidwall/gjson"
 )
+
+func TestMemoryRecallMinScore_RoundTrips(t *testing.T) {
+	// TOML -> NativeConfig
+	cfg, err := ReadTOMLBytes([]byte(`
+[memory]
+enabled = true
+
+[memory.recall]
+min_score = 0.35
+`))
+	if err != nil {
+		t.Fatalf("ReadTOMLBytes: %v", err)
+	}
+	if cfg.Memory.Recall.MinScore != 0.35 {
+		t.Fatalf("decoded min_score = %v, want 0.35", cfg.Memory.Recall.MinScore)
+	}
+
+	// NativeConfig -> TOML -> NativeConfig (TOML round-trip)
+	out := string(MarshalTOML(cfg, MarshalOptions{}))
+	reparsed, err := ReadTOMLBytes([]byte(out))
+	if err != nil {
+		t.Fatalf("reparse generated TOML: %v\n%s", err, out)
+	}
+	if reparsed.Memory.Recall.MinScore != 0.35 {
+		t.Fatalf("TOML round-trip min_score = %v, want 0.35\n%s", reparsed.Memory.Recall.MinScore, out)
+	}
+
+	// NativeConfig -> runtime JSON view (memory.recall.min_score path)
+	raw, err := ToRuntimeJSON(cfg, nil)
+	if err != nil {
+		t.Fatalf("ToRuntimeJSON: %v", err)
+	}
+	if got := gjson.GetBytes(raw, "memory.recall.min_score").Num; got != 0.35 {
+		t.Fatalf("runtime JSON memory.recall.min_score = %v, want 0.35\n%s", got, raw)
+	}
+
+	// runtime JSON -> NativeConfig
+	back, err := FromRuntimeJSON(raw)
+	if err != nil {
+		t.Fatalf("FromRuntimeJSON: %v", err)
+	}
+	if back.Memory.Recall.MinScore != 0.35 {
+		t.Fatalf("runtime JSON round-trip min_score = %v, want 0.35", back.Memory.Recall.MinScore)
+	}
+}
 
 func TestFromOpenClawJSON_MapsCoreConfig(t *testing.T) {
 	cfg, report, err := FromOpenClawJSON([]byte(`{

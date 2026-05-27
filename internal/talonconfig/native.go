@@ -53,9 +53,19 @@ type ModelAlias struct {
 }
 
 type MemoryConfig struct {
-	Enabled bool   `mapstructure:"enabled"`
-	Path    string `mapstructure:"path"`
-	Model   string `mapstructure:"model"`
+	Enabled bool               `mapstructure:"enabled"`
+	Path    string             `mapstructure:"path"`
+	Model   string             `mapstructure:"model"`
+	Recall  MemoryRecallConfig `mapstructure:"recall"`
+}
+
+// MemoryRecallConfig tunes the recall pipeline.
+type MemoryRecallConfig struct {
+	// MinScore is the absolute cosine relevance floor applied to
+	// vector recall (jess VectorRecaller). Entries below it are
+	// dropped before injection so off-topic memories don't ride
+	// along. Zero/unset lets the code default apply.
+	MinScore float64 `mapstructure:"min_score"`
 }
 
 type ToolsConfig struct {
@@ -246,6 +256,9 @@ func memoryFromJSON(raw []byte) MemoryConfig {
 		Enabled: gjson.GetBytes(raw, "memory.enabled").Bool(),
 		Path:    gjson.GetBytes(raw, "memory.path").Str,
 		Model:   gjson.GetBytes(raw, "memory.model").Str,
+		Recall: MemoryRecallConfig{
+			MinScore: gjson.GetBytes(raw, "memory.recall.min_score").Num,
+		},
 	}
 }
 
@@ -678,6 +691,7 @@ func applyMemoryRuntime(root map[string]any, cfg NativeConfig) {
 	setPath(root, cfg.Memory.Enabled, "memory", "enabled")
 	setString(root, cfg.Memory.Path, "memory", "path")
 	setString(root, cfg.Memory.Model, "memory", "model")
+	setFloat(root, cfg.Memory.Recall.MinScore, "memory", "recall", "min_score")
 }
 
 func applyToolsRuntime(root map[string]any, cfg NativeConfig, fallback []byte) {
@@ -978,6 +992,11 @@ func MarshalTOML(cfg NativeConfig, opts MarshalOptions) []byte {
 	w.kvBool("enabled", cfg.Memory.Enabled)
 	w.kvString("path", cfg.Memory.Path, false)
 	w.kvString("model", cfg.Memory.Model, false)
+	if cfg.Memory.Recall.MinScore != 0 {
+		w.blank()
+		w.section("memory.recall")
+		w.kvFloat("min_score", cfg.Memory.Recall.MinScore)
+	}
 
 	w.blank()
 	w.section("tools")
