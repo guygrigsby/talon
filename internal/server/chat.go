@@ -16,6 +16,7 @@ import (
 	plugin "github.com/guygrigsby/talon/internal/plugin/host"
 	"github.com/guygrigsby/talon/internal/provider"
 	"github.com/guygrigsby/talon/internal/talonpath"
+	"github.com/guygrigsby/talon/internal/toolaccess"
 )
 
 // AgentcoreRunFn is the function signature `WithAgentcoreRunner`
@@ -86,6 +87,14 @@ type WorkspaceResolver interface {
 // agents.
 type AgentToolsResolver interface {
 	ToolsEnabled(agentID string) (bool, error)
+}
+
+// AgentToolAccessResolver is the richer replacement for AgentToolsResolver.
+// Implementations can disable all tools or expose only a named allowlist.
+// ChatHandler treats it as optional so tests and embedders that do not care
+// about tool policy keep the default allow-all behavior.
+type AgentToolAccessResolver interface {
+	ToolAccess(agentID string) (toolaccess.Policy, error)
 }
 
 // ProviderFactory yields the provider that serves a given provider name on
@@ -672,10 +681,16 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 		}
 	}
 	var runner ToolRunner
-	toolsEnabled := true
+	policy := toolaccess.AllowAll()
+	if tr, ok := h.resolver.(AgentToolAccessResolver); ok {
+		if v, err := tr.ToolAccess(agentID); err == nil {
+			policy = v
+		}
+	}
+	toolsEnabled := policy.Enabled
 	if tr, ok := h.resolver.(AgentToolsResolver); ok {
 		if v, err := tr.ToolsEnabled(agentID); err == nil {
-			toolsEnabled = v
+			toolsEnabled = toolsEnabled && v
 		}
 	}
 	if toolsEnabled && workspace != "" && h.tools != nil {
@@ -683,7 +698,10 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 	}
 	systemPrompt := agentcontext.Build(workspace)
 
-	ctx, runner = h.wrapLegacyMemoryTools(ctx, emit, agentID, runner)
+	if toolsEnabled {
+		ctx, runner = h.wrapLegacyMemoryTools(ctx, emit, agentID, runner)
+		runner = filterToolRunner(runner, policy)
+	}
 
 	var seq int
 	var accumulated strings.Builder // visible assistant text across iterations
@@ -850,6 +868,38 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 	err := fmt.Errorf("exceeded %d tool iterations without producing a final reply", h.MaxToolIterations)
 	_ = h.emitError(emit.chatSessionKey, emit.runID, emit.sessionKey, seq, "tool-loop-limit", err.Error())
 	return accumulated.String(), err
+}
+
+type toolAccessRunner struct {
+	inner  ToolRunner
+	policy toolaccess.Policy
+}
+
+func filterToolRunner(inner ToolRunner, policy toolaccess.Policy) ToolRunner {
+	if inner == nil || !policy.Enabled {
+		return nil
+	}
+	if !policy.Restricted {
+		return inner
+	}
+	return &toolAccessRunner{inner: inner, policy: policy}
+}
+
+func (r *toolAccessRunner) Specs() []provider.ToolSpec {
+	var out []provider.ToolSpec
+	for _, spec := range r.inner.Specs() {
+		if r.policy.Allows(spec.Name) {
+			out = append(out, spec)
+		}
+	}
+	return out
+}
+
+func (r *toolAccessRunner) Run(ctx context.Context, name string, input json.RawMessage) (string, error) {
+	if !r.policy.Allows(name) {
+		return "", fmt.Errorf("tool %q is not allowed for this agent", name)
+	}
+	return r.inner.Run(ctx, name, input)
 }
 
 // maxToolConcurrency caps how many tool calls run concurrently in a

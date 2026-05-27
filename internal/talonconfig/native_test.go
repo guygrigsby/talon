@@ -3,6 +3,8 @@ package talonconfig
 import (
 	"strings"
 	"testing"
+
+	"github.com/tidwall/gjson"
 )
 
 func TestFromOpenClawJSON_MapsCoreConfig(t *testing.T) {
@@ -208,5 +210,47 @@ load_paths = ["/plugins"]
 	}
 	if strings.Contains(text, `"workspace":"/tmp/main"`) && !strings.Contains(text, `"id":"main"`) {
 		t.Fatalf("main workspace should be tied to main agent:\n%s", text)
+	}
+}
+
+func TestNativeConfig_ToolsAllowRoundTrip(t *testing.T) {
+	cfg, err := ReadTOMLBytes([]byte(`
+[agent]
+model = "openai/gpt-4o-mini"
+tools_enabled = false
+tools_allow = ["read", "grep"]
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Agent.ToolsEnabled == nil || *cfg.Agent.ToolsEnabled {
+		t.Fatalf("tools_enabled = %v, want false", cfg.Agent.ToolsEnabled)
+	}
+	if got := cfg.Agent.ToolsAllow; len(got) != 2 || got[0] != "read" || got[1] != "grep" {
+		t.Fatalf("tools_allow = %+v", got)
+	}
+
+	out, err := ToRuntimeJSON(cfg, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gjson.GetBytes(out, "agents.defaults.tools.allow").Exists() {
+		t.Fatalf("[agent].tools_allow should not become subagent defaults: %s", out)
+	}
+	if got := gjson.GetBytes(out, "agents.list.0.tools.enabled"); !got.Exists() || got.Bool() {
+		t.Fatalf("main tools.enabled = %v in %s", got.Raw, out)
+	}
+	if got := gjson.GetBytes(out, "agents.list.0.tools.allow").Array(); len(got) != 2 || got[0].Str != "read" || got[1].Str != "grep" {
+		t.Fatalf("main tools.allow = %+v in %s", got, out)
+	}
+
+	toml := string(MarshalTOML(cfg, MarshalOptions{}))
+	for _, want := range []string{
+		`tools_enabled = false`,
+		`tools_allow = ["read", "grep"]`,
+	} {
+		if !strings.Contains(toml, want) {
+			t.Fatalf("TOML missing %q:\n%s", want, toml)
+		}
 	}
 }

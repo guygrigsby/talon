@@ -16,6 +16,7 @@ import (
 	plugin "github.com/guygrigsby/talon/internal/plugin/host"
 	"github.com/guygrigsby/talon/internal/subagents"
 	"github.com/guygrigsby/talon/internal/talonpath"
+	"github.com/guygrigsby/talon/internal/toolaccess"
 	"github.com/tidwall/gjson"
 )
 
@@ -82,6 +83,7 @@ func (h *ReadHandler) handleAgentsList(ctx context.Context, hc HandlerCtx, _ jso
 	})
 
 	var agents []map[string]any
+	var toolPolicyErr error
 	seen := map[string]bool{}
 	gjson.GetBytes(merged, "agents.list").ForEach(func(_, agent gjson.Result) bool {
 		id := agent.Get("id").Str
@@ -127,9 +129,16 @@ func (h *ReadHandler) handleAgentsList(ctx context.Context, hc HandlerCtx, _ jso
 			modelEntry["primaryName"] = name
 		}
 		row["model"] = modelEntry
+		if err := h.attachToolPolicy(row, merged, id); err != nil {
+			toolPolicyErr = err
+			return false
+		}
 		agents = append(agents, row)
 		return true
 	})
+	if toolPolicyErr != nil {
+		return nil, &FrameError{Code: ErrCodeInternal, Message: "agents.list: " + toolPolicyErr.Error()}
+	}
 
 	subagentDefs, err := subagents.LoadDir(h.paths.Talon.SubagentsDir())
 	if err != nil {
@@ -166,8 +175,8 @@ func (h *ReadHandler) handleAgentsList(ctx context.Context, hc HandlerCtx, _ jso
 		if def.Prompt != "" {
 			row["promptChars"] = len(def.Prompt)
 		}
-		if len(def.Tools) > 0 {
-			row["tools"] = def.Tools
+		if err := h.attachToolPolicy(row, merged, def.ID); err != nil {
+			return nil, &FrameError{Code: ErrCodeInternal, Message: "agents.list: " + err.Error()}
 		}
 		agents = append(agents, row)
 	}
@@ -184,6 +193,20 @@ func (h *ReadHandler) handleAgentsList(ctx context.Context, hc HandlerCtx, _ jso
 		"scope":        "per-sender",
 		"subagentsDir": h.paths.Talon.SubagentsDir(),
 	}, nil
+}
+
+func (h *ReadHandler) attachToolPolicy(row map[string]any, merged []byte, agentID string) error {
+	policy, err := toolaccess.Resolve(merged, h.paths, agentID)
+	if err != nil {
+		return err
+	}
+	switch {
+	case !policy.Enabled:
+		row["tools"] = []string{}
+	case policy.Restricted:
+		row["tools"] = policy.Names()
+	}
+	return nil
 }
 
 // resolveModelDisplayName returns a human-readable label for fullID

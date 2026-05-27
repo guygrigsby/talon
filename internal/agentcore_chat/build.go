@@ -14,6 +14,7 @@ import (
 
 	"github.com/guygrigsby/talon/internal/agentcontext"
 	"github.com/guygrigsby/talon/internal/talonpath"
+	"github.com/guygrigsby/talon/internal/toolaccess"
 )
 
 // Builder assembles an `agentcore.Agent` from talon's merged config.
@@ -202,6 +203,11 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 			toolSet = append(toolSet, memory.NewRecallTool(b.memStore, b.memRecaller, memory.RecallOptions{AgentID: agentID}))
 		}
 	}
+	policy, err := toolaccess.Resolve(b.merged, b.paths, agentID)
+	if err != nil {
+		return nil, choice, fmt.Errorf("resolve tool access for %q: %w", agentID, err)
+	}
+	toolSet = filterAgentcoreTools(toolSet, policy)
 
 	maxTurns := int(gjson.GetBytes(b.merged, "agents.defaults.maxTurns").Int())
 	if v := gjson.GetBytes(b.merged, fmt.Sprintf("agents.list.#(id==%q).maxTurns", agentID)).Int(); v > 0 {
@@ -229,6 +235,22 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 	}
 
 	return agentcore.NewAgent(opts...), choice, nil
+}
+
+func filterAgentcoreTools(in []agentcore.Tool, policy toolaccess.Policy) []agentcore.Tool {
+	if !policy.Enabled {
+		return nil
+	}
+	if !policy.Restricted {
+		return in
+	}
+	out := make([]agentcore.Tool, 0, len(in))
+	for _, tool := range in {
+		if policy.Allows(tool.Name()) {
+			out = append(out, tool)
+		}
+	}
+	return out
 }
 
 func (b *Builder) memoryContextManager(agentID string) agentcore.ContextManager {
