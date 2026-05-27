@@ -4,10 +4,14 @@
 //  1. Each package with benchmarks ships a TestBenchmarkRegression
 //     function that calls testing.Benchmark on every Benchmark* it
 //     wants gated, then hands the named results to AssertNotRegressed.
-//  2. A single shared baseline file (benchmarks/baseline.json at the
-//     repo root) records expected ns/op + allocs/op per benchmark
-//     name. New benchmarks can land without baseline entries — they
-//     just don't participate in the regression gate until added.
+//  2. A per-platform baseline file (benchmarks/baseline.<goos>-<goarch>.json
+//     at the repo root) records expected ns/op + allocs/op per benchmark
+//     name. Bench numbers are hardware-specific, so CI (linux-amd64) and
+//     dev (darwin-arm64) each have their own; the gate compares against
+//     the file for the running platform. New benchmarks can land without
+//     baseline entries — they just don't participate until added. A
+//     missing platform file bootstraps: the measured numbers are logged
+//     and the gate skips (see ErrNoBaselineForArch).
 //  3. Per-bench drift is reported but doesn't fail the test alone.
 //     The gate is the AVERAGE ratio across all checked benchmarks
 //     exceeding tolerance_avg_pct. Per-bench jitter washes out;
@@ -107,6 +111,17 @@ func AssertNotRegressed(t *testing.T, results []NamedResult) {
 	}
 
 	baseline, err := LoadBaseline()
+	if errors.Is(err, ErrNoBaselineForArch) {
+		// Bootstrap: no baseline for this platform yet. Emit the measured
+		// numbers as ready-to-paste JSON rows and skip the gate. Commit
+		// benchmarks/<filename> with these to start enforcing on this arch.
+		t.Logf("benchcheck: no baseline for this platform — capture benchmarks/%s with these rows:", BaselineFilename())
+		for _, r := range results {
+			t.Logf("    %q: {\"ns_per_op\": %d, \"allocs_per_op\": %d},",
+				r.Name, r.Result.NsPerOp(), r.Result.AllocsPerOp())
+		}
+		t.Skipf("benchcheck: %v (numbers logged above)", err)
+	}
 	if err != nil {
 		t.Fatalf("benchcheck: load baseline: %v", err)
 	}
@@ -182,17 +197,35 @@ func AssertNotRegressed(t *testing.T, results []NamedResult) {
 	}
 }
 
-// LoadBaseline reads benchmarks/baseline.json. The path is resolved
-// relative to the runtime caller's source file, walking up to the
-// repo root. This avoids hardcoding cwd assumptions — `go test` runs
-// in the package directory, but the baseline lives at the repo top.
+// ErrNoBaselineForArch means there's no baseline file for the running
+// platform. Bench numbers are hardware-specific, so each GOOS-GOARCH
+// gets its own baseline (e.g. baseline.linux-amd64.json for CI,
+// baseline.darwin-arm64.json for Apple-Silicon dev). When the file is
+// missing, AssertNotRegressed emits the measured numbers and skips so a
+// new platform's baseline can be captured and committed.
+var ErrNoBaselineForArch = errors.New("benchcheck: no baseline for this platform")
+
+// BaselineFilename is the per-arch baseline file for the running platform.
+func BaselineFilename() string {
+	return fmt.Sprintf("baseline.%s-%s.json", runtime.GOOS, runtime.GOARCH)
+}
+
+// LoadBaseline reads benchmarks/baseline.<goos>-<goarch>.json. The path
+// is resolved relative to the runtime caller's source file, walking up
+// to the repo root. This avoids hardcoding cwd assumptions — `go test`
+// runs in the package directory, but the baseline lives at the repo top.
+// Returns ErrNoBaselineForArch when no file exists for the platform, so
+// callers can bootstrap a new arch instead of comparing across hardware.
 func LoadBaseline() (*Baseline, error) {
 	root, err := repoRoot()
 	if err != nil {
 		return nil, err
 	}
-	path := filepath.Join(root, "benchmarks", "baseline.json")
+	path := filepath.Join(root, "benchmarks", BaselineFilename())
 	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("%w (%s)", ErrNoBaselineForArch, path)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("read %s: %w", path, err)
 	}

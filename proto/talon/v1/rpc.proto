@@ -4,8 +4,6 @@ package talon.v1;
 
 option go_package = "github.com/guygrigsby/talon/internal/api/v1/talon/v1;talonv1";
 
-import "talon/v1/common.proto";
-
 // RpcService is the generic "call by registry name" surface that
 // bridges talon's internal RPC registry to external clients. Used
 // by the talon CLI for methods that don't have a typed Connect

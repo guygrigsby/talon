@@ -30,7 +30,7 @@
   ],
   "tolerance_avg_pct": 3.0,
   "benchmarks": {
-    "BenchmarkMergedBytes_TalonOnly":       {"ns_per_op": 1066,    "allocs_per_op": 2},
+    "BenchmarkMergedBytes_TalonOnly":       {"ns_per_op": 1306,    "allocs_per_op": 2},
     "BenchmarkMergedBytes_BothLayers":      {"ns_per_op": 2181,    "allocs_per_op": 4},
     "BenchmarkChatTurn_SingleDelta":        {"ns_per_op": 1770,    "allocs_per_op": 38},
     "BenchmarkChatTurn_ManyDeltas":         {"ns_per_op": 29217,   "allocs_per_op": 739},
