@@ -1,16 +1,12 @@
-// Top-level admin/control sections. Promoted to primary nav tabs; each also
-// has a route at /<key>. Nothing is wired yet — pages are placeholders for
-// the RPC behind them.
+// Top-level admin/control sections. Keep only sections that deserve their own
+// workspace. Runtime status and channel/config hints live in the chat chrome.
 
 export type Section = { key: string; label: string; desc: string };
 
 export const sections: Section[] = [
-	{ key: 'health', label: 'Health', desc: 'gateway probe, plugin status, latency histogram' },
-	{ key: 'channels', label: 'Channels', desc: 'paired sources, peers, last-seen, errors' },
 	{ key: 'agents', label: 'Agents', desc: 'main agent, subagents, models' },
 	{ key: 'models', label: 'Models', desc: 'available, default, fallbacks, aliases, auth' },
 	{ key: 'secrets', label: 'Secrets', desc: 'audit (literal / ref / empty), migrate, reload' },
-	{ key: 'config', label: 'Config', desc: 'Talon config, set / unset' },
 	{ key: 'logs', label: 'Logs', desc: 'streaming gateway log, filter by handler / channel' },
 ];
 

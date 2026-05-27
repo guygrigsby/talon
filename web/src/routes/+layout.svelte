@@ -24,7 +24,7 @@
 		}
 		if (e.key === 'Escape') {
 			if (chrome.paletteOpen) chrome.closePalette();
-			else chrome.closeAllOnNarrow();
+			else chrome.closePanelsOnNarrow();
 		}
 	}
 </script>
@@ -41,8 +41,6 @@
 <div class="shell">
 	<TopBar
 		{current}
-		railOpen={chrome.railOpen}
-		onToggleRail={() => chrome.toggleRail()}
 		onOpenPalette={() => chrome.openPalette()}
 	/>
 	<main id="main" class="body" tabindex="-1">

@@ -7,6 +7,7 @@
 
 	let {
 		channel,
+		sources = [],
 		messages,
 		onToggleInspector,
 		inspectorOpen = true,
@@ -18,6 +19,7 @@
 		defaultModelLabel = null,
 	}: {
 		channel: Channel;
+		sources?: Channel[];
 		messages: Message[];
 		onToggleInspector?: () => void;
 		inspectorOpen?: boolean;
@@ -72,6 +74,22 @@
 	// draft buffers until onSend lands.
 	const composerDisabled = $derived(!wired && status !== 'loading');
 
+	function sourceChipLabel(src: Channel): string {
+		if (src.source === 'web') return 'web';
+		return src.name || sourceLabel[src.source].toLowerCase();
+	}
+
+	function sourceStateLabel(src: Channel): string {
+		if (src.peer === 'unconfigured') return 'unconfigured';
+		return src.status;
+	}
+
+	function sourceTitle(src: Channel): string {
+		return [sourceLabel[src.source].toLowerCase(), src.name, src.status, src.peer]
+			.filter(Boolean)
+			.join(' · ');
+	}
+
 	// Action: focus on mount. Runs once, deterministically, when the
 	// element is in the DOM. rAF lets any post-hydration focus reset
 	// (SvelteKit a11y, scroll restore) settle before we claim focus.
@@ -105,15 +123,34 @@
 
 <section class="transcript" aria-labelledby="ch-title">
 	<header class="head">
-		<div class="crumbs">
-			<SourceDot source={channel.source} status={channel.status} size={8} />
-			<h1 id="ch-title" class="crumb-name">{channel.name}</h1>
-			{#if channel.peer}
-				<span class="t-mono crumb-peer">{channel.peer}</span>
+		<div class="head-main">
+			<div class="crumbs">
+				<SourceDot source={channel.source} status={channel.status} size={8} />
+				<h1 id="ch-title" class="crumb-name">{channel.name}</h1>
+				{#if channel.peer}
+					<span class="t-mono crumb-peer">{channel.peer}</span>
+				{/if}
+				<span class="t-mono crumb-meta">
+					{messages.length} turns · {channel.status} · last {channel.lastActive}
+				</span>
+			</div>
+
+			{#if sources.length}
+				<div class="sources" aria-label="Configured sources">
+					<span class="t-label source-label">Sources</span>
+					{#each sources as src (src.id)}
+						<span
+							class="source-chip s-{src.status}"
+							title={sourceTitle(src)}
+							aria-label={sourceTitle(src)}
+						>
+							<SourceDot source={src.source} status={src.status} size={7} />
+							<span class="source-name">{sourceChipLabel(src)}</span>
+							<span class="t-mono source-state">{sourceStateLabel(src)}</span>
+						</span>
+					{/each}
+				</div>
 			{/if}
-			<span class="t-mono crumb-meta">
-				{messages.length} turns · {channel.status} · last {channel.lastActive}
-			</span>
 		</div>
 		<div class="ops">
 			{#if onModelChange}
@@ -202,12 +239,18 @@
 
 	.head {
 		display: flex;
-		align-items: center;
+		align-items: flex-start;
 		justify-content: space-between;
 		gap: var(--s-3);
 		padding: var(--s-3) var(--s-6);
 		border-bottom: 1px solid var(--border);
 		min-height: var(--tap);
+	}
+	.head-main {
+		display: flex;
+		flex-direction: column;
+		gap: var(--s-2);
+		min-width: 0;
 	}
 	.crumbs {
 		display: inline-flex;
@@ -232,10 +275,54 @@
 		color: var(--ink-3);
 		font-size: var(--fs-xs);
 	}
+	.sources {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: var(--s-2);
+		min-width: 0;
+	}
+	.source-label {
+		margin-right: 2px;
+	}
+	.source-chip {
+		display: inline-flex;
+		align-items: center;
+		gap: 6px;
+		min-width: 0;
+		max-width: 190px;
+		min-height: 24px;
+		padding: 0 var(--s-2);
+		border: 1px solid var(--border);
+		border-radius: var(--radius-sm);
+		background: var(--canvas);
+		color: var(--ink-2);
+		font-size: var(--fs-xs);
+	}
+	.source-name {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	.source-state {
+		color: var(--ink-3);
+	}
+	.source-chip.s-connected .source-state {
+		color: var(--good);
+	}
+	.source-chip.s-connecting .source-state {
+		color: var(--warn);
+	}
+	.source-chip.s-error .source-state {
+		color: var(--err);
+	}
 
 	.ops {
 		display: inline-flex;
+		align-items: center;
 		gap: var(--s-2);
+		flex-shrink: 0;
 	}
 	.op {
 		color: var(--ink-2);
@@ -323,7 +410,12 @@
 
 	@media (max-width: 720px) {
 		.head {
+			align-items: stretch;
+			flex-direction: column;
 			padding: var(--s-3) var(--s-4);
+		}
+		.ops {
+			flex-wrap: wrap;
 		}
 		.stream {
 			padding: 0 var(--s-4);

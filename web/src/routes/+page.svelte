@@ -1,21 +1,30 @@
 <script lang="ts">
-	import ChannelRail from '$lib/components/ChannelRail.svelte';
 	import Transcript from '$lib/components/Transcript.svelte';
 	import Inspector from '$lib/components/Inspector.svelte';
-	import { channels as staticChannels, messages, type Channel } from '$lib/data/channels';
+	import { channels as staticChannels, type Channel } from '$lib/data/channels';
 	import { chrome } from '$lib/state/chrome.svelte';
 	import { makeChatStore } from '$lib/gateway/chatStore.svelte';
 	import { loadAgents, type AgentEntry } from '$lib/gateway/agents';
 	import { loadConfiguredChannels } from '$lib/gateway/channels';
 
-	let activeId = $state('web-here');
+	const LIVE_CHANNEL_ID = 'web-here';
+	const LIVE_CONV = 'web';
+	const channel: Channel =
+		staticChannels.find((c) => c.id === LIVE_CHANNEL_ID) ?? {
+			id: LIVE_CHANNEL_ID,
+			source: 'web',
+			name: 'this session',
+			peer: 'localhost',
+			unread: 0,
+			lastActive: 'now',
+			status: 'connected',
+		};
 
-	// Rail entries: the always-present 'web-here' web session plus
-	// any gateway-configured channels (telegram, bluebubbles, ...).
-	// Re-derived whenever the live channels fetch resolves.
+	// Source summary entries: the live web session plus configured
+	// external bridges (telegram, bluebubbles, ...). Chat stays tied
+	// to the primary web session; these rows are status, not tabs.
 	let liveChannels = $state<Channel[]>([]);
-	const channels = $derived<Channel[]>([...staticChannels, ...liveChannels]);
-	const channel = $derived(channels.find((c) => c.id === activeId) ?? channels[0]);
+	const sourceChannels = $derived<Channel[]>([channel, ...liveChannels]);
 
 	async function refreshChannels() {
 		try {
@@ -23,10 +32,9 @@
 			console.info('[talon] configured channels:', next);
 			liveChannels = next;
 		} catch (err) {
-			// Config read failures are non-fatal — the static web-here
-			// entry keeps the rail usable even if the gateway briefly
-			// can't enumerate channels. Surface to console so silent
-			// breaks are debuggable without a server-side log.
+			// Config read failures are non-fatal; the live web session
+			// remains available even if configured bridges cannot be
+			// enumerated. Keep the console breadcrumb for local debugging.
 			console.warn('[talon] loadConfiguredChannels failed:', err);
 			liveChannels = [];
 		}
@@ -42,9 +50,6 @@
 	// Session-key shape stays `agent:<id>:<conv>` for compatibility
 	// with the chat-history keying; <conv> stays "web" so reloads
 	// land back in the same conversation.
-	const LIVE_CHANNEL_ID = 'web-here';
-	const LIVE_CONV = 'web';
-
 	let primary = $state<AgentEntry | null>(null);
 	let agentsLoadError = $state<string | null>(null);
 	let liveStore: ReturnType<typeof makeChatStore> | null = $state(null);
@@ -83,64 +88,48 @@
 		};
 	});
 
-	const isLive = $derived(channel.id === LIVE_CHANNEL_ID);
 	const stream = $derived.by(() => {
 		const s = liveStore;
-		if (isLive && s) return s.messages;
-		return messages[channel.id] ?? [];
+		return s?.messages ?? [];
 	});
 	const composerStatus = $derived.by(() => {
-		if (!isLive) return 'idle' as const;
 		const s = liveStore;
 		if (s) return s.status;
 		return agentsLoadError ? ('error' as const) : ('loading' as const);
 	});
 	const composerError = $derived.by(() => {
-		if (!isLive) return null;
 		const s = liveStore;
 		return s?.errorMessage ?? agentsLoadError;
 	});
 	const onSend = $derived.by(() => {
 		const s = liveStore;
-		if (!isLive || !s) return undefined;
+		if (!s) return undefined;
 		return (text: string) => s.send(text);
 	});
 	const composerModel = $derived.by(() => {
 		const s = liveStore;
-		return isLive && s ? s.model : null;
+		return s ? s.model : null;
 	});
 	const onModelChange = $derived.by(() => {
 		const s = liveStore;
-		if (!isLive || !s) return undefined;
+		if (!s) return undefined;
 		return (modelId: string) => s.setModel(modelId);
 	});
 	const defaultModelLabel = $derived(
 		primary?.primaryModelName || primary?.primaryModel || null
 	);
 	const activeModelId = $derived.by(() => {
-		if (!isLive) return null;
 		return composerModel || primary?.primaryModel || null;
 	});
 	const activeModelSource = $derived.by(() => {
-		if (!isLive || !activeModelId) return null;
+		if (!activeModelId) return null;
 		return composerModel ? 'session override' : 'agent default';
 	});
-
-	function selectChannel(id: string) {
-		activeId = id;
-		if (chrome.isNarrow) chrome.railOpen = false;
-	}
 </script>
 
-<ChannelRail
-	{channels}
-	{activeId}
-	open={chrome.railOpen}
-	onSelect={selectChannel}
-	onClose={() => (chrome.railOpen = false)}
-/>
 <Transcript
 	{channel}
+	sources={sourceChannels}
 	messages={stream}
 	inspectorOpen={chrome.inspectorOpen}
 	onToggleInspector={() => chrome.toggleInspector()}
@@ -160,12 +149,12 @@
 	onClose={() => (chrome.inspectorOpen = false)}
 />
 
-{#if chrome.isNarrow && (chrome.railOpen || chrome.inspectorOpen)}
+{#if chrome.isNarrow && chrome.inspectorOpen}
 	<button
 		type="button"
 		class="backdrop"
 		aria-label="Close panel"
-		onclick={() => chrome.closeAllOnNarrow()}
+		onclick={() => chrome.closePanelsOnNarrow()}
 	></button>
 {/if}
 

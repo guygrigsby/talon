@@ -1,9 +1,8 @@
-// Shared chrome state — rail/inspector visibility + viewport class.
+// Shared chrome state — inspector visibility, viewport class, and palette.
 // Pages and the layout both read/write this; runes in a .svelte.ts module
 // give us reactive globals without a store ceremony.
 
 class Chrome {
-	railOpen = $state(true);
 	inspectorOpen = $state(true);
 	isNarrow = $state(false);
 	paletteOpen = $state(false);
@@ -15,7 +14,6 @@ class Chrome {
 		const mql = window.matchMedia('(max-width: 720px)');
 		const apply = () => {
 			this.isNarrow = mql.matches;
-			this.railOpen = !mql.matches;
 			this.inspectorOpen = !mql.matches;
 		};
 		apply();
@@ -28,15 +26,11 @@ class Chrome {
 		this.cleanup = null;
 	}
 
-	toggleRail() {
-		this.railOpen = !this.railOpen;
-	}
 	toggleInspector() {
 		this.inspectorOpen = !this.inspectorOpen;
 	}
-	closeAllOnNarrow() {
+	closePanelsOnNarrow() {
 		if (this.isNarrow) {
-			this.railOpen = false;
 			this.inspectorOpen = false;
 		}
 	}

@@ -1,9 +1,7 @@
-// Enumerate configured gateway channels by reading
-// `channels.*` out of the merged config. Each configured channel
-// becomes a Channel entry the rail can render alongside
-// 'web-here'. No typed ChannelsService.List endpoint yet — when
-// one lands we'd swap this out for the typed call and drop the
-// config-shape coupling.
+// Enumerate configured gateway channels by reading `channels.*` out of the
+// merged config. Each configured channel becomes a compact source-status entry
+// in chat. No typed ChannelsService.List endpoint yet; when one lands we'd swap
+// this out for the typed call and drop the config-shape coupling.
 
 import { create } from '@bufbuild/protobuf';
 import { ConfigGetRequestSchema } from './gen/talon/v1/config_pb.js';

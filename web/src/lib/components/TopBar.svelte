@@ -4,35 +4,14 @@
 
 	let {
 		current = 'chat',
-		onToggleRail,
 		onOpenPalette,
-		railOpen = false,
 	}: {
 		current?: string;
-		onToggleRail?: () => void;
 		onOpenPalette?: () => void;
-		railOpen?: boolean;
 	} = $props();
 </script>
 
 <header class="top">
-	<button
-		type="button"
-		class="ham"
-		aria-label={railOpen ? 'Close channels' : 'Open channels'}
-		aria-expanded={railOpen}
-		aria-controls="channel-rail"
-		onclick={() => onToggleRail?.()}
-	>
-		<svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true" focusable="false">
-			{#if railOpen}
-				<path d="M5 5 L 19 19 M 19 5 L 5 19" stroke="currentColor" stroke-width="2" fill="none" />
-			{:else}
-				<path d="M3 7 H 21 M 3 12 H 21 M 3 17 H 21" stroke="currentColor" stroke-width="2" fill="none" />
-			{/if}
-		</svg>
-	</button>
-
 	<div class="left">
 		<Wordmark />
 		<span class="tag hide-sm" aria-hidden="true">personal gateway</span>
@@ -68,20 +47,6 @@
 		background: var(--canvas);
 		color: var(--ink);
 		border-bottom: 1px solid var(--border);
-	}
-
-	.ham {
-		display: none;
-		align-items: center;
-		justify-content: center;
-		width: var(--tap);
-		height: var(--tap);
-		border-radius: var(--radius-sm);
-		color: var(--ink-2);
-	}
-	.ham:hover {
-		color: var(--ink);
-		background: var(--surface-2);
 	}
 
 	.left {
@@ -168,9 +133,6 @@
 	}
 
 	@media (max-width: 720px) {
-		.ham {
-			display: inline-flex;
-		}
 		.hide-sm {
 			display: none !important;
 		}

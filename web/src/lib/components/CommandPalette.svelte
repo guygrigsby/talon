@@ -1,10 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { channels, sourceLabel } from '$lib/data/channels';
-	import type { Source } from '$lib/data/channels';
 	import { sections } from '$lib/data/sections';
 	import { chrome } from '$lib/state/chrome.svelte';
-	import SourceDot from './SourceDot.svelte';
 
 	let { open = false, onClose }: { open?: boolean; onClose?: () => void } = $props();
 
@@ -13,7 +10,6 @@
 		group: string;
 		label: string;
 		hint?: string;
-		source?: Source;
 		kind?: string;
 		run?: () => void;
 	};
@@ -23,14 +19,6 @@
 	}
 
 	const ALL: Entry[] = [
-		...channels.map((c) => ({
-			id: `ch:${c.id}`,
-			group: 'Channels',
-			label: c.name,
-			hint: c.peer ?? sourceLabel[c.source].toLowerCase(),
-			source: c.source,
-			run: close, // look-only: selecting a channel just dismisses
-		})),
 		...sections.map((s) => ({
 			id: `admin:${s.key}`,
 			group: 'Admin',
@@ -41,13 +29,6 @@
 		})),
 		{ id: 'go:chat', group: 'Actions', label: 'Go to chat', kind: 'nav', run: () => goto('/') },
 		{
-			id: 'tg:rail',
-			group: 'Actions',
-			label: 'Toggle channels rail',
-			kind: 'view',
-			run: () => chrome.toggleRail(),
-		},
-		{
 			id: 'tg:inspector',
 			group: 'Actions',
 			label: 'Toggle inspector',
@@ -56,7 +37,7 @@
 		},
 	];
 
-	const GROUP_ORDER = ['Channels', 'Admin', 'Actions'];
+	const GROUP_ORDER = ['Admin', 'Actions'];
 
 	let query = $state('');
 	let activeIndex = $state(0);
@@ -180,7 +161,7 @@
 					aria-controls="cmdk-list"
 					aria-activedescendant={view.count ? `cmdk-opt-${activeIndex}` : undefined}
 					aria-autocomplete="list"
-					aria-label="Jump to a channel, admin section, or action"
+					aria-label="Jump to an admin section or action"
 					placeholder="Jump to…"
 					autocomplete="off"
 					spellcheck="false"
@@ -207,11 +188,7 @@
 									onclick={() => choose(entry)}
 								>
 									<span class="opt-icon" aria-hidden="true">
-										{#if entry.source}
-											<SourceDot source={entry.source} status="connected" size={7} />
-										{:else}
-											<span class="glyph">›</span>
-										{/if}
+										<span class="glyph">›</span>
 									</span>
 									<span class="opt-label">{entry.label}</span>
 									{#if entry.hint}
