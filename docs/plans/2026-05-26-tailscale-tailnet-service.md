@@ -485,3 +485,47 @@ Manual e2e (needs a real tailnet + OAuth client):
 - `auth=trusted-proxy` via tsnet `WhoIs`: map Tailscale identity so the tailnet bind can drop the separate talon token (ADR 0008 names this a follow-up).
 - `talon tailscale` (CLI-wrapper) vs `bind=tailnet` unification or deprecation — a future ADR.
 - Windows support for the wizard's keychain step (keychain is macOS-only; needs the op backend or a Windows credential store).
+
+---
+
+## Findings (Task 0)
+
+Pinned from official sources without a live token (the spike's code/curl steps were skipped — repo had other agents active). **Where these differ from Tasks 1-6 above, Findings wins.**
+
+### tsnet runtime ([pkg.go.dev/tailscale.com/tsnet](https://pkg.go.dev/tailscale.com/tsnet))
+```go
+type Server struct {
+	Dir, Hostname, AuthKey string
+	Ephemeral              bool
+	ClientID, ClientSecret string   // OAuth creds accepted directly
+	AdvertiseTags          []string // e.g. ["tag:talon"]
+}
+func (s *Server) ListenService(name string, mode ServiceMode) (*ServiceListener, error)
+type ServiceModeHTTP struct { Port uint16; HTTPS bool; AcceptAppCaps map[string][]string; PROXYProtocolVersion int }
+type ServiceListener struct { net.Listener; FQDN string }
+```
+`ListenService` takes the **`svc:`-prefixed** name; `ln.FQDN` is a string field.
+
+### VIPService API (Tailscale Go client, [PR #14539](https://github.com/tailscale/tailscale/pull/14539/files))
+- `PUT|GET|DELETE /api/v2/tailnet/{tailnet}/vip-services/by-name/{name}` (name URL-escaped).
+- Body: `VIPService{ Name string; Addrs []string; Comment string; Ports []string; Tags []string }`.
+- API `Name` is a **bare label** (`talon`), NOT `svc:`-prefixed (opposite of tsnet).
+- Upstream methods: `GetVIPServiceByName`, `CreateOrUpdateVIPServiceByName`, `DeleteVIPServiceByName`.
+
+### OAuth ([oauth-clients](https://tailscale.com/kb/1215/oauth-clients))
+- Token: `POST https://api.tailscale.com/api/v2/oauth/token`, `client_id`+`client_secret` (client_credentials).
+- Scopes: `auth_keys` (requires tags), `devices:core`. **Residual gap:** the exact scope for the vip-services endpoints isn't documented; confirm with a live token (likely `devices:core` or a `services` scope). This is the only item still needing real credentials.
+
+### ACL grants ([tailscale-services](https://tailscale.com/docs/features/tailscale-services)) — wizard prints these:
+```jsonc
+{ "src": ["autogroup:member"], "dst": ["svc:talon"], "ip": ["443"] }
+"autoApprovers": { "services": { "svc:talon": ["tag:talon"] } }
+```
+
+### Corrections to the tasks above
+1. **Drop the auth-key mint.** tsnet registers from `ClientID`/`ClientSecret` + `AdvertiseTags` directly, so `internal/tailnet` resolves the OAuth client at boot and passes it to tsnet — no separately-minted auth key. Remove `MintAuthKey` (Task 2) and the auth-key steps in Task 5. `internal/tailnet.Options` carries `ClientID, ClientSecret, AdvertiseTags` instead of `AuthKey`.
+2. **Wrap the upstream client where practical.** Task 2 prefers `tailscale.com/client/tailscale` VIPService methods over hand-rolled HTTP (no-reimplementation rule). If that package can't be imported cleanly standalone, fall back to a minimal HTTP client — decided at implementation time.
+3. **`Ports` is `[]string`** (e.g. `"443"`/`"tcp:443"`), not `[]int`. Fix `CreateService`.
+4. **Name-form helper.** `svcName(bare) -> "svc:"+bare` for tsnet; `bareName(svc) -> strings.TrimPrefix(svc,"svc:")` for the API. Store the bare label in config and prefix for tsnet.
+
+ADR 0008's "mint a tagged auth key" step is superseded by correction 1 (OAuth-direct node registration); the service-must-pre-exist ordering still holds.
