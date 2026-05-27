@@ -1,0 +1,29 @@
+{
+  "_comment": [
+    "Baseline for benchmark regression detection on linux-amd64 (GitHub",
+    "Actions ubuntu-latest, ~4 vCPU). This is the gate CI enforces.",
+    "",
+    "Captured via the throwaway capture-bench workflow: median of 6 runs",
+    "at -benchtime=2s on the runner. The per-package TestBenchmarkRegression",
+    "runs in CI through `make test` (TALON_BENCH=1) and compares median-of-5",
+    "runtime numbers against these rows.",
+    "",
+    "Tolerance is 12% — looser than the dev baseline.darwin-arm64.json (3%)",
+    "because shared CI runners vary 10%+ run-to-run. The average-ratio gate",
+    "plus the 2x per-bench outlier safeguard still catch real regressions.",
+    "If this flakes, nudge tolerance up; if it stops catching regressions,",
+    "down.",
+    "",
+    "Recapture after deliberate perf changes: push the bench-capture branch",
+    "(temp capture-bench workflow), re-median the logged ns/op, update here.",
+    "Only the gated benchmarks need rows; ungated benches bootstrap-emit."
+  ],
+  "tolerance_avg_pct": 12.0,
+  "benchmarks": {
+    "BenchmarkMergedBytes_TalonOnly":       {"ns_per_op": 2152,  "allocs_per_op": 2},
+    "BenchmarkChatTurn_SingleDelta":        {"ns_per_op": 2936,  "allocs_per_op": 24},
+    "BenchmarkChatTurn_ManyDeltas":         {"ns_per_op": 15597, "allocs_per_op": 32},
+    "BenchmarkChatTurn_WithToolDispatch":   {"ns_per_op": 22219, "allocs_per_op": 54},
+    "BenchmarkChatStore_AppendSnapshot":    {"ns_per_op": 1184,  "allocs_per_op": 5}
+  }
+}
