@@ -4,7 +4,7 @@
 
 Status: Ready to implement (handoff)
 Date: 2026-05-26
-ADR: `docs/adr/0009-memory-recall-relevance-floor.md`
+ADR: `docs/adr/0010-memory-recall-relevance-floor.md`
 
 **Goal:** Stop the agent from injecting irrelevant memories (e.g. "pizza" on "Oh hi!") by gating vector recall with an absolute cosine relevance floor.
 

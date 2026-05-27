@@ -1,4 +1,4 @@
-# 0009 Memory recall relevance floor (cosine threshold)
+# 0010 Memory recall relevance floor (cosine threshold)
 
 Status: Accepted
 

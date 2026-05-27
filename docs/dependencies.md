@@ -89,7 +89,7 @@ Two extension packages:
   `VectorRecaller` carries an absolute cosine **relevance floor**
   (`memory.WithMinScore`): vector hits below it are dropped before
   `HybridRecaller`'s RRF fusion, so off-topic memories don't ride
-  along on a low-similarity match (ADR 0009). talon sets the floor
+  along on a low-similarity match (ADR 0010). talon sets the floor
   from `memory.recall.min_score` (default `0.30` for MiniLM-L6-v2
   cosine when unset); `talon config set memory.recall.min_score <f>`
   tunes it, and the gateway must restart to apply (startup-read).
