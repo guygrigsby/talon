@@ -13,7 +13,7 @@ it.
 
 talon is a self-contained agent platform written in Go. It exposes chat,
 cron, channel integrations (Telegram, BlueBubbles, etc.), and plugin
-management over a JSON-RPC-style WebSocket protocol, behind a single static
+management over a Connect RPC (HTTP/JSON) API, behind a single static
 binary. Built around three upstream libraries:
 
 - [agentcore](https://github.com/voocel/agentcore) — agent loop, provider
@@ -41,10 +41,10 @@ Design priorities:
 
 ## Two roles, one protocol
 
-talon plays two roles over the same WebSocket protocol:
+talon plays two roles over the same Connect RPC API:
 
 1. **CLI client.** Connects to a talon gateway (default
-   `ws://127.0.0.1:18789/`). Most subcommands are RPC pass-throughs or local
+   `http://127.0.0.1:18789`). Most subcommands are RPC pass-throughs or local
    config operations.
 2. **Embedded gateway** (`talon gateway run`). A self-contained server that
    handles chat, cron, plugin lifecycle, channel setup, and config RPCs.
@@ -296,7 +296,7 @@ regression gate via `TALON_BENCH=1`.
 - `internal/config/`. Native config adapter and editing: `config.go`, `merge.go`, `edit.go`,
   `backup.go`, `schema.go`, `path.go`, `reload.go`
 - `internal/talonpath/`. Talon state path resolution
-- `internal/gateway/`. WebSocket client
+- `internal/gateway/`. Connect RPC (HTTP) client
 - `internal/server/`. Embedded gateway: protocol framing, session lifecycle,
   auth, method registry
 - `internal/plugin/`. Native gRPC plugin host
