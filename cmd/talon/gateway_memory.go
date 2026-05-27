@@ -77,19 +77,9 @@ func buildMemorySidecar(paths talonpath.Paths) *server.MemoryConfig {
 		return nil
 	}
 
-	// Hybrid: token overlap catches keyword-exact hits, vector
-	// catches semantic ones. RRF (K=60) fuses the two rankings.
-	// The vector path carries an absolute cosine relevance floor so
-	// off-topic memories don't ride along on a low-similarity hit.
-	minScore := resolveRecallMinScore(settings)
-	recaller := memory.NewHybridRecaller(
-		memory.NewVectorRecaller(memory.WithMinScore(float32(minScore))),
-		memory.NewSimpleRecaller(),
-	)
-
 	return &server.MemoryConfig{
 		Store:    store,
-		Recaller: recaller,
+		Recaller: buildRecaller(resolveRecallMinScore(settings)),
 	}
 }
 
@@ -108,6 +98,20 @@ func resolveRecallMinScore(s memorySettings) float64 {
 		return s.RecallMinScore
 	}
 	return defaultRecallMinScore
+}
+
+// buildRecaller constructs the production recall pipeline: a hybrid of a
+// vector recaller (cosine floor at minScore) and a keyword recaller gated to
+// require a lexical match. Both paths are relevance-gated so a bare greeting
+// doesn't surface unrelated memories. Shared by the gateway and tests so the
+// tested config can't drift from production.
+func buildRecaller(minScore float64) memory.Recaller {
+	return memory.NewHybridRecaller(
+		// Token overlap catches keyword-exact hits, vector catches
+		// semantic ones; RRF (K=60) fuses the two rankings.
+		memory.NewVectorRecaller(memory.WithMinScore(float32(minScore))),
+		memory.NewSimpleRecaller(memory.WithRequireMatch()),
+	)
 }
 
 func readMemorySettings(paths talonpath.Paths) (memorySettings, error) {

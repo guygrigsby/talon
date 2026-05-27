@@ -46,6 +46,18 @@ cosine `Score` is below a configured floor inside the vector search / recaller,
 cosine scores, so a post-fusion threshold can't see the real distance — the
 floor must gate the raw vector hits.
 
+**Gate the keyword path too.** The vector floor alone is insufficient:
+talon's recaller is `HybridRecaller(VectorRecaller, SimpleRecaller)`, and
+`SimpleRecaller` padded results by recency when a hint had no lexical match.
+A bare greeting ("Oh hi!") tokenizes to nothing, so every memory scored 0 and
+the most recent ones were injected regardless of the vector floor — the bug
+reproduced through the keyword path. Fix: an opt-in `WithRequireMatch` on
+`SimpleRecaller` (upstream jess) drops zero-signal entries; talon enables it.
+Both recall paths are now relevance-gated. Verified by an integration test
+against the real MiniLM embedder (`cmd/talon/recall_floor_e2e_test.go`):
+"Oh hi!" scores all memories ≤ 0.107 and recalls nothing; an on-topic query
+scores the right memory 0.555 and recalls it.
+
 **K stays a cap, not the quality bar.** The floor decides relevance; K=8 (or
 the configured budget) caps how many survivors are injected.
 
@@ -77,5 +89,12 @@ talon bumps the jess dependency to the version carrying the change.
   can still surface an exact-text match even at modest cosine score; the floor
   bounds the *vector* contribution, not lexical matches. Acceptable and arguably
   desirable; documented so it isn't mistaken for a leak.
+- The keyword path still over-matches common tokens (`SimpleRecaller` scores a
+  memory for sharing words like "the"/"user" with the hint, since
+  `MinTokenLength` is 3). This surfaces low-value memories on content queries,
+  but the relevant memory still dominates via RRF; it is a milder issue than
+  the original bug and is left as a follow-up (stopword filtering / raise the
+  token bar).
 - Future work: relative/top-gap trimming on top of the floor (deferred — see
-  the threshold decision), and per-agent floor overrides.
+  the threshold decision), per-agent floor overrides, and stopword filtering in
+  `SimpleRecaller`.
