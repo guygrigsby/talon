@@ -40,6 +40,14 @@ type Builder struct {
 	memMaxItems int
 	memHeader   string
 	source      memory.Source
+	// claudeIndex + claudeTool wire ADR 0013 read-only Claude-memory
+	// access. claudeIndex (when non-empty) is folded into the system
+	// prompt under a labeled section; claudeTool (when non-nil) is
+	// appended to the tool set before toolaccess filtering, so the
+	// per-agent tool policy governs it like any other tool. Set via
+	// WithClaudeMemory; the gateway resolves both from native config.
+	claudeIndex string
+	claudeTool  agentcore.Tool
 }
 
 // NewBuilder constructs a Builder. merged is the result of
@@ -80,6 +88,17 @@ func (b *Builder) WithMemoryOptions(maxItems int, header string, kinds *memory.K
 	b.memMaxItems = maxItems
 	b.memHeader = header
 	b.memKinds = kinds
+	return b
+}
+
+// WithClaudeMemory wires read-only Claude-memory access (ADR 0013).
+// index is the capped MEMORY.md text to fold into the system prompt
+// (empty = inject disabled / no index); tool is the claude_memory
+// list/read tool registered subject to the agent's tool-access policy.
+// The gateway resolves both from memory.claude.* native config.
+func (b *Builder) WithClaudeMemory(index string, tool agentcore.Tool) *Builder {
+	b.claudeIndex = index
+	b.claudeTool = tool
 	return b
 }
 
@@ -168,6 +187,13 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 	// hallucinates one (e.g. "I'm GPT-4").
 	systemPrompt := buildSystemPrompt(b.merged, agentID, personaDir)
 
+	// ADR 0013: fold the (capped) Claude-memory index into the system
+	// prompt under a labeled section. Empty when injection is disabled
+	// (memory.claude.inject=false) or no MEMORY.md exists.
+	if b.claudeIndex != "" {
+		systemPrompt += "\n\n## Notes Claude has saved about the user/project\n\n" + b.claudeIndex
+	}
+
 	// File-state shared across read/write/edit so write-after-read
 	// invariants hold.
 	fileState := tools.NewFileReadState()
@@ -202,6 +228,11 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 		if b.memRecaller != nil {
 			toolSet = append(toolSet, memory.NewRecallTool(b.memStore, b.memRecaller, memory.RecallOptions{AgentID: agentID}))
 		}
+	}
+	// ADR 0013: register the claude_memory tool before toolaccess
+	// filtering so the per-agent tool policy governs it.
+	if b.claudeTool != nil {
+		toolSet = append(toolSet, b.claudeTool)
 	}
 	policy, err := toolaccess.Resolve(b.merged, b.paths, agentID)
 	if err != nil {

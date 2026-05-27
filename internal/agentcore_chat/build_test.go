@@ -495,3 +495,85 @@ func TestBuildSystemPrompt_OnboardingDirectiveLeads(t *testing.T) {
 		t.Errorf("onboarding directive should lead the prompt; di=%d pi=%d\n%s", di, pi, got)
 	}
 }
+
+// fakeClaudeTool is a minimal agentcore.Tool used to assert that
+// WithClaudeMemory registers the tool subject to tool-access filtering.
+type fakeClaudeTool struct{ name string }
+
+func (f fakeClaudeTool) Name() string             { return f.name }
+func (f fakeClaudeTool) Description() string       { return "fake claude memory tool" }
+func (f fakeClaudeTool) Schema() map[string]any    { return map[string]any{"type": "object"} }
+func (f fakeClaudeTool) Execute(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+	return json.RawMessage(`{}`), nil
+}
+
+func TestBuilder_WithClaudeMemory_InjectsIndexAndTool(t *testing.T) {
+	clearProviderEnv(t)
+	cfg := []byte(`{
+		"agents": {"defaults": {"model": {"primary": "openai/gpt-4o-mini"}, "workspace": "/tmp/talon-claudemem-test"}}
+	}`)
+	tool := fakeClaudeTool{name: "claude_memory"}
+	b := NewBuilder(cfg, talonpath.Paths{}).
+		WithAuthOverride(map[string]ProviderAuth{
+			"openai": {Provider: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test"},
+		}).
+		WithClaudeMemory("INDEX-MARKER", tool)
+	agent, _, err := b.BuildAgent("main")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if got := agent.State().SystemPrompt; !strings.Contains(got, "INDEX-MARKER") {
+		t.Fatalf("system prompt missing injected index:\n%s", got)
+	}
+	if names := agentToolNames(agent); !names["claude_memory"] {
+		t.Fatalf("claude_memory tool not registered: %v", names)
+	}
+}
+
+func TestBuilder_WithClaudeMemory_ToolAccessFilters(t *testing.T) {
+	clearProviderEnv(t)
+	// tools.allow excludes claude_memory, so the policy must drop it —
+	// proving the tool is appended before toolaccess.Resolve filtering.
+	cfg := []byte(`{
+		"agents": {
+			"defaults": {"model": {"primary": "openai/gpt-4o-mini"}, "workspace": "/tmp/talon-claudemem-deny"},
+			"list": [{"id": "main", "tools": {"allow": ["read"]}}]
+		}
+	}`)
+	tool := fakeClaudeTool{name: "claude_memory"}
+	b := NewBuilder(cfg, talonpath.Paths{}).
+		WithAuthOverride(map[string]ProviderAuth{
+			"openai": {Provider: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test"},
+		}).
+		WithClaudeMemory("INDEX-MARKER", tool)
+	agent, _, err := b.BuildAgent("main")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if names := agentToolNames(agent); names["claude_memory"] {
+		t.Fatalf("claude_memory should be filtered out by tools.allow: %v", names)
+	}
+}
+
+func TestBuilder_WithClaudeMemory_NoIndexNoInjection(t *testing.T) {
+	clearProviderEnv(t)
+	cfg := []byte(`{
+		"agents": {"defaults": {"model": {"primary": "openai/gpt-4o-mini"}, "workspace": "/tmp/talon-claudemem-noidx"}}
+	}`)
+	tool := fakeClaudeTool{name: "claude_memory"}
+	b := NewBuilder(cfg, talonpath.Paths{}).
+		WithAuthOverride(map[string]ProviderAuth{
+			"openai": {Provider: "openai", BaseURL: "https://api.openai.com/v1", APIKey: "sk-test"},
+		}).
+		WithClaudeMemory("", tool) // inject=false path: empty index, tool still present
+	agent, _, err := b.BuildAgent("main")
+	if err != nil {
+		t.Fatalf("build: %v", err)
+	}
+	if got := agent.State().SystemPrompt; strings.Contains(got, "Notes Claude has saved") {
+		t.Fatalf("empty index must not add the labeled section:\n%s", got)
+	}
+	if names := agentToolNames(agent); !names["claude_memory"] {
+		t.Fatalf("claude_memory tool should still register with empty index: %v", names)
+	}
+}
