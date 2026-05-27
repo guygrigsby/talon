@@ -727,6 +727,9 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 	if h.workspace != nil {
 		if ws, err := h.workspace.Workspace(agentID); err == nil {
 			workspace = ws
+		} else {
+			slog.Warn("workspace resolution failed; continuing without",
+				"agent", agentID, "session", storeKey, "err", err)
 		}
 	}
 	var runner ToolRunner
@@ -734,12 +737,18 @@ func (h *ChatHandler) runChatLoop(ctx context.Context, emit emitTarget, storeKey
 	if tr, ok := h.resolver.(AgentToolAccessResolver); ok {
 		if v, err := tr.ToolAccess(agentID); err == nil {
 			policy = v
+		} else {
+			slog.Warn("tool-policy resolution failed; continuing with allow-all",
+				"agent", agentID, "session", storeKey, "err", err)
 		}
 	}
 	toolsEnabled := policy.Enabled
 	if tr, ok := h.resolver.(AgentToolsResolver); ok {
 		if v, err := tr.ToolsEnabled(agentID); err == nil {
 			toolsEnabled = toolsEnabled && v
+		} else {
+			slog.Warn("tools-enabled resolution failed; continuing with current setting",
+				"agent", agentID, "session", storeKey, "err", err)
 		}
 	}
 	if toolsEnabled && workspace != "" && h.tools != nil {
@@ -973,6 +982,16 @@ func (h *ChatHandler) runToolsParallel(ctx context.Context, emit emitTarget, run
 		h.emitAgentToolStart(emit.toolSessionKey, emit.runID, emit.sessionKey, tc.ID, tc.Name, tc.ArgumentsJSON)
 		out, err := runner.Run(ctx, tc.Name, json.RawMessage(tc.ArgumentsJSON))
 		if err != nil {
+			// Surface the swallowed failure: the tool error becomes a
+			// model-visible result string below, so without this line
+			// it never reaches the operational log. Log the error and
+			// correlation keys only — never the (possibly
+			// secret-bearing) tool args or output.
+			slog.Error("tool execution failed",
+				"tool", tc.Name,
+				"session", emit.sessionKey,
+				"run", emit.runID,
+				"err", err)
 			out = "ERROR: " + err.Error()
 		}
 		h.emitAgentToolResult(emit.toolSessionKey, emit.runID, emit.sessionKey, tc.ID, tc.Name, out, err != nil)

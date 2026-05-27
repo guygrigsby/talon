@@ -3,6 +3,7 @@ package agentcore_chat
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/voocel/agentcore"
 
@@ -81,6 +82,7 @@ func (h *Handler) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 
 	agent, choice, err := NewBuilder(merged, h.paths).BuildAgent(req.AgentID)
 	if err != nil {
+		slog.Error("agentcore build-agent failed", "agent", req.AgentID, "err", err)
 		req.Sink.Error("build-agent", err.Error())
 		return nil, err
 	}
@@ -90,6 +92,7 @@ func (h *Handler) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	// from history.
 	if len(req.History) > 0 {
 		if err := agent.SetMessages(req.History); err != nil {
+			slog.Error("agentcore seed-history failed", "agent", req.AgentID, "err", err)
 			req.Sink.Error("seed-history", err.Error())
 			return nil, fmt.Errorf("seed history: %w", err)
 		}
@@ -102,6 +105,7 @@ func (h *Handler) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	defer unsubscribe()
 
 	if err := agent.Prompt(req.Prompt); err != nil {
+		slog.Error("agentcore prompt failed", "agent", req.AgentID, "err", err)
 		req.Sink.Error("prompt", err.Error())
 		return nil, fmt.Errorf("prompt: %w", err)
 	}

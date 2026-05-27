@@ -83,20 +83,24 @@ func Spawn(
 
 	rpc, err := client.Client()
 	if err != nil {
+		slog.Error("plugin client start failed", "plugin", name, "err", err)
 		client.Kill()
 		return nil, fmt.Errorf("plugin %s: client start: %w", name, err)
 	}
 	raw, err := rpc.Dispense(PluginMapKey)
 	if err != nil {
+		slog.Error("plugin dispense failed", "plugin", name, "err", err)
 		client.Kill()
 		return nil, fmt.Errorf("plugin %s: dispense: %w", name, err)
 	}
 	pluginClient, ok := raw.(pb.PluginClient)
 	if !ok {
+		slog.Error("plugin dispense returned unexpected type", "plugin", name, "type", fmt.Sprintf("%T", raw))
 		client.Kill()
 		return nil, fmt.Errorf("plugin %s: dispense returned %T, want pb.PluginClient", name, raw)
 	}
 	if gp.hostBroker == nil {
+		slog.Error("plugin GRPCClient ran without populating broker", "plugin", name)
 		client.Kill()
 		return nil, fmt.Errorf("plugin %s: GRPCClient ran without populating broker", name)
 	}
@@ -116,11 +120,13 @@ func Spawn(
 		HostBrokerId: int64(brokerID),
 	})
 	if err != nil {
+		slog.Error("plugin initialize failed", "plugin", name, "err", err)
 		client.Kill()
 		return nil, fmt.Errorf("plugin %s: initialize: %w", name, err)
 	}
 	manifest := resp.GetManifest()
 	if manifest == nil {
+		slog.Error("plugin initialize returned no manifest", "plugin", name)
 		client.Kill()
 		return nil, fmt.Errorf("plugin %s: Initialize returned no manifest", name)
 	}
