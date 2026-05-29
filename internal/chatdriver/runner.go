@@ -6,17 +6,26 @@ import (
 
 	"github.com/guygrigsby/jess/memory"
 	jessmsg "github.com/guygrigsby/jess/message"
+	"github.com/guygrigsby/jess/tool"
 
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/server"
 	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
+// ClaudeMemoryResolver returns the ADR 0013 Claude-memory index +
+// claude_memory tool for the current run. Returning ok=false leaves the
+// feature off (no index injection, no tool registered). Resolved per-run
+// so the index reflects the live MEMORY.md without restart. Nil is
+// equivalent to a resolver that always returns ok=false.
+type ClaudeMemoryResolver func() (index string, tl tool.Tool, ok bool)
+
 // NewChatRunner constructs the jess-backed per-turn ChatRunFn. The runner
 // rebuilds the agent each turn, seeds the Session from ChatStore history,
 // streams events to the EventSink, persists the final assistant text back
 // through the server layer, and returns ChatRunResult with usage from jess.
-func NewChatRunner(paths talonpath.Paths, mem *server.MemoryConfig) server.ChatRunFn {
+// claudeMem is optional; nil disables ADR 0013 Claude-memory access.
+func NewChatRunner(paths talonpath.Paths, mem *server.MemoryConfig, claudeMem ClaudeMemoryResolver) server.ChatRunFn {
 	return func(
 		ctx context.Context,
 		agentID, sessionKey, runID, userText, selectedModelID string,
@@ -46,6 +55,14 @@ func NewChatRunner(paths talonpath.Paths, mem *server.MemoryConfig) server.ChatR
 			builder = builder.
 				WithMemory(mem.Store, mem.Recaller).
 				WithMemorySource(sessionKey, runID)
+		}
+		// ADR 0013: read-only Claude-memory access, gated by
+		// memory.claude.*. Resolved per-run so the index reflects the
+		// current MEMORY.md. ok=false when disabled or inert.
+		if claudeMem != nil {
+			if idx, ct, ok := claudeMem(); ok {
+				builder = builder.WithClaudeMemory(idx, ct)
+			}
 		}
 		agent, choice, err := builder.BuildAgent(agentID)
 		if err != nil {
