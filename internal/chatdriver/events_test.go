@@ -2,6 +2,7 @@ package chatdriver
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -24,7 +25,7 @@ func (r *recordingSink) ToolStart(id, name, args string) {
 	r.calls = append(r.calls, "ToolStart("+id+","+name+","+args+")")
 }
 func (r *recordingSink) ToolResult(id, name, out string, isErr bool) {
-	r.calls = append(r.calls, "ToolResult("+id+","+name+","+out+")")
+	r.calls = append(r.calls, fmt.Sprintf("ToolResult(%s,%s,%s,%t)", id, name, out, isErr))
 }
 func (r *recordingSink) Error(kind, msg string) {
 	r.calls = append(r.calls, "Error("+kind+","+msg+")")
@@ -59,10 +60,12 @@ func TestEventAdapter_ToolAndError(t *testing.T) {
 	a := NewEventAdapter(sink)
 	a.Handle(event.Event{Kind: event.KindToolStart, ToolCallID: "c1", Tool: "remember", Args: []byte(`{"k":"v"}`)})
 	a.Handle(event.Event{Kind: event.KindToolEnd, ToolCallID: "c1", Tool: "remember", Result: []byte(`{"ok":true}`), IsError: false})
+	a.Handle(event.Event{Kind: event.KindToolEnd, ToolCallID: "c2", Tool: "remember", Result: []byte(`oops`), IsError: true})
 	a.Handle(event.Event{Kind: event.KindError, Err: errors.New("boom")})
 	want := []string{
 		`ToolStart(c1,remember,{"k":"v"})`,
-		`ToolResult(c1,remember,{"ok":true})`,
+		`ToolResult(c1,remember,{"ok":true},false)`,
+		`ToolResult(c2,remember,oops,true)`,
 		`Error(agent,boom)`,
 	}
 	if !reflect.DeepEqual(sink.calls, want) {

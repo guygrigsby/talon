@@ -52,9 +52,7 @@ func NewChatRunner(paths talonpath.Paths, mem *server.MemoryConfig, claudeMem Cl
 			builder = builder.WithSelectedModel(selectedModelID)
 		}
 		if mem != nil {
-			builder = builder.
-				WithMemory(mem.Store, mem.Recaller).
-				WithMemorySource(sessionKey, runID)
+			builder = builder.WithMemory(mem.Store, mem.Recaller)
 		}
 		// ADR 0013: read-only Claude-memory access, gated by
 		// memory.claude.*. Resolved per-run so the index reflects the
@@ -90,7 +88,15 @@ func NewChatRunner(paths talonpath.Paths, mem *server.MemoryConfig, claudeMem Cl
 			adapter.Handle(ev)
 		}
 		res, runErr := run.Wait()
+		// Prefer the assistant text from Wait's Result; fall back to the
+		// accumulated streamed deltas when Wait returns no assistant message,
+		// so FinalText (persisted to ChatStore) matches what the EventSink saw
+		// via adapter.Finalize (which falls back to the same accumulator).
 		final := lastAssistantText(res.Messages)
+		if final == "" {
+			acc, _ := adapter.Snapshot()
+			final = acc
+		}
 		adapter.Finalize(final)
 
 		usage := server.ChatUsage{}

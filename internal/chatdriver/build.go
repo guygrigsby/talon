@@ -35,7 +35,6 @@ type Builder struct {
 	// gateway builds the sidecar once and reuses across agents.
 	memStore    memory.Store
 	memRecaller memory.Recaller
-	source      memory.Source
 	// claudeIndex + claudeTool wire ADR 0013 read-only Claude-memory
 	// access. claudeIndex (when non-empty) is folded into the system
 	// prompt under a labeled section; claudeTool (when non-nil) is
@@ -88,14 +87,6 @@ func (b *Builder) WithMemory(store memory.Store, recaller memory.Recaller) *Buil
 func (b *Builder) WithClaudeMemory(index string, claudeTool tool.Tool) *Builder {
 	b.claudeIndex = index
 	b.claudeTool = claudeTool
-	return b
-}
-
-// WithMemorySource stamps memories saved through the remember tool
-// with Talon's session/run provenance.
-func (b *Builder) WithMemorySource(sessionID, messageID string) *Builder {
-	b.source.SessionID = sessionID
-	b.source.MessageID = messageID
 	return b
 }
 
