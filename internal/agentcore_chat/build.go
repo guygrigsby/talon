@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/guygrigsby/jess/memory"
+	"github.com/guygrigsby/jess/tool"
 	"github.com/tidwall/gjson"
 	"github.com/voocel/agentcore"
 	"github.com/voocel/agentcore/llm"
@@ -15,6 +16,18 @@ import (
 	"github.com/guygrigsby/talon/internal/agentcontext"
 	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/guygrigsby/talon/internal/toolaccess"
+)
+
+// Compile-time proof that agentcore/tools satisfy jess/tool.Tool — the port
+// depends on this so they can pass through jess.WithTools unchanged.
+var (
+	_ tool.Tool = tools.NewRead("", nil)
+	_ tool.Tool = tools.NewWrite("", nil)
+	_ tool.Tool = tools.NewEdit("", nil)
+	_ tool.Tool = tools.NewBash("")
+	_ tool.Tool = tools.NewGlob("")
+	_ tool.Tool = tools.NewGrep("")
+	_ tool.Tool = tools.NewLs("")
 )
 
 // Builder assembles an `agentcore.Agent` from talon's merged config.
