@@ -348,3 +348,19 @@ func composeSystemPrompt(parts ...string) string {
 	}
 	return strings.Join(kept, "\n\n")
 }
+
+// resolveModelMaxTokens reads the per-model `maxTokens` value from
+// the user's config. The lookup path is:
+//
+//	models.providers.<provider>.models[id==<modelID>].maxTokens
+//
+// Returns 0 when no entry is found — caller leaves the model
+// uncapped (or uses a sensible default).
+func resolveModelMaxTokens(merged []byte, providerName, modelID string) int {
+	path := fmt.Sprintf("models.providers.%s.models.#(id==%q).maxTokens", providerName, modelID)
+	v := gjson.GetBytes(merged, path)
+	if !v.Exists() {
+		return 0
+	}
+	return int(v.Int())
+}
