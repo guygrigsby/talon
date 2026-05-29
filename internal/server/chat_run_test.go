@@ -7,47 +7,47 @@ import (
 	"time"
 )
 
-func TestShouldUseAgentcoreFor_RoutingMatrix(t *testing.T) {
-	// h.agentcoreRun is set so the no-runner short-circuit doesn't fire.
-	h := &ChatHandler{agentcoreRun: noopRunner}
+func TestShouldUseChatRunnerFor_RoutingMatrix(t *testing.T) {
+	// h.chatRun is set so the no-runner short-circuit doesn't fire.
+	h := &ChatHandler{chatRun: noopRunner}
 
 	cases := []struct {
 		modelID  string
-		wantPath string // "agentcore" or "legacy"
+		wantPath string // "chat-runner" or "legacy"
 	}{
-		{"openai/gpt-4o", "agentcore"},
-		{"openai/gpt-4o-mini", "agentcore"},
-		{"openai/gpt-4.1-mini", "agentcore"},
-		{"openai/gpt-5", "agentcore"},
-		{"openai/gpt-5.4", "agentcore"},
-		{"openai/gpt-5.4-mini", "agentcore"},
-		{"openai/gpt-5.4-nano", "agentcore"},
-		{"openai/gpt-5.5", "agentcore"},
-		{"anthropic/claude-opus-4-7", "agentcore"},
-		{"anthropic/claude-haiku-4-5", "agentcore"},
-		{"deepseek/deepseek-chat", "agentcore"},
-		{"deepseek/deepseek-reasoner", "agentcore"},
-		{"mistral/mistral-large-3-25-12", "agentcore"},
-		{"mistral/mistral-small-4-0-26-03", "agentcore"},
-		{"mlx/llama-3-8b", "agentcore"},
-		{"lmstudio/qwen-2.5-32b", "agentcore"},
-		{"ollama/llama3", "agentcore"},
+		{"openai/gpt-4o", "chat-runner"},
+		{"openai/gpt-4o-mini", "chat-runner"},
+		{"openai/gpt-4.1-mini", "chat-runner"},
+		{"openai/gpt-5", "chat-runner"},
+		{"openai/gpt-5.4", "chat-runner"},
+		{"openai/gpt-5.4-mini", "chat-runner"},
+		{"openai/gpt-5.4-nano", "chat-runner"},
+		{"openai/gpt-5.5", "chat-runner"},
+		{"anthropic/claude-opus-4-7", "chat-runner"},
+		{"anthropic/claude-haiku-4-5", "chat-runner"},
+		{"deepseek/deepseek-chat", "chat-runner"},
+		{"deepseek/deepseek-reasoner", "chat-runner"},
+		{"mistral/mistral-large-3-25-12", "chat-runner"},
+		{"mistral/mistral-small-4-0-26-03", "chat-runner"},
+		{"mlx/llama-3-8b", "chat-runner"},
+		{"lmstudio/qwen-2.5-32b", "chat-runner"},
+		{"ollama/llama3", "chat-runner"},
 	}
 	for _, c := range cases {
 		got := "legacy"
-		if h.shouldUseAgentcoreFor(c.modelID) {
-			got = "agentcore"
+		if h.shouldUseChatRunnerFor(c.modelID) {
+			got = "chat-runner"
 		}
 		if got != c.wantPath {
-			t.Errorf("shouldUseAgentcoreFor(%q) = %s, want %s", c.modelID, got, c.wantPath)
+			t.Errorf("shouldUseChatRunnerFor(%q) = %s, want %s", c.modelID, got, c.wantPath)
 		}
 	}
 }
 
-func TestShouldUseAgentcoreFor_NoRunnerWiredAlwaysLegacy(t *testing.T) {
-	h := &ChatHandler{agentcoreRun: nil}
+func TestShouldUseChatRunnerFor_NoRunnerWiredAlwaysLegacy(t *testing.T) {
+	h := &ChatHandler{chatRun: nil}
 	for _, m := range []string{"openai/gpt-4o-mini", "deepseek/deepseek-chat", "mistral/something"} {
-		if h.shouldUseAgentcoreFor(m) {
+		if h.shouldUseChatRunnerFor(m) {
 			t.Errorf("no runner wired → should be legacy for %q", m)
 		}
 	}
@@ -69,7 +69,7 @@ func TestProviderModelID_ProviderExtraction(t *testing.T) {
 	}
 }
 
-func TestRunStreamAgentcorePassesSessionSelectedModel(t *testing.T) {
+func TestRunChatStreamPassesSessionSelectedModel(t *testing.T) {
 	const (
 		sessionKey = "agent:main:web"
 		override   = "deepseek/deepseek-chat"
@@ -86,7 +86,7 @@ func TestRunStreamAgentcorePassesSessionSelectedModel(t *testing.T) {
 		sinks:         NewSinkRegistry(),
 		runs:          make(map[string]string),
 		StreamTimeout: time.Second,
-		agentcoreRun: func(
+		chatRun: func(
 			_ context.Context,
 			_ string, _ string, _ string, _ string, selectedModelID string,
 			_ []ChatMessage,
@@ -94,13 +94,13 @@ func TestRunStreamAgentcorePassesSessionSelectedModel(t *testing.T) {
 			_ func(string, string, string),
 			_ func(string, string, string, bool),
 			_ func(int, string, string),
-		) (AgentcoreRunResult, error) {
+		) (ChatRunResult, error) {
 			gotOverride = selectedModelID
-			return AgentcoreRunResult{FinalText: "done"}, nil
+			return ChatRunResult{FinalText: "done"}, nil
 		},
 	}
 
-	h.runStreamAgentcore("run_1", sessionKey, "main", "hello", nil, sessionKey+"|run_1")
+	h.runChatStream("run_1", sessionKey, "main", "hello", nil, sessionKey+"|run_1")
 	if gotOverride != override {
 		t.Fatalf("model override = %q, want %q", gotOverride, override)
 	}
@@ -110,7 +110,7 @@ func TestRunStreamAgentcorePassesSessionSelectedModel(t *testing.T) {
 	}
 }
 
-func TestHandleSendViaAgentcorePassesPriorHistory(t *testing.T) {
+func TestHandleSendViaChatRunnerPassesPriorHistory(t *testing.T) {
 	const sessionKey = "agent:main:web"
 	store := NewChatStore()
 	store.Append(sessionKey, "user", "my favorite color is blue")
@@ -126,7 +126,7 @@ func TestHandleSendViaAgentcorePassesPriorHistory(t *testing.T) {
 		sinks:         NewSinkRegistry(),
 		runs:          make(map[string]string),
 		StreamTimeout: time.Second,
-		agentcoreRun: func(
+		chatRun: func(
 			_ context.Context,
 			_ string, _ string, _ string, userText string, _ string,
 			priorHistory []ChatMessage,
@@ -134,22 +134,22 @@ func TestHandleSendViaAgentcorePassesPriorHistory(t *testing.T) {
 			_ func(string, string, string),
 			_ func(string, string, string, bool),
 			_ func(int, string, string),
-		) (AgentcoreRunResult, error) {
+		) (ChatRunResult, error) {
 			got <- captured{
 				userText: userText,
 				prior:    append([]ChatMessage(nil), priorHistory...),
 			}
-			return AgentcoreRunResult{}, nil
+			return ChatRunResult{}, nil
 		},
 	}
 
-	_, ferr := h.handleSendViaAgentcore(t.Context(), chatSendParams{
+	_, ferr := h.handleSendViaChatRunner(t.Context(), chatSendParams{
 		SessionKey:     sessionKey,
 		Message:        "what color did I say?",
 		IdempotencyKey: "run_1",
 	}, "main")
 	if ferr != nil {
-		t.Fatalf("handleSendViaAgentcore error: %+v", ferr)
+		t.Fatalf("handleSendViaChatRunner error: %+v", ferr)
 	}
 
 	select {
@@ -167,7 +167,7 @@ func TestHandleSendViaAgentcorePassesPriorHistory(t *testing.T) {
 			t.Fatalf("prior[1] = %+v", cap.prior[1])
 		}
 	case <-time.After(time.Second):
-		t.Fatal("agentcore runner was not called")
+		t.Fatal("chat runner was not called")
 	}
 
 	history := store.Snapshot(sessionKey)
@@ -176,7 +176,7 @@ func TestHandleSendViaAgentcorePassesPriorHistory(t *testing.T) {
 	}
 }
 
-func TestRunStreamAgentcoreRecordsUsageCost(t *testing.T) {
+func TestRunChatStreamRecordsUsageCost(t *testing.T) {
 	paths := readFixture(t, `{
 		"agents":{"defaults":{"dailyUsdCap":1.00}},
 		"models":{"deepseek/deepseek-chat":{"priceUsdPer1M":{"in":100.0,"out":100.0}}}
@@ -188,7 +188,7 @@ func TestRunStreamAgentcoreRecordsUsageCost(t *testing.T) {
 		runs:          make(map[string]string),
 		StreamTimeout: time.Second,
 		costs:         costs,
-		agentcoreRun: func(
+		chatRun: func(
 			_ context.Context,
 			_ string, _ string, _ string, _ string, _ string,
 			_ []ChatMessage,
@@ -196,21 +196,21 @@ func TestRunStreamAgentcoreRecordsUsageCost(t *testing.T) {
 			_ func(string, string, string),
 			_ func(string, string, string, bool),
 			_ func(int, string, string),
-		) (AgentcoreRunResult, error) {
-			return AgentcoreRunResult{
+		) (ChatRunResult, error) {
+			return ChatRunResult{
 				ModelID: "deepseek/deepseek-chat",
-				Usage:   AgentcoreUsage{InputTokens: 20_000},
+				Usage:   ChatUsage{InputTokens: 20_000},
 			}, nil
 		},
 	}
 
-	h.runStreamAgentcore("run_1", "agent:main:web", "main", "hello", nil, "agent:main:web|run_1")
+	h.runChatStream("run_1", "agent:main:web", "main", "hello", nil, "agent:main:web|run_1")
 	if err := costs.Allow("main"); err == nil {
-		t.Fatal("expected recorded agentcore usage to trip the daily cost cap")
+		t.Fatal("expected recorded chat runner usage to trip the daily cost cap")
 	}
 }
 
-func TestRunStreamAgentcorePreservesToolResultErrorFlag(t *testing.T) {
+func TestRunChatStreamPreservesToolResultErrorFlag(t *testing.T) {
 	const sessionKey = "agent:main:web"
 	sinks := NewSinkRegistry()
 	sink := &captureSink{}
@@ -221,7 +221,7 @@ func TestRunStreamAgentcorePreservesToolResultErrorFlag(t *testing.T) {
 		sinks:         sinks,
 		runs:          make(map[string]string),
 		StreamTimeout: time.Second,
-		agentcoreRun: func(
+		chatRun: func(
 			_ context.Context,
 			_ string, _ string, _ string, _ string, _ string,
 			_ []ChatMessage,
@@ -229,13 +229,13 @@ func TestRunStreamAgentcorePreservesToolResultErrorFlag(t *testing.T) {
 			_ func(string, string, string),
 			emitToolResult func(string, string, string, bool),
 			_ func(int, string, string),
-		) (AgentcoreRunResult, error) {
+		) (ChatRunResult, error) {
 			emitToolResult("call_a", "bash", "failed", true)
-			return AgentcoreRunResult{}, nil
+			return ChatRunResult{}, nil
 		},
 	}
 
-	h.runStreamAgentcore("run_1", sessionKey, "main", "hello", nil, sessionKey+"|run_1")
+	h.runChatStream("run_1", sessionKey, "main", "hello", nil, sessionKey+"|run_1")
 	if sink.count() != 1 {
 		t.Fatalf("got %d events, want 1", sink.count())
 	}
@@ -248,9 +248,9 @@ func TestRunStreamAgentcorePreservesToolResultErrorFlag(t *testing.T) {
 	}
 }
 
-// noopRunner is a no-op AgentcoreRunFn so tests can populate
-// h.agentcoreRun without doing real work.
-var noopRunner AgentcoreRunFn = func(
+// noopRunner is a no-op ChatRunFn so tests can populate
+// h.chatRun without doing real work.
+var noopRunner ChatRunFn = func(
 	_ context.Context,
 	_ string, _ string, _ string, _ string, _ string,
 	_ []ChatMessage,
@@ -258,6 +258,6 @@ var noopRunner AgentcoreRunFn = func(
 	_ func(string, string, string),
 	_ func(string, string, string, bool),
 	_ func(int, string, string),
-) (AgentcoreRunResult, error) {
-	return AgentcoreRunResult{}, nil
+) (ChatRunResult, error) {
+	return ChatRunResult{}, nil
 }

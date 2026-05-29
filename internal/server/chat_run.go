@@ -1,11 +1,11 @@
-// Phase 3 of docs/migration-agentcore.md — gateway wiring for the
-// agentcore-based chat handler in internal/agentcore_chat.
+// chat_run.go — goroutine driver for the jess-backed chat runner.
 //
-// Routing is automatic: if cmd/talon injects an AgentcoreRunFn at
-// gateway construction, chat.send uses agentcore for every provider.
+// Routing is automatic: if cmd/talon injects a ChatRunFn at gateway
+// construction, chat.send uses the jess-backed chat driver for every
+// provider.
 //
-// cmd/talon injects the AgentcoreRunFn at gateway construction so
-// internal/server doesn't take a direct dependency on agentcore.
+// cmd/talon injects the ChatRunFn at gateway construction so
+// internal/server doesn't take a transitive dep on the chat driver.
 
 package server
 
@@ -56,23 +56,24 @@ func (m providerModelID) Provider() string {
 	return ""
 }
 
-// shouldUseAgentcoreFor reports whether this handler can route a
-// model through the agentcore path. The model id is accepted for the
-// call-site's benefit, but provider-specific routing exceptions live
-// below agentcore now; Talon no longer keeps a direct-provider bypass.
-func (h *ChatHandler) shouldUseAgentcoreFor(modelID string) bool {
+// shouldUseChatRunnerFor reports whether this handler can route a
+// model through the jess-backed chat runner. The model id is accepted
+// for the call-site's benefit, but provider-specific routing
+// exceptions live below the chat driver now; Talon no longer keeps a
+// direct-provider bypass.
+func (h *ChatHandler) shouldUseChatRunnerFor(modelID string) bool {
 	_ = modelID
-	return h.agentcoreRun != nil
+	return h.chatRun != nil
 }
 
-// handleSendViaAgentcore is the agentcore-dispatch entry. Same
-// public contract as handleSend (returns {runId} immediately, runs
-// streaming in a goroutine).
+// handleSendViaChatRunner is the jess-backed chat driver entry point.
+// Same public contract as handleSend (returns {runId} immediately,
+// runs streaming in a goroutine).
 //
 // Differences from the legacy runStream:
-//   - Provider/model construction lives in agentcore_chat; this
+//   - Provider/model construction lives in the chat driver; this
 //     layer only forwards the per-session model override.
-//   - No tool/runner wiring at this level — agentcore_chat builds
+//   - No tool/runner wiring at this level — the chat driver builds
 //     its own tool set.
 //   - History flows through ChatStore the same way (user message
 //     appended pre-stream; assistant message appended post-stream
@@ -81,7 +82,7 @@ func (h *ChatHandler) shouldUseAgentcoreFor(modelID string) bool {
 // Cost cap and sessions still apply: the cap check ran in
 // handleSend; per-session model override is read here so the UI's
 // picker continues to drive the model choice.
-func (h *ChatHandler) handleSendViaAgentcore(ctx context.Context, p chatSendParams, agentID string) (any, *FrameError) {
+func (h *ChatHandler) handleSendViaChatRunner(ctx context.Context, p chatSendParams, agentID string) (any, *FrameError) {
 	runID := p.IdempotencyKey
 	if runID == "" {
 		newID, err := newRunID()
@@ -103,16 +104,16 @@ func (h *ChatHandler) handleSendViaAgentcore(ctx context.Context, p chatSendPara
 	priorHistory := h.store.Snapshot(p.SessionKey)
 	h.store.Append(p.SessionKey, "user", p.Message)
 
-	go h.runStreamAgentcore(runID, p.SessionKey, agentID, p.Message, priorHistory, runKey)
+	go h.runChatStream(runID, p.SessionKey, agentID, p.Message, priorHistory, runKey)
 
 	return map[string]any{"runId": runID}, nil
 }
 
-// runStreamAgentcore is the goroutine driver for the agentcore
-// path. Mirrors runStream's runs-map cleanup + StreamTimeout
-// scaffolding, then delegates the actual prompt to the injected
-// AgentcoreRunFn.
-func (h *ChatHandler) runStreamAgentcore(runID, sessionKey, agentID, userText string, priorHistory []ChatMessage, runKey string) {
+// runChatStream is the goroutine driver for the jess-backed chat
+// runner path. Mirrors the legacy runStream's runs-map cleanup +
+// StreamTimeout scaffolding, then delegates the actual prompt to the
+// injected ChatRunFn.
+func (h *ChatHandler) runChatStream(runID, sessionKey, agentID, userText string, priorHistory []ChatMessage, runKey string) {
 	defer func() {
 		if runKey != "" {
 			h.runsMu.Lock()
@@ -198,7 +199,7 @@ func (h *ChatHandler) runStreamAgentcore(runID, sessionKey, agentID, userText st
 		emitError(s, kind, msg)
 	}
 
-	result, err := h.agentcoreRun(
+	result, err := h.chatRun(
 		ctx,
 		agentID, sessionKey, runID, userText, selectedModelID,
 		priorHistory,
@@ -217,13 +218,13 @@ func (h *ChatHandler) runStreamAgentcore(runID, sessionKey, agentID, userText st
 		// store so the next turn's history sees nothing partial.
 		return
 	}
-	h.recordAgentcoreUsage(agentID, sessionKey, result)
+	h.recordChatUsage(agentID, sessionKey, result)
 	if result.FinalText != "" {
 		h.store.Append(sessionKey, "assistant", result.FinalText)
 	}
 }
 
-func (h *ChatHandler) recordAgentcoreUsage(agentID, sessionKey string, result AgentcoreRunResult) {
+func (h *ChatHandler) recordChatUsage(agentID, sessionKey string, result ChatRunResult) {
 	if h.costs == nil || result.Usage.isZero() {
 		return
 	}

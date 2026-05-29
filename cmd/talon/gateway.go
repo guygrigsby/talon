@@ -298,17 +298,13 @@ func gatewayRunCmd() *cobra.Command {
 				)
 			}
 
-			// Agentcore chat dispatch (Phase 3 of migration plan).
-			// Wires the alternative chat-loop path through
-			// internal/agentcore_chat. Selected per-call by model
-			// provider; OpenAI and Anthropic currently stay on the
-			// host provider path. Memory
-			// sidecar (when present) is reused — same store +
-			// recaller back the jess Remember/Recall tools the
-			// agentcore agent sees.
+			// Jess-backed chat driver dispatch. Wires the chat-driver
+			// path through internal/chatdriver. Memory sidecar (when
+			// present) is reused — same store + recaller back the jess
+			// Remember/Recall tools the chat driver agent sees.
 			srv.ChatHandler().
 				WithPaths(paths).
-				WithAgentcoreRunner(buildAgentcoreRunner(paths, mem))
+				WithChatRunner(buildChatRunner(paths, mem))
 
 			// Agent-action audit log (ADR 0011): persist a redacted,
 			// correlated trail of tool calls/results/errors/turns to

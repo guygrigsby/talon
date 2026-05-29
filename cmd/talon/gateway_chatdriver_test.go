@@ -10,9 +10,9 @@ import (
 	"github.com/guygrigsby/talon/internal/server"
 )
 
-func TestAgentcoreHistoryFromChatStore(t *testing.T) {
+func TestChatHistoryFromChatStore(t *testing.T) {
 	at := time.Unix(123, 0)
-	got := agentcoreHistoryFromChatStore([]server.ChatMessage{
+	got := chatHistoryFromChatStore([]server.ChatMessage{
 		{Role: "user", Content: "remember blue", At: at},
 		{
 			Role:    "assistant",

@@ -21,16 +21,16 @@ import (
 	"github.com/guygrigsby/talon/internal/toolaccess"
 )
 
-// AgentcoreRunFn is the function signature `WithAgentcoreRunner`
-// expects. Implemented by cmd/talon so that internal/server
-// doesn't take a direct dependency on internal/agentcore_chat
-// (which transitively imports agentcore + LiteLLM — heavy and
-// orthogonal to the gateway's other responsibilities).
+// ChatRunFn is the function signature `WithChatRunner` expects.
+// Implemented by cmd/talon so that internal/server doesn't take a
+// direct dependency on the chat driver (which transitively imports
+// agentcore + LiteLLM — heavy and orthogonal to the gateway's other
+// responsibilities).
 //
 // Returns completion metadata and any error. Streaming happens
 // through the supplied emit closures; one closure per event kind
-// matches the legacy ChatHandler.emit* surface.
-type AgentcoreRunFn func(
+// matches the ChatHandler.emit* surface.
+type ChatRunFn func(
 	ctx context.Context,
 	agentID, sessionKey, runID, userText, selectedModelID string,
 	priorHistory []ChatMessage,
@@ -38,25 +38,25 @@ type AgentcoreRunFn func(
 	emitToolStart func(toolCallID, name, args string),
 	emitToolResult func(toolCallID, name, output string, isErr bool),
 	emitError func(seq int, kind, msg string),
-) (AgentcoreRunResult, error)
+) (ChatRunResult, error)
 
-// AgentcoreRunResult is the small metadata surface internal/server
-// needs back from cmd/talon's agentcore runner without importing
-// agentcore directly.
-type AgentcoreRunResult struct {
+// ChatRunResult is the small metadata surface internal/server needs
+// back from the jess-backed chat runner without importing the chat
+// driver directly.
+type ChatRunResult struct {
 	FinalText string
 	ModelID   string
-	Usage     AgentcoreUsage
+	Usage     ChatUsage
 }
 
-// AgentcoreUsage mirrors the token fields Talon accounts for in
-// the legacy provider path.
-type AgentcoreUsage struct {
+// ChatUsage mirrors the token fields Talon accounts for in the
+// chat driver path.
+type ChatUsage struct {
 	InputTokens  int
 	OutputTokens int
 }
 
-func (u AgentcoreUsage) isZero() bool {
+func (u ChatUsage) isZero() bool {
 	return u.InputTokens == 0 && u.OutputTokens == 0
 }
 
@@ -242,12 +242,11 @@ type ChatHandler struct {
 	sinks     *SinkRegistry   // optional fan-out registry; emit broadcasts in addition to the direct WS push
 	paths     talonpath.Paths // injected for gateway features that need merged config
 
-	// agentcoreRun is the alternative chat-dispatch path that goes
-	// through internal/agentcore_chat. handleSend selects it by
-	// provider when present. Settable via WithAgentcoreRunner so
-	// cmd/talon wires it without server taking a direct dep on
-	// internal/agentcore_chat.
-	agentcoreRun AgentcoreRunFn
+	// chatRun is the jess-backed chat-dispatch path. handleSend
+	// selects it when present. Settable via WithChatRunner so
+	// cmd/talon wires it without server taking a direct dep on the
+	// chat driver.
+	chatRun ChatRunFn
 
 	// audit, when set, persists a redacted, correlated trail of agent
 	// actions (tool calls/results, errors, turn boundaries) to disk via
@@ -352,12 +351,11 @@ func (h *ChatHandler) WithPaths(paths talonpath.Paths) *ChatHandler {
 	return h
 }
 
-// WithAgentcoreRunner wires the alternative chat-dispatch path
-// through internal/agentcore_chat. handleSend selects this path for
-// every provider when the runner is present; without it all sends
-// stay on the temporary direct provider path.
-func (h *ChatHandler) WithAgentcoreRunner(fn AgentcoreRunFn) *ChatHandler {
-	h.agentcoreRun = fn
+// WithChatRunner wires the jess-backed chat-dispatch path.
+// handleSend selects this path for every provider when the runner
+// is present; without it all sends stay on the direct provider path.
+func (h *ChatHandler) WithChatRunner(fn ChatRunFn) *ChatHandler {
+	h.chatRun = fn
 	return h
 }
 
@@ -570,12 +568,12 @@ func (h *ChatHandler) handleSend(ctx context.Context, hc HandlerCtx, params json
 		return nil, &FrameError{Code: ErrCodeBadRequest, Message: "chat.send: " + err.Error()}
 	}
 
-	// agentcore dispatch (Phase 3 of the migration plan). When the
-	// gateway wired a runner, every provider goes through
-	// internal/agentcore_chat. The model lookup remains here so
-	// per-session overrides select the same model the runner will use.
-	if model, err := h.resolveModelForRouting(agentID, p.SessionKey); err == nil && h.shouldUseAgentcoreFor(model.String()) {
-		return h.handleSendViaAgentcore(ctx, p, agentID)
+	// Chat-driver dispatch. When the gateway wired a runner, every
+	// provider goes through the jess-backed chat driver. The model
+	// lookup remains here so per-session overrides select the same
+	// model the runner will use.
+	if model, err := h.resolveModelForRouting(agentID, p.SessionKey); err == nil && h.shouldUseChatRunnerFor(model.String()) {
+		return h.handleSendViaChatRunner(ctx, p, agentID)
 	}
 
 	model, err := h.resolver.PrimaryModel(agentID)

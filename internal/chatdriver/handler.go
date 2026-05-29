@@ -17,7 +17,7 @@ import (
 // history lives in the existing ChatStore, not the agent).
 //
 // This remains a package-level entry point for direct callers; the
-// gateway path injects BuildAgent through server.AgentcoreRunFn.
+// gateway path injects BuildAgent through server.ChatRunFn.
 type Handler struct {
 	paths talonpath.Paths
 	// configReader returns the merged config bytes. Injected so

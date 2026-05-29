@@ -1,9 +1,8 @@
-// buildAgentcoreRunner returns the AgentcoreRunFn the server's
-// ChatHandler invokes for providers routed through agentcore.
-// Lives in cmd/talon (not internal/server) so internal/server
-// doesn't take a transitive dep on agentcore + LiteLLM. The fn
-// captures the gateway's Paths so each invocation reads fresh
-// merged config.
+// buildChatRunner returns the ChatRunFn the server's ChatHandler invokes
+// for providers routed through the jess-backed chat driver.
+// Lives in cmd/talon (not internal/server) so internal/server doesn't
+// take a transitive dep on the chat driver + LiteLLM. The fn captures
+// the gateway's Paths so each invocation reads fresh merged config.
 
 package main
 
@@ -21,7 +20,7 @@ import (
 	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
-func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) server.AgentcoreRunFn {
+func buildChatRunner(paths talonpath.Paths, mem *server.MemoryConfig) server.ChatRunFn {
 	return func(
 		ctx context.Context,
 		agentID, sessionKey, runID, userText, selectedModelID string,
@@ -30,7 +29,7 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 		emitToolStart func(toolCallID, name, args string),
 		emitToolResult func(toolCallID, name, output string, isErr bool),
 		emitError func(seq int, kind, msg string),
-	) (server.AgentcoreRunResult, error) {
+	) (server.ChatRunResult, error) {
 		sink := &gatewayEventSink{
 			text:       emitText,
 			toolStart:  emitToolStart,
@@ -41,7 +40,7 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 		merged, err := config.MergedBytes(paths)
 		if err != nil {
 			sink.Error("merged-config", err.Error())
-			return server.AgentcoreRunResult{}, fmt.Errorf("read merged config: %w", err)
+			return server.ChatRunResult{}, fmt.Errorf("read merged config: %w", err)
 		}
 
 		builder := chatdriver.NewBuilder(merged, paths)
@@ -57,23 +56,23 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 		agent, choice, err := builder.BuildAgent(agentID)
 		if err != nil {
 			sink.Error("build-agent", err.Error())
-			return server.AgentcoreRunResult{}, err
+			return server.ChatRunResult{}, err
 		}
 
 		adapter := chatdriver.NewEventAdapter(sink)
 		unsub := agent.Subscribe(func(ev agentcore.Event) { adapter.Handle(ev) })
 		defer unsub()
 
-		if history := agentcoreHistoryFromChatStore(priorHistory); len(history) > 0 {
+		if history := chatHistoryFromChatStore(priorHistory); len(history) > 0 {
 			if err := agent.SetMessages(history); err != nil {
 				sink.Error("seed-history", err.Error())
-				return server.AgentcoreRunResult{}, fmt.Errorf("seed history: %w", err)
+				return server.ChatRunResult{}, fmt.Errorf("seed history: %w", err)
 			}
 		}
 
 		if err := agent.Prompt(userText); err != nil {
 			sink.Error("prompt", err.Error())
-			return server.AgentcoreRunResult{}, err
+			return server.ChatRunResult{}, err
 		}
 
 		done := make(chan struct{})
@@ -86,15 +85,15 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 		case <-ctx.Done():
 			agent.Abort()
 			<-done
-			return server.AgentcoreRunResult{}, ctx.Err()
+			return server.ChatRunResult{}, ctx.Err()
 		}
 
 		final, _ := adapter.Snapshot()
 		usage := agent.TotalUsage()
-		return server.AgentcoreRunResult{
+		return server.ChatRunResult{
 			FinalText: final,
 			ModelID:   choice.ID,
-			Usage: server.AgentcoreUsage{
+			Usage: server.ChatUsage{
 				InputTokens:  usage.Input,
 				OutputTokens: usage.Output,
 			},
@@ -102,7 +101,7 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 	}
 }
 
-func agentcoreHistoryFromChatStore(history []server.ChatMessage) []agentcore.AgentMessage {
+func chatHistoryFromChatStore(history []server.ChatMessage) []agentcore.AgentMessage {
 	out := make([]agentcore.AgentMessage, 0, len(history))
 	for _, m := range history {
 		switch m.Role {
@@ -148,11 +147,11 @@ func agentcoreHistoryFromChatStore(history []server.ChatMessage) []agentcore.Age
 	return out
 }
 
-// gatewayEventSink adapts chatdriver.EventSink onto the four
-// emit closures the server-side AgentcoreRunFn contract exposes.
-// One per chat.send goroutine; no concurrent calls expected, but
-// the underlying emit functions are themselves serialized by the
-// server's seq counter.
+// gatewayEventSink adapts chatdriver.EventSink onto the four emit
+// closures the server-side ChatRunFn contract exposes. One per
+// chat.send goroutine; no concurrent calls expected, but the
+// underlying emit functions are themselves serialized by the server's
+// seq counter.
 type gatewayEventSink struct {
 	text       func(seq int, state, full, delta string)
 	toolStart  func(id, name, args string)
