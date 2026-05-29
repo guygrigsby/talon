@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/voocel/agentcore/schema"
+	"github.com/guygrigsby/jess/tool"
 
 	"github.com/guygrigsby/talon/internal/agentcontext"
 )
@@ -20,29 +20,63 @@ type finishOnboardingTool struct {
 	dir string
 }
 
+// Compile-time assertion that finishOnboardingTool satisfies the jess
+// tool.Tool interface.
+var _ tool.Tool = (*finishOnboardingTool)(nil)
+
 func newFinishOnboardingTool(dir string) *finishOnboardingTool {
 	return &finishOnboardingTool{dir: dir}
 }
 
-func (t *finishOnboardingTool) Name() string  { return "finish_onboarding" }
-func (t *finishOnboardingTool) Label() string { return "Finish Onboarding" }
+func (t *finishOnboardingTool) Name() string { return "finish_onboarding" }
 
 func (t *finishOnboardingTool) Description() string {
 	return "Complete first-run setup. Call this once you've interviewed the user and know who you should be and who they are. Writes IDENTITY.md and USER.md from the values you pass and clears the onboarding state. agentName is required; pass whatever else you learned."
 }
 
 func (t *finishOnboardingTool) Schema() map[string]any {
-	return schema.Object(
-		schema.Property("agentName", schema.String("The name the user wants to call you")).Required(),
-		schema.Property("creature", schema.String("What kind of assistant you are, e.g. 'automation raven'")),
-		schema.Property("vibe", schema.String("Your personality and tone in a few words")),
-		schema.Property("emoji", schema.String("An emoji that represents you")),
-		schema.Property("avatar", schema.String("Optional avatar: workspace-relative path, URL, or data URI")),
-		schema.Property("userName", schema.String("The user's name")),
-		schema.Property("userCall", schema.String("What you should call the user")),
-		schema.Property("userTimezone", schema.String("The user's timezone, e.g. America/Denver")),
-		schema.Property("userNotes", schema.String("How the user likes to work; preferences worth remembering")),
-	)
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"agentName": map[string]any{
+				"type":        "string",
+				"description": "The name the user wants to call you",
+			},
+			"creature": map[string]any{
+				"type":        "string",
+				"description": "What kind of assistant you are, e.g. 'automation raven'",
+			},
+			"vibe": map[string]any{
+				"type":        "string",
+				"description": "Your personality and tone in a few words",
+			},
+			"emoji": map[string]any{
+				"type":        "string",
+				"description": "An emoji that represents you",
+			},
+			"avatar": map[string]any{
+				"type":        "string",
+				"description": "Optional avatar: workspace-relative path, URL, or data URI",
+			},
+			"userName": map[string]any{
+				"type":        "string",
+				"description": "The user's name",
+			},
+			"userCall": map[string]any{
+				"type":        "string",
+				"description": "What you should call the user",
+			},
+			"userTimezone": map[string]any{
+				"type":        "string",
+				"description": "The user's timezone, e.g. America/Denver",
+			},
+			"userNotes": map[string]any{
+				"type":        "string",
+				"description": "How the user likes to work; preferences worth remembering",
+			},
+		},
+		"required": []string{"agentName"},
+	}
 }
 
 type onboardingArgs struct {
