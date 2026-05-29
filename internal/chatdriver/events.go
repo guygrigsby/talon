@@ -1,4 +1,4 @@
-package agentcore_chat
+package chatdriver
 
 import (
 	"strings"

@@ -15,7 +15,7 @@ import (
 
 	"github.com/voocel/agentcore"
 
-	"github.com/guygrigsby/talon/internal/agentcore_chat"
+	"github.com/guygrigsby/talon/internal/chatdriver"
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/server"
 	"github.com/guygrigsby/talon/internal/talonpath"
@@ -44,7 +44,7 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 			return server.AgentcoreRunResult{}, fmt.Errorf("read merged config: %w", err)
 		}
 
-		builder := agentcore_chat.NewBuilder(merged, paths)
+		builder := chatdriver.NewBuilder(merged, paths)
 		if selectedModelID != "" {
 			builder = builder.WithSelectedModel(selectedModelID)
 		}
@@ -60,7 +60,7 @@ func buildAgentcoreRunner(paths talonpath.Paths, mem *server.MemoryConfig) serve
 			return server.AgentcoreRunResult{}, err
 		}
 
-		adapter := agentcore_chat.NewEventAdapter(sink)
+		adapter := chatdriver.NewEventAdapter(sink)
 		unsub := agent.Subscribe(func(ev agentcore.Event) { adapter.Handle(ev) })
 		defer unsub()
 
@@ -148,7 +148,7 @@ func agentcoreHistoryFromChatStore(history []server.ChatMessage) []agentcore.Age
 	return out
 }
 
-// gatewayEventSink adapts agentcore_chat.EventSink onto the four
+// gatewayEventSink adapts chatdriver.EventSink onto the four
 // emit closures the server-side AgentcoreRunFn contract exposes.
 // One per chat.send goroutine; no concurrent calls expected, but
 // the underlying emit functions are themselves serialized by the

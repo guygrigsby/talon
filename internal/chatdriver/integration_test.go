@@ -4,14 +4,14 @@
 // tagged so they don't run on `go test ./...` — each test hits a
 // real provider API and costs real money (cents). Invoke with:
 //
-//	go test -tags=integration ./internal/agentcore_chat/ -v
+//	go test -tags=integration ./internal/chatdriver/ -v
 //	  -run TestIntegration -timeout 120s
 //
 // Tests skip themselves when their provider's auth can't be
 // resolved (no op-plugin / keychain / env var). This means CI
 // without secrets just sees them as skipped, not failed.
 
-package agentcore_chat
+package chatdriver
 
 import (
 	"context"

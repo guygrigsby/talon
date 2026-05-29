@@ -1,4 +1,4 @@
-package agentcore_chat
+package chatdriver
 
 import (
 	"context"
@@ -69,10 +69,10 @@ type RunResult struct {
 // boundary; multi-turn context is supplied via RunRequest.History.
 func (h *Handler) Run(ctx context.Context, req RunRequest) (*RunResult, error) {
 	if req.Sink == nil {
-		return nil, fmt.Errorf("agentcore_chat: RunRequest.Sink is required")
+		return nil, fmt.Errorf("chatdriver: RunRequest.Sink is required")
 	}
 	if req.Prompt == "" {
-		return nil, fmt.Errorf("agentcore_chat: RunRequest.Prompt is required")
+		return nil, fmt.Errorf("chatdriver: RunRequest.Prompt is required")
 	}
 
 	merged, err := h.configReader()
