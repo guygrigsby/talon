@@ -195,8 +195,8 @@ github.com/google/nftables v0.2.1-0.20240414091927-5e242ec57806 h1:wG8RYIyctLhdF
 github.com/google/nftables v0.2.1-0.20240414091927-5e242ec57806/go.mod h1:Beg6V6zZ3oEn0JuiUQ4wqwuyqqzasOltcoXPtgLbFp4=
 github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
-github.com/guygrigsby/jess v0.0.0-20260527041307-9dbb91318a5b h1:fd5IYRzh0Zmo8hh4oHsknllvF1CVFCD4sezCzDDu3a8=
-github.com/guygrigsby/jess v0.0.0-20260527041307-9dbb91318a5b/go.mod h1:fLDjAtCgISIWK2m3kQsZ2HQrFblxzQwmpY+TF8r7nzA=
+github.com/guygrigsby/jess v0.0.0-20260529202356-1ac470d8fdc7 h1:a5pUpo+GlPzSqR7Y5wbrcIwerccoZHt1Md2njyCfk/0=
+github.com/guygrigsby/jess v0.0.0-20260529202356-1ac470d8fdc7/go.mod h1:mlhQDMGeJQNPNfhjB3DHP36SEoDAJvIOAoac2yasms4=
 github.com/hashicorp/go-hclog v1.6.3 h1:Qr2kF+eVWjTiYmU7Y31tYlP1h0q/X3Nl3tPGdaB11/k=
 github.com/hashicorp/go-hclog v1.6.3/go.mod h1:W4Qnvbt70Wk/zYJryRzDRU/4r0kIg0PVHBcfoyhpF5M=
 github.com/hashicorp/go-plugin v1.8.0 h1:ie8S6RRY8RvB2usYZv+AAZ/wBvx2AU5p5QeP5j/FORs=

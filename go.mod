@@ -4,7 +4,7 @@ go 1.26.3
 
 require (
 	connectrpc.com/connect v1.20.0
-	github.com/guygrigsby/jess v0.0.0-20260527041307-9dbb91318a5b
+	github.com/guygrigsby/jess v0.0.0-20260529202356-1ac470d8fdc7
 	github.com/hashicorp/go-hclog v1.6.3
 	github.com/hashicorp/go-plugin v1.8.0
 	github.com/robfig/cron/v3 v3.0.1
@@ -143,5 +143,3 @@ require (
 	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 )
-
-replace github.com/guygrigsby/jess => ../jess
