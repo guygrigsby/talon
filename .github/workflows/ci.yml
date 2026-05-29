@@ -27,11 +27,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Breaking-change detection needs both the current and
-          # the previous commit so the diff is real. Direct-push
-          # workflow on this repo: HEAD~1 is the baseline on
-          # main; on PRs the action below picks main automatically.
-          fetch-depth: 2
+          # Breaking-change detection needs the comparison ref locally:
+          # HEAD~1 on direct-to-main pushes; origin/main on PRs. depth: 2
+          # covers HEAD~1 but not origin/main, so buf would fail on PRs
+          # with "couldn't find remote ref origin/main". 0 fetches full
+          # history so both modes work.
+          fetch-depth: 0
       - uses: bufbuild/buf-setup-action@v1
       - name: buf lint
         run: buf lint
