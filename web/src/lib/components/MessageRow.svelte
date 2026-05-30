@@ -76,7 +76,13 @@
 	{/if}
 
 	{#if message.role === 'assistant'}
-		<div class="text t-body md">{@html bodyHTML}</div>
+		{#if message.pending && !message.body}
+			<div class="text loading" role="status" aria-label="{message.author} is responding">
+				<span class="loading-dots" aria-hidden="true"><i></i><i></i><i></i></span>
+			</div>
+		{:else}
+			<div class="text t-body md">{@html bodyHTML}</div>
+		{/if}
 	{:else}
 		<div class="text t-body">{message.body}</div>
 	{/if}
@@ -191,6 +197,49 @@
 		word-wrap: break-word;
 		max-width: 70ch;
 	}
+	/* Loading indicator: three dots that fade in sequence while an
+	   optimistic assistant bubble waits for its first streamed token. */
+	.text.loading {
+		display: flex;
+		align-items: center;
+		min-height: calc(var(--fs-md) * var(--lh-body));
+	}
+	.loading-dots {
+		display: inline-flex;
+		gap: 5px;
+	}
+	.loading-dots i {
+		width: 6px;
+		height: 6px;
+		border-radius: 50%;
+		background: var(--ink-3);
+		animation: blink 1.2s ease-in-out infinite both;
+	}
+	.loading-dots i:nth-child(2) {
+		animation-delay: 0.18s;
+	}
+	.loading-dots i:nth-child(3) {
+		animation-delay: 0.36s;
+	}
+	@keyframes blink {
+		0%,
+		80%,
+		100% {
+			opacity: 0.25;
+		}
+		40% {
+			opacity: 1;
+		}
+	}
+	/* Motion gate: no animation when the user prefers reduced motion —
+	   the dots still read as a "waiting" affordance, just static. */
+	@media (prefers-reduced-motion: reduce) {
+		.loading-dots i {
+			animation: none;
+			opacity: 0.5;
+		}
+	}
+
 	/* Markdown-rendered assistant body. Override the pre-wrap
 	   on the container so block elements can collapse vertical
 	   whitespace naturally, but keep pre-wrap inside <pre>

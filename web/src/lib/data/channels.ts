@@ -47,6 +47,12 @@ export type Message = {
 	// thinking). When set, the assistant bubble renders a
 	// collapsible "thinking" block above the visible body.
 	thinking?: string;
+	// Optimistic placeholder flag: an assistant bubble created the
+	// instant the user sends, before any stream event lands. While
+	// true (and body/thinking still empty) the row shows a loading
+	// indicator. Cleared as soon as the run produces any output or
+	// reaches a terminal state.
+	pending?: boolean;
 };
 
 // Only the live web session ships today. The other source bridges

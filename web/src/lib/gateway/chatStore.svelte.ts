@@ -131,6 +131,21 @@ export function makeChatStore(sessionKey: string) {
 				author: 'you',
 				body: trimmed,
 				ts: nowLabel()
+			},
+			// Optimistic assistant bubble so the turn is acknowledged the
+			// instant the user sends — the row shows a loading indicator
+			// until the first delta/thinking event fills it in, instead of
+			// dead air during model TTFB. Keyed by runId (the server echoes
+			// the idempotencyKey as the run id), so upsertAssistant updates
+			// this same bubble rather than appending a second one.
+			{
+				id: `run-${runId}`,
+				channelId: sessionKey,
+				role: 'assistant',
+				author: 'assistant',
+				body: '',
+				ts: '',
+				pending: true
 			}
 		];
 		status = 'streaming';
@@ -149,8 +164,17 @@ export function makeChatStore(sessionKey: string) {
 		} catch (err) {
 			status = 'error';
 			errorMessage = friendlyAuthError(err);
+			clearPending(runId);
 			if (activeRunId === runId) activeRunId = null;
 		}
+	}
+
+	// clearPending drops the loading state on an optimistic assistant bubble
+	// when its run errors out or fails to dispatch, so the indicator can't
+	// spin forever on a turn that produced nothing.
+	function clearPending(runId: string) {
+		const m = messages.find((x) => x.id === `run-${runId}`);
+		if (m) m.pending = false;
 	}
 
 	async function clearContext(command: string) {
@@ -201,6 +225,7 @@ export function makeChatStore(sessionKey: string) {
 			case 'error': {
 				status = 'error';
 				errorMessage = ev.payload.value.message || ev.payload.value.kind || 'chat error';
+				clearPending(ev.runId);
 				if (activeRunId === ev.runId) activeRunId = null;
 				break;
 			}
@@ -230,6 +255,7 @@ export function makeChatStore(sessionKey: string) {
 		const existing = messages.find((m) => m.id === id);
 		if (existing) {
 			existing.body = text;
+			existing.pending = false;
 			if (final) existing.ts = nowLabel();
 			return;
 		}
@@ -251,6 +277,7 @@ export function makeChatStore(sessionKey: string) {
 		const existing = messages.find((m) => m.id === id);
 		if (existing) {
 			existing.thinking = thinking;
+			existing.pending = false;
 			return;
 		}
 		// Thinking can land before any visible delta (the model
