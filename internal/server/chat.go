@@ -23,9 +23,9 @@ import (
 
 // ChatRunFn is the function signature `WithChatRunner` expects.
 // Implemented by cmd/talon so that internal/server doesn't take a
-// direct dependency on the chat driver (which transitively imports
-// agentcore + LiteLLM — heavy and orthogonal to the gateway's other
-// responsibilities).
+// direct dependency on the chat driver (which pulls in the jess
+// facade plus the per-tool/embedder dependency surface — orthogonal
+// to the gateway's other responsibilities).
 //
 // Returns completion metadata and any error. Streaming happens
 // through the supplied emit closures; one closure per event kind

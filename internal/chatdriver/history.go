@@ -41,12 +41,23 @@ func ChatMessagesToJess(history []server.ChatMessage) []message.Message {
 			}
 			out = append(out, message.Message{Role: message.RoleAssistant, Content: blocks})
 		case "tool":
+			// ChatStore stores tool outputs as plain strings (some tools emit
+			// JSON, e.g. recall; many emit plain text, e.g. ls -> "file1\nfile2\n").
+			// jess expects Result to be valid JSON, so quote non-JSON outputs as
+			// a JSON string. Loss-less: a downstream consumer reading the string
+			// gets the original tool output back via json.Unmarshal.
+			result := json.RawMessage(m.Content)
+			if !json.Valid(result) {
+				if quoted, err := json.Marshal(m.Content); err == nil {
+					result = quoted
+				}
+			}
 			out = append(out, message.Message{
 				Role: message.RoleTool,
 				Content: []message.ContentBlock{{
 					Kind:    message.BlockToolResult,
 					ToolID:  m.ToolCallID,
-					Result:  json.RawMessage(m.Content),
+					Result:  result,
 					IsError: false,
 				}},
 			})

@@ -63,3 +63,37 @@ func TestChatMessagesToJess_EmptyToolCallArgs(t *testing.T) {
 		t.Errorf("args = %q, want %q", got[0].Content[0].Args, "{}")
 	}
 }
+
+// Plain-text tool output (e.g. `ls` -> "file1\nfile2\n") must be quoted so the
+// seeded history is valid JSON; the original string round-trips back via
+// json.Unmarshal. JSON tool output (e.g. `recall` -> {"hits":0}) passes through
+// unchanged.
+func TestChatMessagesToJess_ToolResult_QuotesPlainText(t *testing.T) {
+	in := []server.ChatMessage{
+		{Role: "tool", ToolCallID: "c1", ToolName: "ls", Content: "file1\nfile2\n"},
+		{Role: "tool", ToolCallID: "c2", ToolName: "recall", Content: `{"hits":0}`},
+	}
+	got := ChatMessagesToJess(in)
+	if len(got) != 2 {
+		t.Fatalf("got %d messages, want 2", len(got))
+	}
+
+	// Plain text: must be valid JSON now (quoted) and round-trip back.
+	plain := got[0].Content[0].Result
+	if !json.Valid(plain) {
+		t.Errorf("plain-text tool result not valid JSON: %s", plain)
+	}
+	var roundTrip string
+	if err := json.Unmarshal(plain, &roundTrip); err != nil {
+		t.Errorf("plain-text tool result does not unmarshal to string: %v", err)
+	}
+	if roundTrip != "file1\nfile2\n" {
+		t.Errorf("round-trip = %q, want %q", roundTrip, "file1\nfile2\n")
+	}
+
+	// Already-JSON tool output: passes through byte-for-byte.
+	asJSON := got[1].Content[0].Result
+	if string(asJSON) != `{"hits":0}` {
+		t.Errorf("JSON tool result mutated: got %s, want %s", asJSON, `{"hits":0}`)
+	}
+}
