@@ -13,6 +13,7 @@ import (
 	"github.com/guygrigsby/jess/tool"
 
 	"github.com/guygrigsby/talon/internal/agentcontext"
+	"github.com/guygrigsby/talon/internal/chatdriver/modeltest"
 	"github.com/guygrigsby/talon/internal/talonpath"
 )
 
@@ -49,6 +50,32 @@ func TestBuilder_BuildAgent_Openai(t *testing.T) {
 	}
 	// Confirm the return type is *jess.Agent.
 	var _ *jess.Agent = agent
+}
+
+// WithModel injects a model and must bypass provider-auth resolution entirely:
+// the same empty-auth config that fails in TestBuilder_BuildAgent_MissingProviderAuth
+// builds cleanly once a model is supplied. (ADR 0016 test seam.)
+func TestBuilder_BuildAgent_ModelOverrideSkipsAuth(t *testing.T) {
+	clearProviderEnv(t)
+	cfg := []byte(`{
+		"agents": {
+			"defaults": {"model": {"primary": "openai/gpt-5.4-mini"}},
+			"list": [{"id": "main", "workspace": "/tmp/talon-test-ws"}]
+		}
+	}`)
+	b := NewBuilder(cfg, talonpath.Paths{}).
+		WithAuthOverride(map[string]ProviderAuth{}). // no creds for any provider
+		WithModel(modeltest.New(modeltest.Turn{Text: []string{"ok"}}))
+	agent, choice, err := b.BuildAgent("main")
+	if err != nil {
+		t.Fatalf("override build should not need provider auth: %v", err)
+	}
+	if agent == nil {
+		t.Fatal("agent is nil")
+	}
+	if choice.Provider != "openai" || choice.Model != "gpt-5.4-mini" {
+		t.Errorf("choice should still resolve from config: %+v", choice)
+	}
 }
 
 func TestBuilder_BuildAgent_SelectedModelWins(t *testing.T) {
@@ -432,8 +459,8 @@ func TestBuildSystemPrompt_OnboardingDirectiveLeads(t *testing.T) {
 // WithClaudeMemory registers the tool subject to tool-access filtering.
 type fakeClaudeTool struct{ name string }
 
-func (f fakeClaudeTool) Name() string          { return f.name }
-func (f fakeClaudeTool) Description() string   { return "fake claude memory tool" }
+func (f fakeClaudeTool) Name() string           { return f.name }
+func (f fakeClaudeTool) Description() string    { return "fake claude memory tool" }
 func (f fakeClaudeTool) Schema() map[string]any { return map[string]any{"type": "object"} }
 func (f fakeClaudeTool) Execute(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
 	return json.RawMessage(`{}`), nil

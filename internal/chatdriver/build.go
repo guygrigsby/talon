@@ -43,6 +43,11 @@ type Builder struct {
 	// WithClaudeMemory; the gateway resolves both from native config.
 	claudeIndex string
 	claudeTool  tool.Tool
+	// modelOverride injects a model.Model directly, bypassing provider-auth
+	// resolution and jess.LiteLLM construction. nil in production; tests
+	// (ADR 0016) pass a scripted model so the chat loop runs deterministically
+	// without a network LLM. Set via WithModel.
+	modelOverride model.Model
 }
 
 // NewBuilder constructs a Builder. merged is the result of
@@ -64,6 +69,15 @@ func (b *Builder) WithAuthOverride(auth map[string]ProviderAuth) *Builder {
 // The gateway uses this for the per-session model picker selection.
 func (b *Builder) WithSelectedModel(modelID string) *Builder {
 	b.selectedModelID = modelID
+	return b
+}
+
+// WithModel injects a model.Model, bypassing provider-auth resolution and
+// LiteLLM construction. Test-only (ADR 0016): production callers leave this
+// unset and let the config-driven model build. The agent/model id is still
+// resolved from config for telemetry, but no credentials are required.
+func (b *Builder) WithModel(m model.Model) *Builder {
+	b.modelOverride = m
 	return b
 }
 
@@ -152,38 +166,45 @@ func (b *Builder) prepareBuild(agentID string) (buildSpec, error) {
 		return spec, fmt.Errorf("model %q has no provider segment (expected '<provider>/<model>')", choice.ID)
 	}
 
-	auth := b.authOverride
-	if auth == nil {
-		auth = ResolveProviderAuth(b.merged, b.paths)
-	}
-	pa, ok := auth[choice.Provider]
-	if !ok {
-		return spec, fmt.Errorf("provider %q is unauthenticated — configure plugins.entries.openai-compat.config.providers.%s.apiKey (or plugins.entries.anthropic.config.apiKey for anthropic)", choice.Provider, choice.Provider)
-	}
-	apiKey := pa.APIKey
-	if apiKey == "" && isLoopbackURL(pa.BaseURL) {
-		// LiteLLM's base provider validates that APIKey is non-empty
-		// regardless of whether the upstream actually checks it. For
-		// local servers (LM Studio, MLX, Ollama) that don't require
-		// auth, a placeholder satisfies the validation and the local
-		// server ignores it.
-		apiKey = "no-auth"
-	}
+	if b.modelOverride != nil {
+		// Test seam (ADR 0016): use the injected model and skip provider-auth
+		// resolution + LiteLLM construction. choice stays config-resolved for
+		// telemetry; no credentials are consulted.
+		spec.model = b.modelOverride
+	} else {
+		auth := b.authOverride
+		if auth == nil {
+			auth = ResolveProviderAuth(b.merged, b.paths)
+		}
+		pa, ok := auth[choice.Provider]
+		if !ok {
+			return spec, fmt.Errorf("provider %q is unauthenticated — configure plugins.entries.openai-compat.config.providers.%s.apiKey (or plugins.entries.anthropic.config.apiKey for anthropic)", choice.Provider, choice.Provider)
+		}
+		apiKey := pa.APIKey
+		if apiKey == "" && isLoopbackURL(pa.BaseURL) {
+			// LiteLLM's base provider validates that APIKey is non-empty
+			// regardless of whether the upstream actually checks it. For
+			// local servers (LM Studio, MLX, Ollama) that don't require
+			// auth, a placeholder satisfies the validation and the local
+			// server ignores it.
+			apiKey = "no-auth"
+		}
 
-	cap := resolveModelMaxTokens(b.merged, choice.Provider, choice.Model)
-	if cap <= 0 {
-		cap = 4096
-	}
+		cap := resolveModelMaxTokens(b.merged, choice.Provider, choice.Model)
+		if cap <= 0 {
+			cap = 4096
+		}
 
-	mdl, err := jess.LiteLLM(choice.Provider, choice.Model,
-		jess.WithLLMAPIKey(apiKey),
-		jess.WithLLMBaseURL(pa.BaseURL),
-		jess.WithLLMMaxTokens(cap),
-	)
-	if err != nil {
-		return spec, fmt.Errorf("init model %s/%s: %w", choice.Provider, choice.Model, err)
+		mdl, err := jess.LiteLLM(choice.Provider, choice.Model,
+			jess.WithLLMAPIKey(apiKey),
+			jess.WithLLMBaseURL(pa.BaseURL),
+			jess.WithLLMMaxTokens(cap),
+		)
+		if err != nil {
+			return spec, fmt.Errorf("init model %s/%s: %w", choice.Provider, choice.Model, err)
+		}
+		spec.model = mdl
 	}
-	spec.model = mdl
 
 	// Workspace: per-agent workspace (agents.list[].workspace) or
 	// defaults (agents.defaults.workspace). Tools confine paths here.
