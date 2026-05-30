@@ -25,7 +25,7 @@ GO_SRC := $(shell find cmd internal web -name '*.go' 2>/dev/null)
 PLUGINS := op
 PLUGIN_BINS := $(addprefix bin/talon-,$(addsuffix -plugin,$(PLUGINS)))
 
-.PHONY: build all install run dev dev-backend dev-open gateway-run gateway-run-with-ui plugins test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build docker-build docker-run docker-stop docker-bounce docker-logs proto proto-tools smoke
+.PHONY: build all install run dev dev-backend dev-open gateway-run gateway-run-with-ui plugins test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build web-check web-test web-test-install docker-build docker-run docker-stop docker-bounce docker-logs proto proto-tools smoke
 
 build: $(BIN) plugins
 
@@ -158,6 +158,19 @@ web-dev:
 
 web-build:
 	cd $(WEB_DIR) && $(PNPM) run build
+
+# Type-check the frontend (svelte-check). Mirrors `pnpm check`.
+web-check:
+	cd $(WEB_DIR) && $(PNPM) run check
+
+# Frontend unit/integration tests (vitest, headless Chromium via Playwright).
+# CI runs `pnpm exec playwright install --with-deps chromium` first; locally
+# run `make web-test-install` once to fetch the browser.
+web-test:
+	cd $(WEB_DIR) && $(PNPM) run test
+
+web-test-install:
+	cd $(WEB_DIR) && $(PNPM) exec playwright install chromium
 
 web: web-build
 

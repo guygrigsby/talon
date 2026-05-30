@@ -16,6 +16,29 @@ jobs:
       - run: make test
       - run: make vet
 
+  web:
+    # Frontend type-check + tests. The test runner is vitest in browser
+    # mode (headless Chromium via Playwright), so the browser is installed
+    # with its system deps before the run.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm run check
+      - run: pnpm run test
+
   proto:
     # Guards the FE contract under proto/talon/v1. lint catches
     # style drift; breaking catches accidental field removals,
