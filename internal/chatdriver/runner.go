@@ -43,9 +43,18 @@ func NewChatRunner(paths talonpath.Paths, mem *server.MemoryConfig, claudeMem Cl
 		}
 		adapter := NewEventAdapter(sink)
 
+		// fail emits a sink error before returning so the FE sees a failure
+		// signal on the early-return paths (the server goroutine does not emit
+		// errors for a returned err; without this the UI would see a silent
+		// hang on config / build / session / prompt failures).
+		fail := func(kind string, err error) (server.ChatRunResult, error) {
+			emitError(0, kind, err.Error())
+			return server.ChatRunResult{}, err
+		}
+
 		merged, err := config.MergedBytes(paths)
 		if err != nil {
-			return server.ChatRunResult{}, fmt.Errorf("merged config: %w", err)
+			return fail("config", fmt.Errorf("merged config: %w", err))
 		}
 		builder := NewBuilder(merged, paths)
 		if selectedModelID != "" {
@@ -64,12 +73,12 @@ func NewChatRunner(paths talonpath.Paths, mem *server.MemoryConfig, claudeMem Cl
 		}
 		agent, choice, err := builder.BuildAgent(agentID)
 		if err != nil {
-			return server.ChatRunResult{}, err
+			return fail("build", err)
 		}
 
 		sess, err := agent.NewSessionWithHistory(ChatMessagesToJess(priorHistory))
 		if err != nil {
-			return server.ChatRunResult{}, err
+			return fail("session", err)
 		}
 
 		promptCtx := memory.WithSource(ctx, memory.Source{
@@ -81,7 +90,7 @@ func NewChatRunner(paths talonpath.Paths, mem *server.MemoryConfig, claudeMem Cl
 
 		run, err := sess.Prompt(promptCtx, userText)
 		if err != nil {
-			return server.ChatRunResult{}, err
+			return fail("prompt", err)
 		}
 
 		for ev := range run.Events() {
