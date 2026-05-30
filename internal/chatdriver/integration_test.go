@@ -49,7 +49,7 @@ func runProbe(t *testing.T, providerName, modelID, prompt string) (final string,
 		t.Skipf("no resolved auth for %q", providerName)
 	}
 
-	runner := NewChatRunner(paths, nil)
+	runner := NewChatRunner(paths, nil, nil)
 
 	var (
 		finalText    string
