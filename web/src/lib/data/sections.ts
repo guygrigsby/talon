@@ -6,7 +6,10 @@ export type Section = { key: string; label: string; desc: string };
 export const sections: Section[] = [
 	{ key: 'agents', label: 'Agents', desc: 'main agent, subagents, models' },
 	{ key: 'models', label: 'Models', desc: 'available, default, fallbacks, aliases, auth' },
-	{ key: 'secrets', label: 'Secrets', desc: 'audit (literal / ref / empty), migrate, reload' },
+	// No secrets section: secret values live in keychain / 1Password behind
+	// op:// and keychain:// refs (ADR 0006) and are never exposed in the UI.
+	// Plaintext detection / migrate, if needed, belongs in a `talon secrets`
+	// CLI check, not a web surface.
 	{ key: 'logs', label: 'Logs', desc: 'streaming gateway log, filter by handler / channel' },
 ];
 
