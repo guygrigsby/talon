@@ -6,12 +6,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/voocel/agentcore"
+	"github.com/guygrigsby/jess/tool"
 )
 
 func TestNewTool_Interface(t *testing.T) {
 	s, _ := New(seed(t, map[string]string{"MEMORY.md": "i"}))
-	var _ agentcore.Tool = NewTool(s, 4096)
+	var _ tool.Tool = NewTool(s, 4096)
 }
 
 func TestTool_NameAndSchema(t *testing.T) {

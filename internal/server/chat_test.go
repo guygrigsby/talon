@@ -236,7 +236,7 @@ func TestChatHandler_ClearCommandClearsSessionWithoutLLM(t *testing.T) {
 		&stubResolver{models: map[string]provider.ModelID{"main": "openai/gpt-4o-mini"}},
 		&stubFactory{provider: provider.NewStub("openai", nil)},
 		store,
-	).WithAgentcoreRunner(func(
+	).WithChatRunner(func(
 		_ context.Context,
 		_ string, _ string, _ string, _ string, _ string,
 		_ []ChatMessage,
@@ -244,9 +244,9 @@ func TestChatHandler_ClearCommandClearsSessionWithoutLLM(t *testing.T) {
 		_ func(string, string, string),
 		_ func(string, string, string, bool),
 		_ func(int, string, string),
-	) (AgentcoreRunResult, error) {
+	) (ChatRunResult, error) {
 		called <- struct{}{}
-		return AgentcoreRunResult{}, nil
+		return ChatRunResult{}, nil
 	})
 
 	res, ferr := h.handleSend(t.Context(), HandlerCtx{}, []byte(`{

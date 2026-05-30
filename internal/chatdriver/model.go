@@ -1,4 +1,4 @@
-// Package agentcore_chat is the in-progress replacement for talon's
+// Package chatdriver is the in-progress replacement for talon's
 // inline chat loop in internal/server/chat.go. It builds
 // `agentcore.Agent` instances from talon's merged config, resolves
 // secrets for agentcore/llm providers, and adapts `agentcore.Event`
@@ -13,7 +13,7 @@
 // handler's resolution: per-session override (handled outside this
 // package), per-agent .model.primary, per-agent .model (string),
 // then agents.defaults.model.primary.
-package agentcore_chat
+package chatdriver
 
 import (
 	"github.com/tidwall/gjson"

@@ -15,7 +15,7 @@ import (
 
 	"github.com/guygrigsby/jess/memory"
 	"github.com/guygrigsby/jess/memory/embed/gomlx"
-	"github.com/voocel/agentcore"
+	"github.com/guygrigsby/jess/tool"
 
 	"github.com/guygrigsby/talon/internal/audit"
 	"github.com/guygrigsby/talon/internal/claudemem"
@@ -75,7 +75,7 @@ func readClaudeMemorySettings(paths talonpath.Paths) (claudeMemorySettings, erro
 // claude_memory tool (ADR 0013). ok=false means the feature is off or
 // inert. Like buildMemorySidecar, failures log + return ok=false rather
 // than aborting startup. index is empty when inject is disabled.
-func buildClaudeMemory(paths talonpath.Paths) (index string, tool agentcore.Tool, ok bool) {
+func buildClaudeMemory(paths talonpath.Paths) (index string, claudeTool tool.Tool, ok bool) {
 	settings, err := readClaudeMemorySettings(paths)
 	if err != nil {
 		slog.Debug("claude-memory: cannot read native config; skipping", "err", err)
@@ -104,9 +104,9 @@ func buildClaudeMemory(paths talonpath.Paths) (index string, tool agentcore.Tool
 			index = idx
 		}
 	}
-	tool = claudemem.NewTool(store, defaultClaudeReadBytes)
+	claudeTool = claudemem.NewTool(store, defaultClaudeReadBytes)
 	slog.Info("claude-memory enabled", "path", store.Dir(), "inject", settings.Inject)
-	return index, tool, true
+	return index, claudeTool, true
 }
 
 // defaultRecallMinScore is the absolute cosine relevance floor applied

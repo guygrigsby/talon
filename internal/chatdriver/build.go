@@ -1,15 +1,14 @@
-package agentcore_chat
+package chatdriver
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 
+	"github.com/guygrigsby/jess"
 	"github.com/guygrigsby/jess/memory"
+	"github.com/guygrigsby/jess/model"
+	"github.com/guygrigsby/jess/tool"
 	"github.com/tidwall/gjson"
-	"github.com/voocel/agentcore"
-	"github.com/voocel/agentcore/llm"
 	"github.com/voocel/agentcore/tools"
 
 	"github.com/guygrigsby/talon/internal/agentcontext"
@@ -17,8 +16,8 @@ import (
 	"github.com/guygrigsby/talon/internal/toolaccess"
 )
 
-// Builder assembles an `agentcore.Agent` from talon's merged config.
-// Construction is split off the Handler so tests can build agents
+// Builder assembles a *jess.Agent from talon's merged config.
+// Construction is split off the runner so tests can build agents
 // against fixture configs without going through the full chat-send
 // entry point.
 type Builder struct {
@@ -36,10 +35,6 @@ type Builder struct {
 	// gateway builds the sidecar once and reuses across agents.
 	memStore    memory.Store
 	memRecaller memory.Recaller
-	memKinds    *memory.KindRegistry
-	memMaxItems int
-	memHeader   string
-	source      memory.Source
 	// claudeIndex + claudeTool wire ADR 0013 read-only Claude-memory
 	// access. claudeIndex (when non-empty) is folded into the system
 	// prompt under a labeled section; claudeTool (when non-nil) is
@@ -47,7 +42,7 @@ type Builder struct {
 	// per-agent tool policy governs it like any other tool. Set via
 	// WithClaudeMemory; the gateway resolves both from native config.
 	claudeIndex string
-	claudeTool  agentcore.Tool
+	claudeTool  tool.Tool
 }
 
 // NewBuilder constructs a Builder. merged is the result of
@@ -73,58 +68,88 @@ func (b *Builder) WithSelectedModel(modelID string) *Builder {
 }
 
 // WithMemory wires jess memory tools (RememberTool + RecallTool)
-// into the agent. The store + recaller are typically built once by
-// the gateway via gateway_memory.go and reused across builds.
-// Nil values disable memory tooling (no recall, no save).
+// into the agent and enables memory injection each turn. The store
+// + recaller are typically built once by the gateway via
+// gateway_memory.go and reused across builds. Nil values disable
+// memory tooling (no recall, no save).
 func (b *Builder) WithMemory(store memory.Store, recaller memory.Recaller) *Builder {
 	b.memStore = store
 	b.memRecaller = recaller
 	return b
 }
 
-// WithMemoryOptions configures the jess memory ContextManager.
-// Zero values leave jess defaults intact.
-func (b *Builder) WithMemoryOptions(maxItems int, header string, kinds *memory.KindRegistry) *Builder {
-	b.memMaxItems = maxItems
-	b.memHeader = header
-	b.memKinds = kinds
-	return b
-}
-
 // WithClaudeMemory wires read-only Claude-memory access (ADR 0013).
 // index is the capped MEMORY.md text to fold into the system prompt
-// (empty = inject disabled / no index); tool is the claude_memory
-// list/read tool registered subject to the agent's tool-access policy.
-// The gateway resolves both from memory.claude.* native config.
-func (b *Builder) WithClaudeMemory(index string, tool agentcore.Tool) *Builder {
+// (empty = inject disabled / no index); claudeTool (when non-nil) is
+// the claude_memory list/read tool registered subject to the agent's
+// tool-access policy. The gateway resolves both from memory.claude.*
+// native config.
+func (b *Builder) WithClaudeMemory(index string, claudeTool tool.Tool) *Builder {
 	b.claudeIndex = index
-	b.claudeTool = tool
+	b.claudeTool = claudeTool
 	return b
 }
 
-// WithMemorySource stamps memories saved through the remember tool
-// with Talon's session/run provenance.
-func (b *Builder) WithMemorySource(sessionID, messageID string) *Builder {
-	b.source.SessionID = sessionID
-	b.source.MessageID = messageID
-	return b
+// buildSpec is the resolved-but-not-yet-instantiated jess.Agent inputs.
+// Exposed only to chatdriver-package tests (via prepareBuild) so they
+// can inspect the assembled system prompt + tool set without needing
+// jess.Agent internals.
+type buildSpec struct {
+	choice       ModelChoice
+	model        model.Model
+	systemPrompt string
+	toolSet      []tool.Tool
+	maxTurns     int
 }
 
-// BuildAgent assembles an `agentcore.Agent` for the named agent
-// using the resolved model, provider auth, system prompt, and tool
-// set. Returns the agent and the resolved ModelChoice (useful for
+// BuildAgent assembles a *jess.Agent for the named agent using the
+// resolved model, provider auth, system prompt, and tool set.
+// Returns the agent and the resolved ModelChoice (useful for
 // telemetry — provider/model id at the call site without re-reading
 // config).
-func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, error) {
+func (b *Builder) BuildAgent(agentID string) (*jess.Agent, ModelChoice, error) {
+	spec, err := b.prepareBuild(agentID)
+	if err != nil {
+		return nil, spec.choice, err
+	}
+	opts := []jess.Option{
+		jess.WithModel(spec.model),
+		jess.WithAgentID(agentID),
+		jess.WithMaxTurns(spec.maxTurns),
+	}
+	if b.memStore != nil && b.memRecaller != nil {
+		opts = append(opts, jess.WithMemory(b.memStore, b.memRecaller))
+	}
+	if spec.systemPrompt != "" {
+		opts = append(opts, jess.WithSystemPrompt(spec.systemPrompt))
+	}
+	if len(spec.toolSet) > 0 {
+		opts = append(opts, jess.WithTools(spec.toolSet...))
+	}
+	agent, err := jess.New(opts...)
+	if err != nil {
+		return nil, spec.choice, fmt.Errorf("jess.New: %w", err)
+	}
+	return agent, spec.choice, nil
+}
+
+// prepareBuild resolves model + provider auth, composes the system
+// prompt (with optional Claude-memory index folded in), assembles the
+// tool set (workspace fs tools, onboarding, jess memory, claude_memory),
+// and runs the tool-access policy filter. Split off BuildAgent so tests
+// can inspect the resolved inputs without going through jess.New (whose
+// Agent has no public introspection surface).
+func (b *Builder) prepareBuild(agentID string) (buildSpec, error) {
 	choice := ResolveModel(b.merged, agentID)
 	if b.selectedModelID != "" {
 		choice = ModelChoiceFromID(b.selectedModelID, choice.Fallbacks)
 	}
+	spec := buildSpec{choice: choice}
 	if choice.ID == "" {
-		return nil, choice, fmt.Errorf("no model configured for agent %q (set agents.list[].model.primary or agents.defaults.model.primary)", agentID)
+		return spec, fmt.Errorf("no model configured for agent %q (set agents.list[].model.primary or agents.defaults.model.primary)", agentID)
 	}
 	if choice.Provider == "" {
-		return nil, choice, fmt.Errorf("model %q has no provider segment (expected '<provider>/<model>')", choice.ID)
+		return spec, fmt.Errorf("model %q has no provider segment (expected '<provider>/<model>')", choice.ID)
 	}
 
 	auth := b.authOverride
@@ -133,9 +158,8 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 	}
 	pa, ok := auth[choice.Provider]
 	if !ok {
-		return nil, choice, fmt.Errorf("provider %q is unauthenticated — configure plugins.entries.openai-compat.config.providers.%s.apiKey (or plugins.entries.anthropic.config.apiKey for anthropic)", choice.Provider, choice.Provider)
+		return spec, fmt.Errorf("provider %q is unauthenticated — configure plugins.entries.openai-compat.config.providers.%s.apiKey (or plugins.entries.anthropic.config.apiKey for anthropic)", choice.Provider, choice.Provider)
 	}
-
 	apiKey := pa.APIKey
 	if apiKey == "" && isLoopbackURL(pa.BaseURL) {
 		// LiteLLM's base provider validates that APIKey is non-empty
@@ -145,34 +169,24 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 		// server ignores it.
 		apiKey = "no-auth"
 	}
-	modelOpts := []llm.ModelOption{}
-	if apiKey != "" {
-		modelOpts = append(modelOpts, llm.WithAPIKey(apiKey))
-	}
-	if pa.BaseURL != "" {
-		modelOpts = append(modelOpts, llm.WithBaseURL(pa.BaseURL))
-	}
-	rawModel, err := llm.NewModel(choice.Provider, choice.Model, modelOpts...)
-	if err != nil {
-		return nil, choice, fmt.Errorf("init model %s/%s: %w", choice.Provider, choice.Model, err)
-	}
-	// Cap max_tokens per-model. agentcore.llm.DefaultGenerationConfig
-	// hard-codes 65536, which 400s on every model with a smaller cap
-	// (gpt-4o-mini = 16384, etc.). See model_cap.go.
-	//
-	// Resolution order: user-configured per-model `maxTokens` →
-	// safe default that works on every known production model
-	// (4096). Users wanting a higher cap set
-	// models.providers.<provider>.models[id==<model>].maxTokens.
+
 	cap := resolveModelMaxTokens(b.merged, choice.Provider, choice.Model)
 	if cap <= 0 {
 		cap = 4096
 	}
-	model := newCappedChatModel(rawModel, cap)
+
+	mdl, err := jess.LiteLLM(choice.Provider, choice.Model,
+		jess.WithLLMAPIKey(apiKey),
+		jess.WithLLMBaseURL(pa.BaseURL),
+		jess.WithLLMMaxTokens(cap),
+	)
+	if err != nil {
+		return spec, fmt.Errorf("init model %s/%s: %w", choice.Provider, choice.Model, err)
+	}
+	spec.model = mdl
 
 	// Workspace: per-agent workspace (agents.list[].workspace) or
-	// defaults (agents.defaults.workspace). Tools confine paths
-	// here.
+	// defaults (agents.defaults.workspace). Tools confine paths here.
 	workspace := resolveAgentWorkspace(b.merged, agentID)
 
 	// Persona dir: where IDENTITY/SOUL/etc. and the onboarding sentinel
@@ -193,12 +207,13 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 	if b.claudeIndex != "" {
 		systemPrompt += "\n\n## Notes Claude has saved about the user/project\n\n" + b.claudeIndex
 	}
+	spec.systemPrompt = systemPrompt
 
 	// File-state shared across read/write/edit so write-after-read
 	// invariants hold.
 	fileState := tools.NewFileReadState()
 
-	toolSet := []agentcore.Tool{}
+	toolSet := []tool.Tool{}
 	if workspace != "" {
 		toolSet = append(toolSet,
 			tools.NewRead(workspace, fileState),
@@ -236,9 +251,9 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 	}
 	policy, err := toolaccess.Resolve(b.merged, b.paths, agentID)
 	if err != nil {
-		return nil, choice, fmt.Errorf("resolve tool access for %q: %w", agentID, err)
+		return spec, fmt.Errorf("resolve tool access for %q: %w", agentID, err)
 	}
-	toolSet = filterAgentcoreTools(toolSet, policy)
+	spec.toolSet = filterTools(toolSet, policy)
 
 	maxTurns := int(gjson.GetBytes(b.merged, "agents.defaults.maxTurns").Int())
 	if v := gjson.GetBytes(b.merged, fmt.Sprintf("agents.list.#(id==%q).maxTurns", agentID)).Int(); v > 0 {
@@ -247,67 +262,26 @@ func (b *Builder) BuildAgent(agentID string) (*agentcore.Agent, ModelChoice, err
 	if maxTurns <= 0 {
 		maxTurns = 20
 	}
-
-	opts := []agentcore.AgentOption{
-		agentcore.WithModel(model),
-		agentcore.WithMaxTurns(maxTurns),
-	}
-	if cm := b.memoryContextManager(agentID); cm != nil {
-		opts = append(opts, agentcore.WithContextManager(cm))
-	}
-	if b.source.SessionID != "" || b.source.MessageID != "" {
-		opts = append(opts, agentcore.WithMiddlewares(memorySourceMiddleware(b.source)))
-	}
-	if systemPrompt != "" {
-		opts = append(opts, agentcore.WithSystemPrompt(systemPrompt))
-	}
-	if len(toolSet) > 0 {
-		opts = append(opts, agentcore.WithTools(toolSet...))
-	}
-
-	return agentcore.NewAgent(opts...), choice, nil
+	spec.maxTurns = maxTurns
+	return spec, nil
 }
 
-func filterAgentcoreTools(in []agentcore.Tool, policy toolaccess.Policy) []agentcore.Tool {
+// filterTools retains only tools allowed by the policy, replacing the
+// old filterAgentcoreTools. Generic over jess tool.Tool.
+func filterTools(in []tool.Tool, policy toolaccess.Policy) []tool.Tool {
 	if !policy.Enabled {
 		return nil
 	}
 	if !policy.Restricted {
 		return in
 	}
-	out := make([]agentcore.Tool, 0, len(in))
-	for _, tool := range in {
-		if policy.Allows(tool.Name()) {
-			out = append(out, tool)
+	out := make([]tool.Tool, 0, len(in))
+	for _, t := range in {
+		if policy.Allows(t.Name()) {
+			out = append(out, t)
 		}
 	}
 	return out
-}
-
-func (b *Builder) memoryContextManager(agentID string) agentcore.ContextManager {
-	if b.memStore == nil || b.memRecaller == nil || agentID == "" {
-		return nil
-	}
-	return memory.NewContextManager(b.memStore, b.memRecaller, memory.ContextManagerOptions{
-		AgentID:  agentID,
-		MaxItems: b.memMaxItems,
-		Header:   b.memHeader,
-		Kinds:    b.memKinds,
-	})
-}
-
-func memorySourceMiddleware(src memory.Source) agentcore.ToolMiddleware {
-	return func(ctx context.Context, call agentcore.ToolCall, next agentcore.ToolExecuteFunc) (json.RawMessage, error) {
-		if call.Name == "remember" {
-			nextSrc := src
-			nextSrc.Tool = call.Name
-			if nextSrc.Reason == "" {
-				nextSrc.Reason = "model decided"
-			}
-			ctx = memory.WithSource(ctx, nextSrc)
-		}
-		return next(ctx, call.Args)
-	}
 }
 
 // resolveAgentWorkspace mirrors the existing chat handler's lookup.
@@ -321,7 +295,7 @@ func resolveAgentWorkspace(merged []byte, agentID string) string {
 
 // resolveSystemPrompt picks a per-agent system prompt or falls back
 // to the defaults. Returns "" when neither is set — the agent will
-// use agentcore's default (no system prompt).
+// use jess's default (no system prompt).
 func resolveSystemPrompt(merged []byte, agentID string) string {
 	if v := gjson.GetBytes(merged, fmt.Sprintf("agents.list.#(id==%q).systemPrompt", agentID)).Str; v != "" {
 		return v
@@ -365,4 +339,20 @@ func composeSystemPrompt(parts ...string) string {
 		}
 	}
 	return strings.Join(kept, "\n\n")
+}
+
+// resolveModelMaxTokens reads the per-model `maxTokens` value from
+// the user's config. The lookup path is:
+//
+//	models.providers.<provider>.models[id==<modelID>].maxTokens
+//
+// Returns 0 when no entry is found — caller leaves the model
+// uncapped (or uses a sensible default).
+func resolveModelMaxTokens(merged []byte, providerName, modelID string) int {
+	path := fmt.Sprintf("models.providers.%s.models.#(id==%q).maxTokens", providerName, modelID)
+	v := gjson.GetBytes(merged, path)
+	if !v.Exists() {
+		return 0
+	}
+	return int(v.Int())
 }
