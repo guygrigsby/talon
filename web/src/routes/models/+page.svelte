@@ -407,7 +407,6 @@
 		display: flex;
 		flex-direction: column;
 		gap: var(--s-3);
-		overflow-x: auto;
 	}
 	.block-head {
 		display: flex;
@@ -443,7 +442,6 @@
 
 	.models-table {
 		width: 100%;
-		min-width: 920px;
 		border-collapse: collapse;
 		font-size: var(--fs-sm);
 	}
