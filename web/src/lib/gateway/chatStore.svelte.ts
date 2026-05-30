@@ -59,20 +59,54 @@ export function makeChatStore(sessionKey: string) {
 		subscribeAbort?.abort();
 		const abort = new AbortController();
 		subscribeAbort = abort;
-		const client = getChatClient();
-		try {
-			for await (const ev of client.subscribe(
-				create(ChatSubscribeRequestSchema, { sessionKey }),
-				{ signal: abort.signal }
-			)) {
+		// The event stream is the only path that delivers final/error
+		// events, which reset status from 'streaming' back to 'idle'. If it
+		// ends — gateway restart (Sinks.Drain), client disconnect, proxy
+		// timeout — and we don't reconnect, the FE goes deaf: send() still
+		// fires but its delta/final events never arrive, so status stays
+		// 'streaming' and the composer wedges (canSubmit=false). Reconnect
+		// with capped backoff, and on each reconnection resync from server
+		// history (which clears a stuck status) since a terminal event may
+		// have been missed during the gap.
+		let backoff = 0;
+		while (!abort.signal.aborted) {
+			if (backoff > 0) {
+				await sleep(backoff, abort.signal);
 				if (abort.signal.aborted) return;
-				applyEvent(ev);
+				await reconcileAfterGap();
+				if (abort.signal.aborted) return;
 			}
-		} catch (err) {
-			if (abort.signal.aborted) return;
-			status = 'error';
-			errorMessage = friendlyAuthError(err);
+			try {
+				const client = getChatClient();
+				for await (const ev of client.subscribe(
+					create(ChatSubscribeRequestSchema, { sessionKey }),
+					{ signal: abort.signal }
+				)) {
+					if (abort.signal.aborted) return;
+					applyEvent(ev);
+					backoff = 0; // a healthy frame means the link is up
+				}
+				// Stream closed by the server without raising (e.g. gateway
+				// restart). Fall through to reconnect.
+			} catch (err) {
+				if (abort.signal.aborted) return;
+				// Transient stream error. Surface it so the user sees the
+				// live feed paused, but keep retrying — the gateway coming
+				// back recovers without a page reload.
+				errorMessage = friendlyAuthError(err);
+			}
+			backoff = backoff === 0 ? 500 : Math.min(backoff * 2, 5000);
 		}
+	}
+
+	// reconcileAfterGap re-syncs transcript + status after the event stream
+	// dropped and reconnected. A final/error event may have fired during the
+	// gap, so a run we still believe is 'streaming' is actually done.
+	// loadHistory pulls server truth and resets status to idle; clear the
+	// in-flight run id first so stale delta bubbles stop updating.
+	async function reconcileAfterGap() {
+		activeRunId = null;
+		await loadHistory();
 	}
 
 	async function send(text: string) {
@@ -325,6 +359,27 @@ export function makeChatStore(sessionKey: string) {
 		setModel,
 		dispose
 	};
+}
+
+// sleep resolves after ms, or immediately when the signal aborts, so a
+// pending reconnect backoff doesn't outlive dispose(). The timer is cleared
+// on abort to avoid a dangling handle.
+function sleep(ms: number, signal: AbortSignal): Promise<void> {
+	return new Promise((resolve) => {
+		if (signal.aborted) {
+			resolve();
+			return;
+		}
+		const t = setTimeout(resolve, ms);
+		signal.addEventListener(
+			'abort',
+			() => {
+				clearTimeout(t);
+				resolve();
+			},
+			{ once: true }
+		);
+	});
 }
 
 // historyRowToMessage maps the typed proto HistoryRow oneof onto
