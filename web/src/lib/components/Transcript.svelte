@@ -299,7 +299,13 @@
 	}
 	.source-chip {
 		display: inline-flex;
-		align-items: center;
+		/* Baseline-align so the sans name and the mono status (.t-mono,
+		   Courier Prime) share a text baseline. Courier Prime sits high in its
+		   em, so align-items:center leaves "connected" visually raised; baseline
+		   alignment is font-metric-agnostic. The dot has no text baseline, so it
+		   is re-centered below. */
+		align-items: baseline;
+		line-height: 1;
 		gap: 6px;
 		min-width: 0;
 		max-width: 190px;
@@ -310,6 +316,11 @@
 		background: var(--canvas);
 		color: var(--ink-2);
 		font-size: var(--fs-xs);
+	}
+	/* SourceDot (.dot) is a baseline-less flex item; baseline alignment would
+	   drop it to the text baseline, so center it against the text instead. */
+	.source-chip :global(.dot) {
+		align-self: center;
 	}
 	.source-name {
 		min-width: 0;
