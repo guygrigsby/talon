@@ -6,6 +6,7 @@ import (
 
 	"github.com/guygrigsby/jess/memory"
 	jessmsg "github.com/guygrigsby/jess/message"
+	"github.com/guygrigsby/jess/model"
 	"github.com/guygrigsby/jess/tool"
 
 	"github.com/guygrigsby/talon/internal/config"
@@ -25,7 +26,25 @@ type ClaudeMemoryResolver func() (index string, tl tool.Tool, ok bool)
 // streams events to the EventSink, persists the final assistant text back
 // through the server layer, and returns ChatRunResult with usage from jess.
 // claudeMem is optional; nil disables ADR 0013 Claude-memory access.
-func NewChatRunner(paths talonpath.Paths, mem *server.MemoryConfig, claudeMem ClaudeMemoryResolver) server.ChatRunFn {
+// RunnerOption tweaks the runner's per-turn agent build. Production passes
+// none; tests use WithModelOverride to inject a deterministic model.
+type RunnerOption func(*runnerConfig)
+
+type runnerConfig struct {
+	modelOverride model.Model
+}
+
+// WithModelOverride makes every turn build its agent against m instead of the
+// config-driven LiteLLM model, skipping provider auth (ADR 0016 test seam).
+func WithModelOverride(m model.Model) RunnerOption {
+	return func(c *runnerConfig) { c.modelOverride = m }
+}
+
+func NewChatRunner(paths talonpath.Paths, mem *server.MemoryConfig, claudeMem ClaudeMemoryResolver, opts ...RunnerOption) server.ChatRunFn {
+	var rc runnerConfig
+	for _, o := range opts {
+		o(&rc)
+	}
 	return func(
 		ctx context.Context,
 		agentID, sessionKey, runID, userText, selectedModelID string,
@@ -57,6 +76,9 @@ func NewChatRunner(paths talonpath.Paths, mem *server.MemoryConfig, claudeMem Cl
 			return fail("config", fmt.Errorf("merged config: %w", err))
 		}
 		builder := NewBuilder(merged, paths)
+		if rc.modelOverride != nil {
+			builder = builder.WithModel(rc.modelOverride)
+		}
 		if selectedModelID != "" {
 			builder = builder.WithSelectedModel(selectedModelID)
 		}
