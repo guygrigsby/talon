@@ -24,6 +24,8 @@ require (
 	tailscale.com v1.98.3
 )
 
+require github.com/bmatcuk/doublestar/v4 v4.10.0 // indirect
+
 require (
 	dario.cat/mergo v1.0.2 // indirect
 	filippo.io/edwards25519 v1.2.0 // indirect
@@ -68,6 +70,7 @@ require (
 	github.com/google/btree v1.1.3 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/guygrigsby/pinion v0.0.0-00010101000000-000000000000
 	github.com/hashicorp/yamux v0.1.2 // indirect
 	github.com/hdevalence/ed25519consensus v0.2.0 // indirect
 	github.com/huin/goupnp v1.3.0 // indirect
@@ -143,3 +146,5 @@ require (
 	gvisor.dev/gvisor v0.0.0-20260224225140-573d5e7127a8 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 )
+
+replace github.com/guygrigsby/pinion => ../pinion
