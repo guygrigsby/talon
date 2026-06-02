@@ -1,8 +1,30 @@
 # 0017 Tool-use safety: pinion classification + gating in talon dispatch
 
-Status: Proposed
+Status: Accepted
 
 Date: 2026-05-30
+
+Implemented: 2026-06-01 (talon-327). Phases 0-7 landed: `internal/toolgate`
+(effect mapping, Level 1 per-call gate, Level 2 flow accumulator), wired into
+`chatdriver.BuildAgent` after toolaccess filtering, with mode (off/audit/
+enforce) + per-agent/global grant widening in typed native config, `tool_gate`
+audit events, the `talon toolgate` command, and a `talon configure toolgate`
+wizard. Deterministic e2e in `internal/connectapi` proves the gate refuses a
+bash call through the real loop and records the verdict.
+
+One deviation from the effect-mapping table below: `claude_memory` (along with
+`remember`/`recall`/`finish_onboarding`) is treated as a trusted first-party
+control-plane tool and exempted from gating, rather than mapped to `fs.read`.
+These tools take bounded, structured inputs against fixed talon-owned stores
+(not model-controlled paths), so gating them as generic `fs.read` would deny
+them under the default workspace grant and break ADR 0013 with no safety gain.
+See `toolgate.TrustedInternalTool`.
+
+Deferred to a follow-up: per-agent grant config currently rides the global
+`toolgate.defaults.allow` plus per-agent `agents.list[].toolgate.allow` read by
+chatdriver; the per-agent override does not yet round-trip through the typed
+native config (only the global `toolgate.*` does). Interactive approval for
+`NeedsApproval` remains out of scope (it maps to deny).
 
 ## Context
 
