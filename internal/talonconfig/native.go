@@ -22,6 +22,21 @@ type NativeConfig struct {
 	Telegram TelegramConfig  `mapstructure:"-"`
 	Plugins  PluginsConfig   `mapstructure:"plugins"`
 	Audit    AuditConfig     `mapstructure:"audit"`
+	Toolgate ToolgateConfig  `mapstructure:"toolgate"`
+}
+
+// ToolgateConfig controls the pinion tool-use safety gate (ADR 0017). Mode is
+// one of off/audit/enforce (empty = enforce, the fail-safe default). Defaults
+// holds the global grant widening applied to every agent.
+type ToolgateConfig struct {
+	Mode     string           `mapstructure:"mode"`
+	Defaults ToolgateDefaults `mapstructure:"defaults"`
+}
+
+// ToolgateDefaults is the global default grant extension: extra capability
+// kinds (e.g. "exec", "net.out") added to every agent's workspace grant.
+type ToolgateDefaults struct {
+	Allow []string `mapstructure:"allow"`
 }
 
 // AuditConfig controls the agent-action audit log (ADR 0011). The trail is
@@ -193,6 +208,7 @@ func fromJSONConfig(raw []byte, sourceLabel string) (NativeConfig, MigrationRepo
 	cfg.Telegram = telegramFromJSON(raw)
 	cfg.Plugins = pluginsFromJSON(raw)
 	cfg.Audit = auditFromJSON(raw)
+	cfg.Toolgate = toolgateFromJSON(raw)
 
 	report := MigrationReport{
 		SourceTopLevelKeys: sortedKeys(decoded),
@@ -317,6 +333,14 @@ func memoryFromJSON(raw []byte) MemoryConfig {
 		m.Claude.Inject = &b
 	}
 	return m
+}
+
+func toolgateFromJSON(raw []byte) ToolgateConfig {
+	cfg := ToolgateConfig{Mode: gjson.GetBytes(raw, "toolgate.mode").Str}
+	for _, v := range gjson.GetBytes(raw, "toolgate.defaults.allow").Array() {
+		cfg.Defaults.Allow = append(cfg.Defaults.Allow, v.String())
+	}
+	return cfg
 }
 
 func auditFromJSON(raw []byte) AuditConfig {
@@ -684,6 +708,7 @@ func ToRuntimeJSON(cfg NativeConfig, fallbackRuntime []byte) ([]byte, error) {
 	applyTelegramRuntime(root, cfg, fallbackRuntime)
 	applyPluginsRuntime(root, cfg)
 	applyAuditRuntime(root, cfg)
+	applyToolgateRuntime(root, cfg)
 
 	return json.Marshal(root)
 }
@@ -790,6 +815,13 @@ func applyAuditRuntime(root map[string]any, cfg NativeConfig) {
 	}
 	setInt(root, cfg.Audit.MaxSizeMB, "audit", "max_size_mb")
 	setInt(root, cfg.Audit.Keep, "audit", "keep")
+}
+
+func applyToolgateRuntime(root map[string]any, cfg NativeConfig) {
+	setString(root, cfg.Toolgate.Mode, "toolgate", "mode")
+	if len(cfg.Toolgate.Defaults.Allow) > 0 {
+		setPath(root, cfg.Toolgate.Defaults.Allow, "toolgate", "defaults", "allow")
+	}
 }
 
 func applyToolsRuntime(root map[string]any, cfg NativeConfig, fallback []byte) {
@@ -1178,6 +1210,17 @@ func MarshalTOML(cfg NativeConfig, opts MarshalOptions) []byte {
 		}
 		w.kvInt("max_size_mb", cfg.Audit.MaxSizeMB)
 		w.kvInt("keep", cfg.Audit.Keep)
+	}
+
+	if cfg.Toolgate.Mode != "" || len(cfg.Toolgate.Defaults.Allow) > 0 {
+		w.blank()
+		w.section("toolgate")
+		w.kvString("mode", cfg.Toolgate.Mode, false)
+		if len(cfg.Toolgate.Defaults.Allow) > 0 {
+			w.blank()
+			w.section("toolgate.defaults")
+			w.kvStrings("allow", cfg.Toolgate.Defaults.Allow)
+		}
 	}
 	return []byte(b.String())
 }
