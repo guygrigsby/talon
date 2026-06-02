@@ -3,6 +3,7 @@ package toolgate
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 
 	"github.com/guygrigsby/jess/tool"
@@ -20,17 +21,34 @@ type RunGate struct {
 	gate      *Gate
 	acc       *Accumulator
 	workspace string
+	mode      Mode
+	sink      VerdictFunc
 }
+
+// VerdictFunc receives one classification for audit: the tool name, the
+// verdict string, and the human-readable reasons. Correlation (session/run/
+// agent) is added by the caller that supplies the func.
+type VerdictFunc func(tool, verdict string, reasons []string)
 
 // NewRunGate builds a per-turn gate from a grant + assessor (nil assessor
 // defaults to policy.Default()) and the workspace used for scope resolution.
+// The default mode is ModeEnforce; attach a mode and audit sink with WithMode
+// and WithSink.
 func NewRunGate(grant effect.Grant, assessor policy.Assessor, workspace string) *RunGate {
 	return &RunGate{
 		gate:      NewGate(grant, assessor),
 		acc:       NewAccumulatorWith(assessor),
 		workspace: workspace,
+		mode:      ModeEnforce,
 	}
 }
+
+// WithMode sets the gate's enforcement mode and returns the gate for chaining.
+func (rg *RunGate) WithMode(m Mode) *RunGate { rg.mode = m; return rg }
+
+// WithSink sets the per-classification audit sink and returns the gate for
+// chaining. A nil sink disables auditing.
+func (rg *RunGate) WithSink(fn VerdictFunc) *RunGate { rg.sink = fn; return rg }
 
 // classify runs Level 1 and Level 2 for one call under the lock and returns the
 // merged (worst) decision.
@@ -75,7 +93,12 @@ func (g gatedTool) Schema() map[string]any { return g.inner.Schema() }
 
 func (g gatedTool) Execute(ctx context.Context, args json.RawMessage) (json.RawMessage, error) {
 	d := g.rg.classify(g.inner.Name(), args)
-	if d.Verdict != policy.Allow {
+	if g.rg.sink != nil {
+		g.rg.sink(g.inner.Name(), VerdictString(d.Verdict), reasonsOf(d))
+	}
+	// Audit mode records (above) but never blocks; enforce mode blocks on any
+	// non-Allow verdict. (Off mode is handled by the caller not wrapping.)
+	if g.rg.mode == ModeEnforce && d.Verdict != policy.Allow {
 		return refusalJSON(d), nil
 	}
 	return g.inner.Execute(ctx, args)
@@ -113,9 +136,9 @@ func DefaultGrant(workspace string) effect.Grant {
 	}}
 }
 
-// refusalJSON renders a model-visible refusal: a normal tool result the agent
-// sees and can react to, carrying the verdict and the reasons behind it.
-func refusalJSON(d Decision) json.RawMessage {
+// reasonsOf renders the human-readable reasons behind a decision: the policy
+// findings (rule + reason) and the ungranted capabilities (the grant delta).
+func reasonsOf(d Decision) []string {
 	reasons := make([]string, 0, len(d.Findings)+len(d.Delta))
 	for _, f := range d.Findings {
 		reasons = append(reasons, f.RuleID+": "+f.Reason)
@@ -127,6 +150,27 @@ func refusalJSON(d Decision) json.RawMessage {
 		}
 		reasons = append(reasons, "ungranted capability "+string(e.Kind)+" "+scope)
 	}
+	return reasons
+}
+
+// GrantWith returns the default workspace grant widened with extra capability
+// kinds (unscoped), parsed from config (e.g. agents.list[].toolgate.allow).
+// Blank entries are skipped. This is how an operator re-enables exec/net for an
+// agent without hand-editing effect grants.
+func GrantWith(workspace string, extra []string) effect.Grant {
+	g := DefaultGrant(workspace)
+	for _, k := range extra {
+		if k = strings.TrimSpace(k); k != "" {
+			g.Allowed = append(g.Allowed, effect.Effect{Kind: effect.Kind(k)})
+		}
+	}
+	return g
+}
+
+// refusalJSON renders a model-visible refusal: a normal tool result the agent
+// sees and can react to, carrying the verdict and the reasons behind it.
+func refusalJSON(d Decision) json.RawMessage {
+	reasons := reasonsOf(d)
 	b, _ := json.Marshal(map[string]any{
 		"refused": true,
 		"verdict": VerdictString(d.Verdict),

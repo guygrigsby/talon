@@ -80,3 +80,26 @@ func TestClassify1UnknownToolDeniedByPolicy(t *testing.T) {
 		t.Fatalf("unknown tool (MaxDanger) should Deny via policy: %+v", d)
 	}
 }
+
+func TestGrantWithAddsExtraKinds(t *testing.T) {
+	g := GrantWith("/work", []string{"exec", "net.out", "  ", ""})
+	// default workspace fs.read + fs.write, plus exec + net.out (unscoped).
+	gate := NewGate(g, policy.Default())
+	if d := gate.Classify1(EffectsFor("bash", []byte(`{"command":"ls"}`), "/work")); d.Verdict != policy.Allow {
+		t.Fatalf("exec should be granted: %+v", d)
+	}
+	// fs.read inside workspace still allowed (default preserved).
+	if d := gate.Classify1(EffectsFor("read", []byte(`{"file_path":"a.txt"}`), "/work")); d.Verdict != policy.Allow {
+		t.Fatalf("workspace read should still be allowed: %+v", d)
+	}
+	// blank entries are ignored (no phantom empty-kind grant).
+	count := 0
+	for _, e := range g.Allowed {
+		if e.Kind == "" {
+			count++
+		}
+	}
+	if count != 0 {
+		t.Fatalf("blank kinds must be skipped, found %d", count)
+	}
+}

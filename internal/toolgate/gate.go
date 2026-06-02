@@ -74,7 +74,7 @@ func footprintOf(effects []effect.Effect) analyze.Footprint {
 // successive calls (compose.Connect validates the target field exists).
 type callPrim struct{ effects []effect.Effect }
 
-func (callPrim) Name() string       { return "call" }
+func (callPrim) Name() string        { return "call" }
 func (callPrim) Description() string { return "" }
 func (callPrim) Schema() map[string]any {
 	return map[string]any{"type": "object", "properties": map[string]any{"in": map[string]any{"type": "string"}}}
