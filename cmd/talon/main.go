@@ -111,6 +111,7 @@ func main() {
 	root.AddCommand(modelsCmd())
 	root.AddCommand(agentsCmd())
 	root.AddCommand(chatHistoryCmd())
+	root.AddCommand(toolgateCmd())
 	root.AddCommand(statusCmd())
 	root.AddCommand(uiCmd())
 	root.AddCommand(docsCmd())

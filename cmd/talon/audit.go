@@ -161,6 +161,8 @@ func renderAuditEvents(w io.Writer, events []audit.Event, asJSON bool) error {
 			if e.IsError {
 				line += " [error]"
 			}
+		case audit.KindToolGate:
+			line += "  " + e.Tool + " " + e.Verdict
 		case audit.KindTurnStart:
 			if e.Model != "" {
 				line += "  " + e.Model
