@@ -3,12 +3,14 @@ package chatdriver
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/guygrigsby/jess/memory"
 	jessmsg "github.com/guygrigsby/jess/message"
 	"github.com/guygrigsby/jess/model"
 	"github.com/guygrigsby/jess/tool"
 
+	"github.com/guygrigsby/talon/internal/audit"
 	"github.com/guygrigsby/talon/internal/config"
 	"github.com/guygrigsby/talon/internal/server"
 	"github.com/guygrigsby/talon/internal/talonpath"
@@ -32,12 +34,21 @@ type RunnerOption func(*runnerConfig)
 
 type runnerConfig struct {
 	modelOverride model.Model
+	auditRec      audit.Recorder
 }
 
 // WithModelOverride makes every turn build its agent against m instead of the
 // config-driven LiteLLM model, skipping provider auth (ADR 0016 test seam).
 func WithModelOverride(m model.Model) RunnerOption {
 	return func(c *runnerConfig) { c.modelOverride = m }
+}
+
+// WithAuditRecorder records a tool_gate audit event (ADR 0017 Phase 5) for each
+// pinion classification, correlated by session/run/agent. Nil leaves gate
+// auditing off. The same recorder backs the ADR 0011 tool/turn events on the
+// server side.
+func WithAuditRecorder(r audit.Recorder) RunnerOption {
+	return func(c *runnerConfig) { c.auditRec = r }
 }
 
 func NewChatRunner(paths talonpath.Paths, mem *server.MemoryConfig, claudeMem ClaudeMemoryResolver, opts ...RunnerOption) server.ChatRunFn {
@@ -92,6 +103,21 @@ func NewChatRunner(paths talonpath.Paths, mem *server.MemoryConfig, claudeMem Cl
 			if idx, ct, ok := claudeMem(); ok {
 				builder = builder.WithClaudeMemory(idx, ct)
 			}
+		}
+		// ADR 0017 Phase 5: record a tool_gate audit event per classification,
+		// correlated to this turn's session/run/agent.
+		if rc.auditRec != nil {
+			builder = builder.WithToolGateAudit(func(toolName, verdict string, reasons []string) {
+				rc.auditRec.Record(audit.Event{
+					Kind:    audit.KindToolGate,
+					Session: sessionKey,
+					Run:     runID,
+					Agent:   agentID,
+					Tool:    toolName,
+					Verdict: verdict,
+					Text:    strings.Join(reasons, "; "),
+				})
+			})
 		}
 		agent, choice, err := builder.BuildAgent(agentID)
 		if err != nil {

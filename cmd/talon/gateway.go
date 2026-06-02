@@ -298,23 +298,26 @@ func gatewayRunCmd() *cobra.Command {
 				)
 			}
 
+			// Agent-action audit log (ADR 0011): persist a redacted,
+			// correlated trail of tool calls/results/errors/turns to
+			// ~/.talon/logs/agent-audit.jsonl. On by default; opt out
+			// with `talon config set audit.enabled false`. Best-effort
+			// writes never block the chat turn. Built before the runner so
+			// the chat driver records tool_gate verdicts (ADR 0017) to the
+			// same recorder.
+			rec := buildAuditRecorder(paths)
+			if rec != nil {
+				srv.ChatHandler().WithAudit(rec)
+				defer func() { _ = rec.Close() }()
+			}
+
 			// Jess-backed chat driver dispatch. Wires the chat-driver
 			// path through internal/chatdriver. Memory sidecar (when
 			// present) is reused — same store + recaller back the jess
 			// Remember/Recall tools the chat driver agent sees.
 			srv.ChatHandler().
 				WithPaths(paths).
-				WithChatRunner(buildChatRunner(paths, mem))
-
-			// Agent-action audit log (ADR 0011): persist a redacted,
-			// correlated trail of tool calls/results/errors/turns to
-			// ~/.talon/logs/agent-audit.jsonl. On by default; opt out
-			// with `talon config set audit.enabled false`. Best-effort
-			// writes never block the chat turn.
-			if rec := buildAuditRecorder(paths); rec != nil {
-				srv.ChatHandler().WithAudit(rec)
-				defer func() { _ = rec.Close() }()
-			}
+				WithChatRunner(buildChatRunner(paths, mem, rec))
 
 			// Connect API (talon-y6v): expose every RPC the WS
 			// path serves over Connect (HTTP/JSON for browsers,

@@ -12,6 +12,7 @@ const (
 	KindTurnStart  EventKind = "turn_start"
 	KindToolCall   EventKind = "tool_call"
 	KindToolResult EventKind = "tool_result"
+	KindToolGate   EventKind = "tool_gate" // ADR 0017 pinion classification verdict
 	KindMessage    EventKind = "message"
 	KindError      EventKind = "error"
 	KindTurnEnd    EventKind = "turn_end"
@@ -33,7 +34,8 @@ type Event struct {
 	Args       string    `json:"args,omitempty"`       // tool_call (redacted)
 	Output     string    `json:"output,omitempty"`     // tool_result (redacted)
 	IsError    bool      `json:"isError,omitempty"`    // tool_result
-	Text       string    `json:"text,omitempty"`       // message summary
+	Verdict    string    `json:"verdict,omitempty"`    // tool_gate (allow/needs-approval/deny)
+	Text       string    `json:"text,omitempty"`       // message summary / tool_gate reasons
 	ErrKind    string    `json:"errKind,omitempty"`    // error
 	ErrMsg     string    `json:"errMsg,omitempty"`     // error
 }

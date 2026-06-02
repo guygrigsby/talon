@@ -49,6 +49,11 @@ type Builder struct {
 	// (ADR 0016) pass a scripted model so the chat loop runs deterministically
 	// without a network LLM. Set via WithModel.
 	modelOverride model.Model
+	// toolGateAudit receives one record per tool-gate classification (ADR 0017
+	// Phase 5). nil disables gate auditing. The runner sets a per-turn func
+	// closing over session/run correlation; production wires it to the ADR 0011
+	// audit recorder.
+	toolGateAudit toolgate.VerdictFunc
 }
 
 // NewBuilder constructs a Builder. merged is the result of
@@ -79,6 +84,14 @@ func (b *Builder) WithSelectedModel(modelID string) *Builder {
 // resolved from config for telemetry, but no credentials are required.
 func (b *Builder) WithModel(m model.Model) *Builder {
 	b.modelOverride = m
+	return b
+}
+
+// WithToolGateAudit sets the per-classification sink for the pinion tool gate
+// (ADR 0017). The runner passes a func that records a tool_gate audit event
+// correlated by session/run. Nil leaves gate auditing off.
+func (b *Builder) WithToolGateAudit(fn toolgate.VerdictFunc) *Builder {
+	b.toolGateAudit = fn
 	return b
 }
 
@@ -277,10 +290,10 @@ func (b *Builder) prepareBuild(agentID string) (buildSpec, error) {
 	}
 	// ADR 0017: after name-level toolaccess filtering, wrap each remaining
 	// tool in the pinion effect gate. Built per prepareBuild call — which is
-	// per turn — so the Level 2 flow accumulator resets each turn. The default
-	// grant allows fs read/write inside the workspace and denies exec/net/
-	// secrets unless widened (Phase 6 config).
-	spec.toolSet = gateTools(filterTools(toolSet, policy), workspace)
+	// per turn — so the Level 2 flow accumulator resets each turn. Mode and
+	// grant come from config; the default grant allows fs read/write inside the
+	// workspace and denies exec/net/secrets unless widened.
+	spec.toolSet = b.gateTools(filterTools(toolSet, policy), agentID, workspace)
 
 	maxTurns := int(gjson.GetBytes(b.merged, "agents.defaults.maxTurns").Int())
 	if v := gjson.GetBytes(b.merged, fmt.Sprintf("agents.list.#(id==%q).maxTurns", agentID)).Int(); v > 0 {
@@ -295,11 +308,19 @@ func (b *Builder) prepareBuild(agentID string) (buildSpec, error) {
 
 // gateTools wraps each tool in the pinion effect gate (ADR 0017), sharing one
 // per-turn RunGate so the Level 2 flow accumulator spans the turn's tool calls.
-// Trusted first-party control-plane tools (remember/recall/finish_onboarding/
-// claude_memory) are exempt — they take bounded inputs against fixed talon
-// stores, not the general-purpose fs/exec/net surface the gate governs.
-func gateTools(in []tool.Tool, workspace string) []tool.Tool {
-	rg := toolgate.NewRunGate(toolgate.DefaultGrant(workspace), nil, workspace)
+// Mode and grant are resolved from config (global toolgate.* with per-agent
+// agents.list[].toolgate.* overrides). In ModeOff the tools are returned
+// unwrapped (no gating). Trusted first-party control-plane tools (remember/
+// recall/finish_onboarding/claude_memory) are exempt — they take bounded inputs
+// against fixed talon stores, not the general-purpose fs/exec/net surface the
+// gate governs.
+func (b *Builder) gateTools(in []tool.Tool, agentID, workspace string) []tool.Tool {
+	mode := resolveToolgateMode(b.merged, agentID)
+	if mode == toolgate.ModeOff {
+		return in
+	}
+	grant := toolgate.GrantWith(workspace, resolveToolgateAllow(b.merged, agentID))
+	rg := toolgate.NewRunGate(grant, nil, workspace).WithMode(mode).WithSink(b.toolGateAudit)
 	out := make([]tool.Tool, 0, len(in))
 	for _, t := range in {
 		if toolgate.TrustedInternalTool(t.Name()) {
@@ -307,6 +328,31 @@ func gateTools(in []tool.Tool, workspace string) []tool.Tool {
 			continue
 		}
 		out = append(out, toolgate.Wrap(t, rg))
+	}
+	return out
+}
+
+// resolveToolgateMode reads the gate mode: per-agent
+// agents.list[].toolgate.mode wins over the global toolgate.mode; unset/unknown
+// resolves to enforce (fail-safe).
+func resolveToolgateMode(merged []byte, agentID string) toolgate.Mode {
+	if v := gjson.GetBytes(merged, fmt.Sprintf("agents.list.#(id==%q).toolgate.mode", agentID)).Str; v != "" {
+		return toolgate.ParseMode(v)
+	}
+	return toolgate.ParseMode(gjson.GetBytes(merged, "toolgate.mode").Str)
+}
+
+// resolveToolgateAllow reads the per-agent extra capability kinds that widen
+// the default workspace grant (agents.list[].toolgate.allow), falling back to a
+// global toolgate.defaults.allow list.
+func resolveToolgateAllow(merged []byte, agentID string) []string {
+	res := gjson.GetBytes(merged, fmt.Sprintf("agents.list.#(id==%q).toolgate.allow", agentID))
+	if !res.Exists() {
+		res = gjson.GetBytes(merged, "toolgate.defaults.allow")
+	}
+	out := make([]string, 0, len(res.Array()))
+	for _, v := range res.Array() {
+		out = append(out, v.String())
 	}
 	return out
 }
