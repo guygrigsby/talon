@@ -69,12 +69,16 @@ func footprintOf(effects []effect.Effect) analyze.Footprint {
 }
 
 // callPrim is an opaque pinion.Primitive carrying just an effect set, used to
-// drive analyze/policy without an executable body.
+// drive analyze/policy without an executable body. Its schema declares a single
+// "in" input property so the flow accumulator can wire forward edges between
+// successive calls (compose.Connect validates the target field exists).
 type callPrim struct{ effects []effect.Effect }
 
-func (callPrim) Name() string           { return "call" }
-func (callPrim) Description() string    { return "" }
-func (callPrim) Schema() map[string]any { return map[string]any{"type": "object"} }
+func (callPrim) Name() string       { return "call" }
+func (callPrim) Description() string { return "" }
+func (callPrim) Schema() map[string]any {
+	return map[string]any{"type": "object", "properties": map[string]any{"in": map[string]any{"type": "string"}}}
+}
 func (p callPrim) Effects() []effect.Effect {
 	return p.effects
 }
