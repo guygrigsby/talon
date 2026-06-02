@@ -14,6 +14,7 @@ import (
 	"github.com/guygrigsby/talon/internal/agentcontext"
 	"github.com/guygrigsby/talon/internal/talonpath"
 	"github.com/guygrigsby/talon/internal/toolaccess"
+	"github.com/guygrigsby/talon/internal/toolgate"
 )
 
 // Builder assembles a *jess.Agent from talon's merged config.
@@ -274,7 +275,12 @@ func (b *Builder) prepareBuild(agentID string) (buildSpec, error) {
 	if err != nil {
 		return spec, fmt.Errorf("resolve tool access for %q: %w", agentID, err)
 	}
-	spec.toolSet = filterTools(toolSet, policy)
+	// ADR 0017: after name-level toolaccess filtering, wrap each remaining
+	// tool in the pinion effect gate. Built per prepareBuild call — which is
+	// per turn — so the Level 2 flow accumulator resets each turn. The default
+	// grant allows fs read/write inside the workspace and denies exec/net/
+	// secrets unless widened (Phase 6 config).
+	spec.toolSet = gateTools(filterTools(toolSet, policy), workspace)
 
 	maxTurns := int(gjson.GetBytes(b.merged, "agents.defaults.maxTurns").Int())
 	if v := gjson.GetBytes(b.merged, fmt.Sprintf("agents.list.#(id==%q).maxTurns", agentID)).Int(); v > 0 {
@@ -285,6 +291,24 @@ func (b *Builder) prepareBuild(agentID string) (buildSpec, error) {
 	}
 	spec.maxTurns = maxTurns
 	return spec, nil
+}
+
+// gateTools wraps each tool in the pinion effect gate (ADR 0017), sharing one
+// per-turn RunGate so the Level 2 flow accumulator spans the turn's tool calls.
+// Trusted first-party control-plane tools (remember/recall/finish_onboarding/
+// claude_memory) are exempt — they take bounded inputs against fixed talon
+// stores, not the general-purpose fs/exec/net surface the gate governs.
+func gateTools(in []tool.Tool, workspace string) []tool.Tool {
+	rg := toolgate.NewRunGate(toolgate.DefaultGrant(workspace), nil, workspace)
+	out := make([]tool.Tool, 0, len(in))
+	for _, t := range in {
+		if toolgate.TrustedInternalTool(t.Name()) {
+			out = append(out, t)
+			continue
+		}
+		out = append(out, toolgate.Wrap(t, rg))
+	}
+	return out
 }
 
 // filterTools retains only tools allowed by the policy, replacing the
