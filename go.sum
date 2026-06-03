@@ -199,6 +199,8 @@ github.com/google/uuid v1.6.0 h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=
 github.com/google/uuid v1.6.0/go.mod h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=
 github.com/guygrigsby/jess v0.0.0-20260530034858-84f3a0c4918a h1:k1iyWi5IJDj2BXf/VU3dJh81dKGS+smzEGJLQEDobDg=
 github.com/guygrigsby/jess v0.0.0-20260530034858-84f3a0c4918a/go.mod h1:mlhQDMGeJQNPNfhjB3DHP36SEoDAJvIOAoac2yasms4=
+github.com/guygrigsby/stream v0.1.0 h1:pFQkZZWnlRgM9eGlsoSR0KWEy2AgZYwfx+DKhlnWmBY=
+github.com/guygrigsby/stream v0.1.0/go.mod h1:jbJwhEyn9vwBFBRbZ4R1ltfF+j8ksRRQTw8MaJA1zpA=
 github.com/hashicorp/go-hclog v1.6.3 h1:Qr2kF+eVWjTiYmU7Y31tYlP1h0q/X3Nl3tPGdaB11/k=
 github.com/hashicorp/go-hclog v1.6.3/go.mod h1:W4Qnvbt70Wk/zYJryRzDRU/4r0kIg0PVHBcfoyhpF5M=
 github.com/hashicorp/go-plugin v1.8.0 h1:ie8S6RRY8RvB2usYZv+AAZ/wBvx2AU5p5QeP5j/FORs=
@@ -403,8 +405,6 @@ github.com/vishvananda/netns v0.0.5 h1:DfiHV+j8bA32MFM7bfEunvT8IAqQ/NzSJHtcmW5zd
 github.com/vishvananda/netns v0.0.5/go.mod h1:SpkAiCQRtJ6TvvxPnOSyH3BMl6unz3xZlaprSwhNNJM=
 github.com/voocel/agentcore v1.6.9 h1:Wl3KMNkH0dr1ZGkv8kq7RmMnVA3fXe0dpsOSTK6LuJw=
 github.com/voocel/agentcore v1.6.9/go.mod h1:DHs7JxwyBGEK+KhTib4mDtHeh0g3uzRw9r95N+zASz0=
-github.com/voocel/litellm v1.6.12 h1:C/JP/F6wKtN6t9c23CGIX9sSAQMKs4UCuUz3jd/mxsA=
-github.com/voocel/litellm v1.6.12/go.mod h1:6MBUu3I4DHm7h72Vl+3nqLruSwYmgqMf/I9BGoordJ4=
 github.com/x448/float16 v0.8.4 h1:qLwI1I70+NjRFUR3zs1JPUCgaCXSh3SW62uAKT1mSBM=
 github.com/x448/float16 v0.8.4/go.mod h1:14CWIYCyZA/cWjXOioeEpHeN/83MdbZDRQHoFcYsOfg=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=

@@ -148,3 +148,5 @@ require (
 )
 
 replace github.com/guygrigsby/pinion => ../pinion
+
+replace github.com/voocel/litellm => ../litellm
