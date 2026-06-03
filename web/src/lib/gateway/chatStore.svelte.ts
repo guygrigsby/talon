@@ -23,13 +23,21 @@ export type ChatStatus = 'idle' | 'loading' | 'streaming' | 'error';
 // The Svelte 5 runes inside (`$state`) only work in `.svelte.ts`
 // (or `.svelte`) files — that's why this file has the .svelte.ts
 // extension.
-export function makeChatStore(sessionKey: string) {
+export function makeChatStore(sessionKey: string, opts: { reconcileSilenceMs?: number } = {}) {
+	// reconcileSilenceMs is the stream-silence threshold for the history-resync
+	// watchdog (see armReconcile). It must comfortably exceed normal model TTFB
+	// and inter-event gaps so a healthy turn never reconciles mid-stream; the
+	// dead-stream case is handled separately by the reconnect path
+	// (reconcileAfterGap). Injectable so tests can drive it fast.
+	const reconcileSilenceMs = opts.reconcileSilenceMs ?? 15000;
 	let messages = $state<Message[]>([]);
 	let status = $state<ChatStatus>('idle');
 	let errorMessage = $state<string | null>(null);
 	// Track the currently-streaming assistant message by run_id so
 	// delta events update the right bubble; cleared on final.
 	let activeRunId = $state<string | null>(null);
+	// Stream-liveness watchdog handle (see armReconcile).
+	let reconcileTimer: ReturnType<typeof setTimeout> | null = null;
 	// Per-session model override (null = agent default). Echoes the
 	// SessionsService.Patch state the server keeps; updated
 	// optimistically on setModel.
@@ -160,7 +168,7 @@ export function makeChatStore(sessionKey: string) {
 					idempotencyKey: runId
 				})
 			);
-			scheduleHistoryReconcile(runId);
+			armReconcile(runId);
 		} catch (err) {
 			status = 'error';
 			errorMessage = friendlyAuthError(err);
@@ -241,13 +249,35 @@ export function makeChatStore(sessionKey: string) {
 				break;
 			}
 		}
+		// Stream liveness: any event for the active run means the stream is
+		// alive, so push the reconcile deadline out. Terminal events (final/
+		// error/aborted) cleared activeRunId / left status non-streaming, so the
+		// watchdog stops instead.
+		if (status === 'streaming' && activeRunId) armReconcile(activeRunId);
+		else clearReconcile();
 	}
 
-	function scheduleHistoryReconcile(runId: string) {
-		setTimeout(() => {
-			if (activeRunId !== runId || status !== 'streaming') return;
-			loadHistory();
-		}, 1800);
+	// armReconcile (re)starts the stream-liveness watchdog. If the stream goes
+	// silent for reconcileSilenceMs while a run is still 'streaming' — a hung
+	// stream that stayed open but never delivered its terminal event — it
+	// resyncs from server history as a last resort. It is (re)armed on send and
+	// on every received event, so an actively-streaming turn keeps pushing the
+	// deadline out and never reconciles mid-stream (the bug that wiped the live
+	// bubble and made the response reappear a beat later in a new spot). The
+	// dead-stream case (stream closed) is handled by the reconnect path.
+	function armReconcile(runId: string) {
+		clearReconcile();
+		reconcileTimer = setTimeout(() => {
+			reconcileTimer = null;
+			if (activeRunId === runId && status === 'streaming') loadHistory();
+		}, reconcileSilenceMs);
+	}
+
+	function clearReconcile() {
+		if (reconcileTimer) {
+			clearTimeout(reconcileTimer);
+			reconcileTimer = null;
+		}
 	}
 
 	function upsertAssistant(ev: ChatEvent, text: string, final: boolean) {
@@ -339,6 +369,7 @@ export function makeChatStore(sessionKey: string) {
 	function dispose() {
 		subscribeAbort?.abort();
 		subscribeAbort = null;
+		clearReconcile();
 	}
 
 	// setModel persists a per-session model override on the gateway
