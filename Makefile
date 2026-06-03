@@ -25,11 +25,22 @@ GO_SRC := $(shell find cmd internal web -name '*.go' 2>/dev/null)
 PLUGINS := op
 PLUGIN_BINS := $(addprefix bin/talon-,$(addsuffix -plugin,$(PLUGINS)))
 
-.PHONY: build all install run dev dev-backend dev-open gateway-run gateway-run-with-ui plugins test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build web-check web-test web-test-install docker-build docker-run docker-stop docker-bounce docker-logs proto proto-tools smoke
+.PHONY: build build-with-ui all install run dev dev-backend dev-open gateway-run gateway-run-with-ui redeploy plugins test test-e2e bench vet fmt tidy clean cross web web-install web-dev web-build web-check web-test web-test-install docker-build docker-run docker-stop docker-bounce docker-logs proto proto-tools smoke
 
 build: $(BIN) plugins
 
-all: build web-build
+# build-with-ui builds the SvelteKit UI and then force-rebuilds the binary so
+# the freshly built assets are embedded. go:embed only picks up changes when
+# the Go compiler runs, and $(BIN)'s prerequisites are .go-only on purpose
+# (plain `build` stays node-free for headless / CLI-only installs), so a bare
+# `make build` after `web-build` would NOT re-embed. Targets that ship the
+# dashboard (all, redeploy) depend on this, not on `build`.
+build-with-ui: web-build
+	$(GO) build -ldflags '$(LDFLAGS)' -o $(BIN) $(PKG)
+	@ln -sf $(BIN) $(BINARY)
+	$(MAKE) plugins
+
+all: build-with-ui
 
 $(BIN): $(GO_SRC) go.mod go.sum
 	$(GO) build -ldflags '$(LDFLAGS)' -o $(BIN) $(PKG)
@@ -48,8 +59,13 @@ plugins: $(PLUGIN_BINS)
 bin/talon-%-plugin: $(GO_SRC) go.mod go.sum
 	$(GO) build -ldflags '$(LDFLAGS)' -o $@ ./apps/talon-$*-plugin
 
+# install puts talon AND its sidecar plugins (talon-op-plugin) into GOBIN, so
+# the installed `talon` resolves op:// secret refs — pluginSearchPaths looks
+# next to the running binary, and `go install $(PKG)` alone would leave the op
+# plugin behind in ./bin, breaking auth-token resolution for the PATH `talon`.
 install:
 	$(GO) install -ldflags '$(LDFLAGS)' $(PKG)
+	$(GO) install -ldflags '$(LDFLAGS)' $(addprefix ./apps/talon-,$(addsuffix -plugin,$(PLUGINS)))
 
 run: build
 	$(BIN) $(ARGS)
@@ -93,6 +109,39 @@ dev-open: build
 
 gateway-run-with-ui: build web-build
 	$(BIN) gateway run --web $(WEB_DIST) $(ARGS)
+
+# redeploy updates ALL talon binaries to the current source and bounces the
+# running host gateway so the new build goes live in one step — the talon analog
+# of `make redeploy` in mlx-stack. It updates both copies so they never drift:
+#   - the local bin/ build (gateway binary with the embedded SvelteKit UI, via
+#     build-with-ui), and
+#   - the installed GOBIN copies (the PATH `talon` CLI + every plugin in
+#     PLUGINS, e.g. talon-op-plugin, via `install`) — so the CLI that resolves
+#     op:// auth tokens matches the gateway.
+# talon has no launchd plist to bootout/bootstrap (the `talon gateway
+# install/restart` service manager is still stubbed, talon-4an), so this manages
+# the plain `talon gateway run` process directly: SIGTERM the old one (which
+# reaps its plugin children on shutdown), wait for it to exit, then relaunch
+# detached with output appended to a log file so it survives the terminal
+# closing. Override the port/flags with GATEWAY_PORT / ARGS and the log path with
+# GATEWAY_LOG. The dashboard (http://localhost:$(GATEWAY_PORT)/) is served from
+# the embedded UI, so a plain `make redeploy` is enough — no --web flag needed.
+# For live UI iteration without a rebuild, run the gateway under `make dev` +
+# `make web-dev` (Vite) instead.
+GATEWAY_PORT ?= 18789
+GATEWAY_LOG  ?= $(HOME)/.talon/logs/gateway.log
+redeploy: build-with-ui install
+	@echo "==> stopping running gateway"
+	@pkill -f '$(BINARY) gateway run' 2>/dev/null || true
+	@i=0; while pgrep -f '$(BINARY) gateway run' >/dev/null 2>&1; do \
+		i=$$((i+1)); \
+		if [ $$i -ge 50 ]; then echo "timed out waiting for gateway to stop"; exit 1; fi; \
+		sleep 0.1; \
+	done
+	@mkdir -p $(dir $(GATEWAY_LOG))
+	@echo "==> starting gateway (port $(GATEWAY_PORT), log $(GATEWAY_LOG))"
+	@nohup $(BIN) gateway run --port $(GATEWAY_PORT) $(ARGS) >> $(GATEWAY_LOG) 2>&1 & \
+		echo "Redeployed $(BINARY) — new binary live (PID $$!, port $(GATEWAY_PORT))"
 
 test:
 	@TALON_BENCH=1 $(GO) test -p=1 ./...
